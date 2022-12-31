@@ -16,7 +16,7 @@ This software requires Python >= 3.7.
 
 ### Installation
 
-Install the Python library using the standard `setuptools` install script:
+Install the Python library using the standard `distutils` install script:
 
 ```
 python3 setup.py install

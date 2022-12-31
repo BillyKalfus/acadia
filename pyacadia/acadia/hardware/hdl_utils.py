@@ -1,12 +1,3 @@
-"""
-firmware.py
-Software for generating firmware images and associated software support files for the Acadia quantum control system.
-William Kalfus, Yale University
-October 2022
-"""
-import os
-import numpy as np
-
 from ..assembler import Symbol
 
 def connect_bd_net(f, pin1, pin2):
@@ -36,6 +27,39 @@ def create_slice(f, name, input_width, input_from, input_to):
 
 def create_module(f, name, reference):
     f.write(f"create_bd_cell -type module -reference {reference} {name}\n")
+    
+def create_ip(f, name, vlnv):
+    f.write(f"create_bd_cell -type ip -vlnv {vlnv} {name}\n")
+    
+def set_property(f, cell_name, properties, property_prefix="CONFIG.", property_suffix="", value_prefix="{", value_suffix="}"):
+    tmp = "set_property -dict [list "
+    
+    if isinstance(properties, dict):
+        tmp += ' '.join(f"{property_prefix}{k}{property_suffix} {value_prefix}{str(v).lower() if isinstance(v, bool) else v}{value_suffix}" for k,v in properties.items())
+    elif isinstance(properties, str):
+        tmp += properties
+    else:
+        raise TypeError("Unrecognized type for properties.")
+        
+    tmp += f"] [get_bd_cells {cell_name}]\n"
+    f.write(tmp)
+    
+def assign_bd_address(f, target_address_space, addr_seg, offset=None, range=None, force=True):
+    tmp = "assign_bd_address "
+    if offset is not None:
+        tmp += f"-offset 0x{offset:010X} "
+    if range is not None:
+        tmp += f"-range {range} "
+        
+    tmp += f" -target_address_space {target_address_space} [get_bd_addr_segs {addr_seg}] "
+    
+    if force:
+        tmp += "-force "
+        
+    tmp += "\n"
+    
+    f.write(tmp)
+    
     
 def next_highest_power_of_2(num):
     # https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
@@ -777,76 +801,3 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'end rtl;\n\n'
         
         return hdl
-
-class AcadiaFirmware(object):
-    
-    def __init__(self, project_dir="/tmp"):
-        """
-        Initializes the object with a path to a temporary directory for building the firmware image.
-        """
-        self._modules = []
-        self._project_dir = project_dir
-        self._hdl_filename = None
-        self._project_tcl_filename = None
-        self._hedgehog_tcl_filename = None
-        
-        if not os.path.exists(project_dir):
-            os.mkdir(project_dir)
-            
-    def items(self):
-        return self._modules
-    
-    def __iter__(self):
-        return iter(self.keys())
-    
-    def keys(self):
-        return [m.name for m in self._modules]
-            
-    def __getitem__(self, key):
-        for m in self._modules:
-            if m.name == key:
-                return m
-            
-        raise KeyError(f"No module found in AcadiaFirmware object with name {key}.")
-            
-    def add(self, value):
-        """Adds an HDL module to the firmware image.
-        """
-        if not isinstance(value, HDLModule):
-            raise TypeError("Only HDLModules can be added to the firmware.")
-            
-        self._modules.append(value)
-        
-    def write_project_tcl(self, filename="make_project.tcl"):
-        """Writes a TCL script to create a Vivado project in the project directory.
-        Child classes should override this function to implement unique functionality.
-        :param filename: The name of the file in the project directory in which to write the file.
-        :type filename: str, optional
-        """
-        self._project_tcl_filename = os.path.join(self._project_dir, filename)
-        raise NotImplementedError("TODO: make the project base TCL script")
-            
-    def write_hdl(self, filename="python_modules.vhd"):
-        """Writes a VHDL file containing the address decoding for the HEDGEHOG bus.
-        Child classes should override this function to add custom HDL, if not included in the initializer.
-        :param filename: The name of the file in the project directory in which to write the file.
-        :type filename: str, optional
-        """
-        self._hdl_filename = os.path.join(self._project_dir, filename)
-        
-        with open(self._hdl_filename, "w") as f:
-            for module in self._modules:
-                f.write(module.generate_hdl() + '\n')
-    
-    def write_hedgehog_tcl(self, filename="hedgehog.tcl"):
-        """Writes a TCL script to populate the HEDGEHOG logic in the standard image.
-        Child classes should override this function to implement unique functionality.
-        :param filename: The name of the file in the project directory in which to write the file.
-        :type filename: str, optional
-        """
-        self._hedgehog_tcl_filename = os.path.join(self._project_dir, filename)
-        
-    
-    
-    
-        
