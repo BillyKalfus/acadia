@@ -26,7 +26,7 @@ use IEEE.NUMERIC_STD.ALL;
 library xpm;
 use xpm.vcomponents.all;
 
-entity nco_port_regs is
+entity acadia_nco_port_regs is
     port (
         -- Clocks
         clk          : in std_logic;
@@ -194,9 +194,9 @@ entity nco_port_regs is
         rfadc_tile3_nco_update_busy : in std_logic_vector(1 downto 0)
     );
 
-end nco_port_regs;
+end acadia_nco_port_regs;
 
-architecture rtl of nco_port_regs is
+architecture rtl of acadia_nco_port_regs is
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;
     

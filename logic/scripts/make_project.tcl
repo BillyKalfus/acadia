@@ -13,16 +13,6 @@
 #   original project, however they will not be launched automatically. To regenerate the
 #   run results please launch the synthesis/implementation runs as needed.
 
-
-# Set the reference directory for source file relative paths (by default the value is script directory path)
-set origin_dir "../src"
-set project_dir ".."
-
-# Use origin directory path location variable, if specified in the tcl shell
-if { [info exists ::origin_dir_loc] } {
-  set origin_dir $::origin_dir_loc
-}
-
 # Set the project name
 set _xil_proj_name_ "acadia"
 
@@ -184,7 +174,7 @@ set files [list \
 set imported_files [import_files -fileset sources_1 $files]
 
 # Set 'sources_1' fileset file properties for local files
-set file "new/acadia_decoder.vhd"
+set file "acadia_decoder.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -195,7 +185,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "new/acadia_sequencer.vhd"
+set file "acadia_sequencer.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -206,7 +196,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "new/acadia_nco_port_regs.vhd"
+set file "acadia_nco_port_regs.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -217,7 +207,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "new/acadia_axi_bram_ctrl_addr_slice.vhd"
+set file "acadia_axi_bram_ctrl_addr_slice.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -228,7 +218,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "new/acadia_complex_macc.vhd"
+set file "acadia_complex_macc.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -239,7 +229,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "new/acadia_dma.vhd"
+set file "acadia_dma.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -250,7 +240,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "new/acadia_bram_write_pipeline.vhd"
+set file "acadia_bram_write_pipeline.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -290,7 +280,7 @@ set obj [get_filesets constrs_1]
 # Add/Import constrs file and set constrs file properties
 set file "[file normalize "$origin_dir/acadia_constraints.xdc"]"
 set file_imported [import_files -fileset constrs_1 [list $file]]
-set file "new/acadia_constraints.xdc"
+set file "acadia_constraints.xdc"
 set file_obj [get_files -of_objects [get_filesets constrs_1] [list "*$file"]]
 set_property -name "file_type" -value "XDC" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -325,7 +315,7 @@ set imported_files [import_files -fileset sim_1 $files]
 # None
 
 # Set 'sim_1' fileset file properties for local files
-set file "new/bd_tb.v"
+set file "acadia_tb.v"
 set file_obj [get_files -of_objects [get_filesets sim_1] [list "*$file"]]
 set_property -name "file_type" -value "Verilog" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -448,7 +438,7 @@ proc cr_bd_acadia_bd { parentCell } {
   set bCheckModules 1
   if { $bCheckModules == 1 } {
      set list_check_mods "\ 
-  sequencer\
+  acadia_sequencer\
   "
 
    set list_mods_missing ""
@@ -567,10 +557,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 sequencer_bus
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 sequencer_instruction_mem
-
-  create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 sequencer_stack_mem_rd
-
-  create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 sequencer_stack_mem_wr
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:display_aurora:GT_Serial_Transceiver_Pins_RX_rtl:1.0 sfp0_rx
 
@@ -1569,7 +1555,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.DOUT_WIDTH {1} \
  ] $seq_run_slice
 
-  # Create instance: sequencer, and set properties
+  # Create instance: acadia_sequencer, and set properties
   set block_name acadia_sequencer
   set block_cell_name sequencer
   if { [catch {set sequencer [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
@@ -1665,8 +1651,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_intf_net -intf_net ps_M_AXI_HPM1_FPD [get_bd_intf_pins hedgehog/PS_M_AXI1] [get_bd_intf_pins ps/M_AXI_HPM1_FPD]
   connect_bd_intf_net -intf_net sequencer_0_instruction_mem [get_bd_intf_pins hedgehog/sequencer_instruction_mem] [get_bd_intf_pins sequencer/instruction_mem]
   connect_bd_intf_net -intf_net sequencer_0_mem_bus [get_bd_intf_pins hedgehog/sequencer_bus] [get_bd_intf_pins sequencer/mem_bus]
-  connect_bd_intf_net -intf_net sequencer_stack_mem_rd [get_bd_intf_pins hedgehog/sequencer_stack_mem_rd] [get_bd_intf_pins sequencer/stack_mem_rd]
-  connect_bd_intf_net -intf_net sequencer_stack_mem_wr [get_bd_intf_pins hedgehog/sequencer_stack_mem_wr] [get_bd_intf_pins sequencer/stack_mem_wr]
   connect_bd_intf_net -intf_net sfp0_rx_1 [get_bd_intf_ports sfp0_rx] [get_bd_intf_pins hedgehog/sfp0_rx]
   connect_bd_intf_net -intf_net sfp1_rx_1 [get_bd_intf_ports sfp1_rx] [get_bd_intf_pins hedgehog/sfp1_rx]
   connect_bd_intf_net -intf_net sfp2_rx_1 [get_bd_intf_ports sfp2_rx] [get_bd_intf_pins hedgehog/sfp2_rx]
@@ -1888,7 +1872,6 @@ preplace netloc vin01_1 1 0 6 70J 230 430 240 NJ 240 NJ 240 NJ 240 2680
 preplace netloc DDR4_C0_SYS_CLK_1 1 0 7 40J 170 420 110 NJ 110 NJ 110 NJ 110 2490J 68 3490
 preplace netloc sysref_in_1 1 0 6 NJ 650 370 670 NJ 670 1620J 710 2020J 700 2650
 preplace netloc hedgehog_DDR4_C0_S_AXI 1 6 1 3430J 240n
-preplace netloc sequencer_stack_mem_wr 1 5 1 2590 230n
 preplace netloc DDR4_C0_MIG_C0_DDR4 1 7 1 4010 760n
 preplace netloc hedgehog_vout11 1 6 2 N 380 NJ
 preplace netloc vin30_1 1 0 6 NJ 470 420 610 NJ 610 1690J 660 2010J 510 N
@@ -1914,7 +1897,6 @@ preplace netloc vin12_1 1 0 6 70J 280 N 280 NJ 280 NJ 280 NJ 280 2650
 preplace netloc vin33_1 1 0 6 NJ 530 400 630 NJ 630 1670J 680 2030J 640 2630
 preplace netloc hedgehog_PS_S_AXI_HPC0 1 1 6 440 120 NJ 120 NJ 120 NJ 120 2480J 48 3330J
 preplace netloc ps_M_AXI_HPM0_FPD 1 2 4 1130J 150 NJ 150 NJ 150 NJ
-preplace netloc sequencer_stack_mem_rd 1 5 1 2550 430n
 preplace netloc vin02_1 1 0 6 50J 240 420 250 NJ 250 NJ 250 NJ 250 2490
 preplace netloc ps_M_AXI_HPM0_LPD 1 2 4 1150J 230 NJ 230 NJ 230 2500J
 preplace netloc hedgehog_sfp1_tx 1 6 2 3420J 640 NJ

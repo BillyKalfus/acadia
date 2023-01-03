@@ -14,7 +14,7 @@ class Operable(type):
     A metaclass used to capture operators acting on instances of derived classes and return a symbolic representation of the operator call.
     """ 
     def __new__(cls, name, bases, dct):
-        for op in OPERATORS:
+        for op in Operable.OPERATORS:
             def op_func(*args, **kwargs):
                 return Operation(op, *args, *kwargs)
             dct[f"__{op}__"] = op_func
@@ -58,7 +58,7 @@ class Symbol(metaclass=Operable):
             raise ValueError("Attempted access of an unassigned Symbol.")
         return self._value
     
-    @classmethod
+    @staticmethod
     def assigned(obj):
         """
         Analyzes the provided object to determine whether all encapsulated :class:`Symbol` objects are assigned. It evaluates :class:`Operation` objects by recursively checking on their arguments, and it evaluates :class:`Symbol` objects by checking whether they are assigned, and if so, whether their value is solvable. All other objects are assumed to be solvable.

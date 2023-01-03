@@ -23,7 +23,7 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
-entity dma is
+entity acadia_dma is
     generic (
         DESCRIPTOR_MEM_ADDR_WIDTH : natural := 16
     );
@@ -62,9 +62,9 @@ entity dma is
         descriptor_done     : out std_logic;
         sequence_done       : out std_logic
     );
-end dma;
+end acadia_dma;
 
-architecture rtl of dma is 
+architecture rtl of acadia_dma is 
 
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;

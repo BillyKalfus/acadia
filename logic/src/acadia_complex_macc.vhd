@@ -27,7 +27,7 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
-entity complex_macc is
+entity acadia_complex_macc is
     port (
         clk                    : in  std_logic;
         accumulator_rst        : in  std_logic;
@@ -67,7 +67,7 @@ entity complex_macc is
     );
     
     attribute USE_DSP : string;
-end complex_macc;
+end acadia_complex_macc;
 
 architecture rtl of complex_macc is
     

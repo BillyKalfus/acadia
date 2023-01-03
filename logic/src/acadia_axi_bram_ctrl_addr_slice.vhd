@@ -31,7 +31,7 @@ use IEEE.STD_LOGIC_1164.ALL;
 --library UNISIM;
 --use UNISIM.VComponents.all;
 
-entity axi_bram_ctrl_addr_slice is
+entity acadia_axi_bram_ctrl_addr_slice is
     generic (
         DATA_WIDTH : natural := 32;
         LOG2_DATA_WIDTH_BYTES : natural := 2; -- log2(<data width in bytes>)
@@ -54,9 +54,9 @@ entity axi_bram_ctrl_addr_slice is
         slave_en       : out std_logic;
         slave_rst      : out std_logic
     );
-end axi_bram_ctrl_addr_slice;
+end acadia_axi_bram_ctrl_addr_slice;
 
-architecture rtl of axi_bram_ctrl_addr_slice is
+architecture rtl of acadia_axi_bram_ctrl_addr_slice is
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;
     

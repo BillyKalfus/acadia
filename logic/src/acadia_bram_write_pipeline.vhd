@@ -22,7 +22,7 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 
-entity bram_write_pipeline is
+entity acadia_bram_write_pipeline is
     generic (
         DATA_WIDTH : natural := 32;
         ADDR_WIDTH : natural := 32
@@ -40,9 +40,9 @@ entity bram_write_pipeline is
         slave_en   : out std_logic;
         slave_clk  : out std_logic
     );
-end bram_write_pipeline;
+end acadia_bram_write_pipeline;
 
-architecture rtl of bram_write_pipeline is
+architecture rtl of acadia_bram_write_pipeline is
 
     ATTRIBUTE X_INTERFACE_INFO : STRING;    
     ATTRIBUTE X_INTERFACE_MODE : STRING;

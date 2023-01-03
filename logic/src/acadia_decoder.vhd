@@ -23,7 +23,7 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
-entity decoder is
+entity acadia_decoder is
     generic
     (
         INPUTS : natural := 6;
@@ -36,9 +36,9 @@ entity decoder is
         dout : out std_logic_vector(OUTPUTS-1 downto 0)
     );
 
-end decoder;
+end acadia_decoder;
 
-architecture rtl of decoder is
+architecture rtl of acadia_decoder is
 
 begin
 
