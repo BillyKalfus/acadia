@@ -149,7 +149,7 @@ begin
                 running <= '1';
             end if;
         end if;
-    end process triggered_proc;
+    end process running_proc;
 
     -- Manage when sequence settings are loaded
     -- This will also automatically clear sequence_done_int if we are continuing

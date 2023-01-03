@@ -4,7 +4,7 @@ A set of Symbols for programming the Acadia sequencer.
 William Kalfus, Yale University
 September 2022
 """
-from acadia.assembler import Symbol
+from ..assembler import Symbol
 
 REG         = Symbol(0) # Source and Destination
 PC          = Symbol(8) # Source and Destination

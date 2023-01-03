@@ -5,6 +5,7 @@ William Kalfus, Yale University
 December 2022
 """
 from types import MethodType
+from operator import and_
 
 class Operable(type):
     OPERATORS = ["eq", "ne", "neg", "abs", "invert", "add", "radd", "sub", "rsub", "mul", "rmul", "floordiv", "rfloordiv", "truediv", "rtruediv", "mod", "rmod", "pow", "rpow", "lshift", "rlshift", "rshift", "rrshift", "and", "rand", "or", "ror", "xor", "rxor", "bool", "len", "contains", "iter", "getitem", "setitem", "enter", "exit", "copy", "deepcopy"]
@@ -32,7 +33,7 @@ class Operation(metaclass=Operable):
         self._kwargs = kwargs
         
     def __str__(self):
-        return f"Operation({*self._args}, {*self._kwargs})"
+        return f"Operation({self._args}, {self._kwargs})"
     
 class Symbol(metaclass=Operable):
     """
@@ -51,6 +52,12 @@ class Symbol(metaclass=Operable):
         self._assigned = True
         self._value = v
     
+    @property
+    def value(self):
+        if not Symbol.assigned(self):
+            raise ValueError("Attempted access of an unassigned Symbol.")
+        return self._value
+    
     @classmethod
     def assigned(obj):
         """
@@ -59,7 +66,7 @@ class Symbol(metaclass=Operable):
         :return: `True` if the provided object has all 
         """
         if isinstance(obj, Operation):
-            return reduce(and, map(Symbol.assigned, obj._args + [v for k,v in obj._kwargs.items()]))
+            return reduce(and_, map(Symbol.assigned, obj._args + [v for k,v in obj._kwargs.items()]))
         elif isinstance(obj, Symbol):
             return obj._assigned and Symbol.assigned(obj._value)
         return True
@@ -101,6 +108,8 @@ class ManagedResource(Operable):
             
             if allocate: 
                 instance.allocate()
+                
+            return instance
                         
         def allocate(self, force=False):
             """
@@ -138,8 +147,8 @@ class ManagedResource(Operable):
             """
             self._released = True
             
-        cls_attrs = {"instances": [], "allocation_index": 0, "__new__": cls_new, "allocate": allocate, "is_allocated": is_allocated, "is_released": is_released, "release": release, *dct}
-        super().__init__(cls, name, bases, cls_attrs)
+        cls_attrs = {"instances": [], "allocation_index": 0, "__new__": cls_new, "allocate": allocate, "is_allocated": is_allocated, "is_released": is_released, "release": release, **dct}
+        return super().__new__(cls, name, bases, cls_attrs)
         
 class Processor:
     instruction_set = {}
@@ -161,20 +170,19 @@ class Processor:
     """
     def __init__(self, instruction_limit=None):
         self.Instruction = ManagedResource(instance_limit=instruction_limit)
-        self._instructions = 
         
         # For every instruction, bind a new method to the instance with the name of the instruction
         for instruction in instruction_set:
             def append_instruction(self, *args, **kwargs):
-                self.instructions.append({"instruction": instruction, "args": args, *kwargs})
+                self.instructions.append({"instruction": instruction, "args": args, **kwargs})
                 
             setattr(self, instruction.__name__, MethodType(append_instruction, self))
             
-    def __new__(cls, *args, **kwargs)
+    def __new__(cls, *args, **kwargs):
         """
         Prevents a :class:`Processor` from being directly instantiated. This is typically handled with the `abc` module, but because :class:`Processor` doesn't actually implement any abstract methods, ABCMeta will not prevent :class:`Processor` from being directly instantiated. Therefore, to implement this, we'll just override :meth:`__new__` and fail to return a new object if its class is :class:`Processor`.
         """
         if cls is Processor:
             raise TypeError("Processor cannot be directly instantiated; one must define a subclass.")
         
-        super().__new__(cls, *args, **kwargs)
+        return super().__new__(cls, *args, **kwargs)

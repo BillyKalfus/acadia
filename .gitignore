@@ -3,3 +3,7 @@ lib/**/__pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
+pyacadia/build/
+pyacadia/dist/
+pyacadia/pyacadia*/
+

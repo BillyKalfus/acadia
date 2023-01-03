@@ -60,6 +60,8 @@ def assign_bd_address(f, target_address_space, addr_seg, offset=None, range=None
     
     f.write(tmp)
     
+def exclude_bd_address(f, target_address_space, addr_seg):
+    f.write(f"exclude_bd_addr_seg [get_bd_addr_segs {addr_seg}] -target_address_space [get_bd_addr_spaces {target_address_space}]\n")
     
 def next_highest_power_of_2(num):
     # https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
@@ -98,11 +100,12 @@ class BusDevice(Symbol):
         :type name: str
         :param size: Number of words needed in the address space of the bus.
         :type size: int, optional
+        :param word_bits: Number of bits in a data word, equal to the width of the data bus
+        :type word_bits: int, optional
         :param bus_bits: The number of bits in the bus interface
         :type bus_bits: int, optional
-        :type parent_device: int, optional
-        :param base_address: The base address of this decoder, from which the address of all its children will be determined and assigned.
-        :type base_address: int, optional
+        :param address: The address of the device, whose interpretation is left to be defined by child classes
+        :type address: int, optional
         """
         self._name = name
         self._size = size
@@ -114,14 +117,17 @@ class BusDevice(Symbol):
     @property
     def name(self):
         """
-        The name of the device.
+        :return: The name of the device.
+        :rtype: str
         """
         return self._name
         
     @property
     def size(self):
         """
-        The amount of space (in number of words) needed by this device on the bus.
+        :return: The amount of space (in number of words) needed by this device on the bus.
+        :rtype: int
+        :raises: :class:`ValueError` when called on an object of zero size, as this generally indicates an instantiation error
         """
         if self._size == 0:
             raise ValueError("Object of zero size queried.")
@@ -130,28 +136,32 @@ class BusDevice(Symbol):
     
     def words(self, word_bits):
         """
-        The amount of words of a given bit size that this device requires
+        :return: The equivalent number of words required by this device for a given word width
+        :rtype: int
         """
         return self.size * self._word_bits / word_bits
     
     @property
     def word_bits(self):
         """
-        The width of the data word
+        :return: The width of the data word
+        :rtype: int
         """
         return self._word_bits
     
     @property
     def bus_bits(self):
         """
-        The width of the bus address space
+        :return: The width of the bus address space
+        :rtype: int
         """
         return self._bus_bits
     
     @property
     def size_bits(self):
         """
-        The number of bits needed to encode the object size.
+        :return: The number of bits needed to encode the object size.
+        :rtype: int
         """
         return round(np.log2(next_highest_power_of_2(self._size)))
     
@@ -163,80 +173,253 @@ class BusDevice(Symbol):
 
     @property
     def address(self):
-        return self.value
-    
-    @property
-    def byte_address(self):
-        return self.value * (self.word_bits // 8)
-
-class BusRegisters(BusDevice, HDLModule):
-    
-    INPUT = 1
-    OUTPUT = 2
-    
-    def __init__(self, name, regs, word_bits=32, bus_bits=32, pipeline_master=0, address=None):
         """
-        A set of registers accessible on the bus, specified either by the size of the register file or by the register names themselves
-        :param name: name of the register file
+        :return: The address of the module
+        :rtype: int
+        """
+        return self.value
+
+# class BusRegisters(BusDevice, HDLModule):
+    
+#     INPUT = 1
+#     OUTPUT = 2
+    
+#     def __init__(self, name, regs, word_bits=32, bus_bits=32, pipeline_master=0, address=None):
+#         """
+#         A set of registers accessible on the bus, specified either by the size of the register file or by the register names themselves
+#         :param name: name of the register file
+#         :type name: str
+#         :param reg_names: List of register names. 
+#         :param base_address: The base address of this decoder, from which the address of all its children will be determined and assigned.
+#         :type base_address: int, optional
+#         """
+#         self._pipeline_master = pipeline_master
+#         self._regs = {}
+#         for (n, direction, pipeline) in regs:
+#             self._regs[n] = (Symbol(), direction, pipeline)
+        
+#         BusDevice.__init__(self, name, len(self._regs), word_bits, bus_bits, address)
+#         HDLModule.__init__(self, name)
+        
+#     @property
+#     def size(self):
+#         return len(self._regs)
+    
+#     def __getitem__(self, key):
+#         """
+#         Return the Symbol associated with the register.
+#         """
+#         return self._regs[key][0]
+    
+#     def items(self):
+#         return [(key,item[0]) for (key,item) in self._regs.items()]
+    
+#     def keys(self):
+#         return self._regs.keys()
+    
+#     def __iter__(self):
+#         return iter(self._regs.keys())
+    
+#     def assign(self):
+#         """
+#         Assign registers to particular addresses.
+#         """       
+#         # Throw an error if a smarter strategy is needed
+#         if len(self._regs) > (2**self._bus_bits):
+#             raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
+    
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             # Assign the value of the underlying Symbols to be offset from the address of this BusRegisters object
+#             symbol.assign(self.value + i)
+        
+#     def generate_hdl(self):
+#         if not self.assigned:
+#             raise ValueError("Device must be assigned before generating HDL.")
+            
+#         num_ports = next_highest_power_of_2(self.size)
+        
+#         # Throw an error if a smarter strategy is needed
+#         if num_ports > (2**self.bus_bits):
+#             raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
+            
+#         # Finally, write the HDL for the decoder
+#         hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\n'
+#         hdl += f'entity {self.name} is\n'
+#         hdl += f'    port (\n'
+#         hdl += f'        nrst : in std_logic;\n\n'
+#         hdl += f'        -- Slave interface\n'
+#         hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
+#         hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
+#         hdl += f'        master_bus_addr : in  std_logic_vector({round(np.log2(num_ports))-1} downto 0);\n'
+#         hdl += f'        master_bus_wr   : in  std_logic;\n'
+#         hdl += f'        master_bus_clk  : in  std_logic;\n'
+#         hdl += f'        master_bus_en   : in  std_logic;\n\n'
+        
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             hdl += f'        -- {reg_name} interface (bus address 0x{symbol.value:08X})\n'
+#             if direction & BusRegisters.OUTPUT:
+#                 hdl += f'        {reg_name}_mosi : out std_logic_vector({self.word_bits-1} downto 0);\n'
+#             if direction & BusRegisters.INPUT:
+#                 hdl += f'        {reg_name}_miso : in  std_logic_vector({self.word_bits-1} downto 0);\n'
+        
+#         hdl = hdl[:-2] + f"\n    );\n" # Get rid of the last semicolon
+#         hdl += f'end {self.name};\n\n'
+
+#         hdl += f'architecture rtl of {self.name} is\n\n'
+        
+#         # Assign attributes
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
+#         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
+        
+#         master_bus_mosi = f'master_bus_mosi{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
+#         master_bus_addr = f'master_bus_addr{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
+#         master_bus_wr = f'master_bus_wr{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
+#         master_bus_en = f'master_bus_en{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
+        
+#         if self._pipeline_master > 0:
+#             hdl += f'    signal master_bus_miso_int : std_logic_vector({self.word_bits-1} downto 0);\n'
+#             for p in range(self._pipeline_master):
+#                 hdl += f'    signal master_bus_mosi_{"d"*(p+1)}    : std_logic_vector({self.word_bits-1} downto 0);\n'
+#                 hdl += f'    signal master_bus_miso_int_{"d"*(p+1)} : std_logic_vector({self.word_bits-1} downto 0);\n'
+#                 hdl += f'    signal master_bus_addr_{"d"*(p+1)}    : std_logic_vector({round(np.log2(num_ports))-1} downto 0);\n'
+#                 hdl += f'    signal master_bus_wr_{"d"*(p+1)}      : std_logic;\n'
+#                 hdl += f'    signal master_bus_en_{"d"*(p+1)}      : std_logic;\n\n'
+        
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             if direction & BusRegisters.INPUT:
+#                 for p in range(pipeline):
+#                     hdl += f'    signal {reg_name}_miso_{"d"*(p+1)}: std_logic_vector({self.word_bits-1} downto 0);\n'
+#             if direction & BusRegisters.OUTPUT:
+#                 hdl += f'    signal {reg_name}_mosi_reg : std_logic_vector({self.word_bits-1} downto 0);\n'
+#                 for p in range(pipeline):
+#                     hdl += f'    signal {reg_name}_mosi_reg_{"d"*(p+1)}: std_logic_vector({self.word_bits-1} downto 0);\n'
+#             hdl += f'\n'
+#         hdl += f'begin\n'
+        
+#         # Pipeline interfaces as specified
+#         hdl += f'    pipeline_proc : process(master_bus_clk) begin\n'
+#         hdl += f'        if rising_edge(master_bus_clk) then\n'
+        
+#         for p in range(self._pipeline_master):
+#             hdl += f'        master_bus_mosi_{"d"*(p+1)} <= master_bus_mosi{("_" if p > 0 else "") + "d"*p};\n'
+#             hdl += f'        master_bus_miso_int_{"d"*(p+1)} <= master_bus_miso_int{("_" if p > 0 else "") + "d"*p};\n'
+#             hdl += f'        master_bus_addr_{"d"*(p+1)} <= master_bus_addr{("_" if p > 0 else "") + "d"*p};\n'
+#             hdl += f'        master_bus_en_{"d"*(p+1)} <= master_bus_en{("_" if p > 0 else "") + "d"*p};\n'
+#             hdl += f'        master_bus_wr_{"d"*(p+1)} <= master_bus_wr{("_" if p > 0 else "") + "d"*p};\n'
+        
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             if direction & BusRegisters.INPUT:
+#                 for p in range(pipeline):
+#                     hdl += f'        {reg_name}_miso_{"d"*(p+1)} <= {reg_name}_miso{("_" if p > 0 else "") + "d"*p};\n'
+#             if direction & BusRegisters.OUTPUT:
+#                 for p in range(pipeline):
+#                     hdl += f'        {reg_name}_mosi_reg_{"d"*(p+1)} <= {reg_name}_mosi_reg{("_" if p > 0 else "") + "d"*p};\n'
+#             hdl += f'\n'
+            
+#         hdl += f'        end if;\n'    
+#         hdl += f'    end process pipeline_proc;\n\n'
+        
+#         if self._pipeline_master > 0:
+#             hdl += f'    master_bus_miso <= master_bus_miso_int_{"d"*self._pipeline_master};\n\n'
+        
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             if direction & BusRegisters.OUTPUT:
+#                 hdl += f'    {reg_name}_mosi <= {reg_name}_mosi_reg{("_" if pipeline > 0 else "") + "d"*pipeline};\n'
+#         hdl += f'\n'
+        
+#         # Multiplex the master input
+#         hdl += f'    master_bus_miso_int   <= '
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             if direction & BusRegisters.INPUT:
+#                 hdl += f'                  {reg_name}_miso{("_" if pipeline > 0 else "") + "d"*pipeline} when to_integer(unsigned({master_bus_addr}({self.size_bits-1} downto 0))) = {i} else \n'
+#         hdl += f'                  (others => \'0\');\n\n'
+        
+#         # Connect all the register outputs
+#         hdl += f'    {self.name}_regs_proc : process(master_bus_clk) begin\n'
+#         hdl += f'        if rising_edge(master_bus_clk) then\n'
+        
+#         for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
+#             if direction & BusRegisters.OUTPUT:
+#                 hdl += f'            if(nrst = \'0\') then\n'
+#                 hdl += f'                {reg_name}_mosi_reg <= (others => \'0\'); -- bus address 0x{symbol.value:08X}\n'
+#                 hdl += f'            elsif({master_bus_wr} = \'1\' and {master_bus_en} = \'1\' and to_integer(unsigned({master_bus_addr}({self.size_bits-1} downto 0))) = {i}) then\n'
+#                 hdl += f'                {reg_name}_mosi_reg <= {master_bus_mosi}; -- bus address 0x{symbol.value:08X}\n'
+#                 hdl += f'            end if;\n'
+            
+#         hdl += f'        end if;\n'    
+#         hdl += f'    end process {self.name}_regs_proc;\n\n'
+#         hdl += f'end rtl;\n\n'
+        
+#         return hdl
+    
+class BusDataport(BusDevice, HDLModule):
+    
+    INPUT = "in"
+    OUTPUT = "out"
+    GATE_RESET = 1
+    GATE_REGCE = 2
+    
+    def __init__(self, name, ports, word_bits=32, bus_bits=32, address=None):
+        """
+        A module to split the data signals of a memory bus port. Optionally, the output signals may be gated by the memory enable signal to either be reset when not enabled, 
+        :param name: name of the module
         :type name: str
-        :param reg_names: List of register names. 
-        :param base_address: The base address of this decoder, from which the address of all its children will be determined and assigned.
-        :type base_address: int, optional
+        :param ports: List of ports 
+        :type ports: `list` of `dict`, where each element specifies a port. Valid keys are: "name", "from", "to", "direction", "gate", "pipeline"
         """
         self._pipeline_master = pipeline_master
-        self._regs = {}
-        for (n, direction, pipeline) in regs:
-            self._regs[n] = (Symbol(), direction, pipeline)
+        self._ports = {}
+        self._max_enable_delay = 0
         
-        BusDevice.__init__(self, name, len(self._regs), word_bits, bus_bits, address)
+        for idx,port in enumerate(ports):
+            # Load keywords for each port and assign default values if necessary
+            port_name = port.pop("name", f"{name}{idx}")
+            port_offset = port.pop("offset", 0)
+            port_width = port.pop("width", word_bits)
+            port_direction = port.pop("direction", BusDataport.INPUT)
+            port_gate = port.pop("gate", None)
+            port_pipeline = port.pop("pipeline", 0)
+            
+            # There should be no keys left, throw an error if there are
+            if len(port) != 0:
+                raise KeyError(f"Unrecognized data port keys: {port}")
+                
+            # Keep track of whether we need to make a delayed enable signal for pipelined gated signals
+            if (port_gate is not None) and port_pipeline > self._max_enable_delay:
+                self._max_enable_delay = port_pipeline
+            
+            self._ports[port_name] = {"width": port_width, 
+                                      "offset": port_offset, 
+                                      "direction": port_dir, 
+                                      "gate": port_gate, 
+                                      "pipeline": pipeline,
+                                      "mask": (2**port_width - 1) << port_offset}
+        
+        BusDevice.__init__(self, name, 1, word_bits, bus_bits, address)
         HDLModule.__init__(self, name)
         
     @property
     def size(self):
-        return len(self._regs)
+        return len(self._ports)
     
     def __getitem__(self, key):
-        """
-        Return the Symbol associated with the register.
-        """
-        return self._regs[key][0]
-    
-    def items(self):
-        return [(key,item[0]) for (key,item) in self._regs.items()]
-    
-    def keys(self):
-        return self._regs.keys()
-    
-    def __iter__(self):
-        return iter(self._regs.keys())
-    
-    def assign(self):
-        """
-        Assign registers to particular addresses.
-        """       
-        # Throw an error if a smarter strategy is needed
-        if len(self._regs) > (2**self._bus_bits):
-            raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
-    
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            # Assign the value of the underlying Symbols to be offset from the address of this BusRegisters object
-            symbol.value = self.value + i
+        return self._ports[key]
         
     def generate_hdl(self):
         if not self.assigned:
             raise ValueError("Device must be assigned before generating HDL.")
             
-        num_ports = next_highest_power_of_2(self.size)
-        
-        # Throw an error if a smarter strategy is needed
-        if num_ports > (2**self.bus_bits):
-            raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
-            
         # Finally, write the HDL for the decoder
         hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\n'
         hdl += f'entity {self.name} is\n'
         hdl += f'    port (\n'
-        hdl += f'        nrst : in std_logic;\n\n'
+        hdl += f'        nrst            : in  std_logic;\n\n'
         hdl += f'        -- Slave interface\n'
         hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
         hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
@@ -245,13 +428,9 @@ class BusRegisters(BusDevice, HDLModule):
         hdl += f'        master_bus_clk  : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n\n'
         
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            hdl += f'        -- {reg_name} interface (bus address 0x{symbol.value:08X})\n'
-            if direction & BusRegisters.OUTPUT:
-                hdl += f'        {reg_name}_mosi : out std_logic_vector({self.word_bits-1} downto 0);\n'
-            if direction & BusRegisters.INPUT:
-                hdl += f'        {reg_name}_miso : in  std_logic_vector({self.word_bits-1} downto 0);\n'
-        
+        for port_name, port in self._ports.items():
+            hdl += f'        {port_name} : {port["direction"]} std_logic_vector({port["width"]-1} downto 0);\n'
+            
         hdl = hdl[:-2] + f"\n    );\n" # Get rid of the last semicolon
         hdl += f'end {self.name};\n\n'
 
@@ -267,85 +446,70 @@ class BusRegisters(BusDevice, HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
         
-        master_bus_mosi = f'master_bus_mosi{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
-        master_bus_addr = f'master_bus_addr{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
-        master_bus_wr = f'master_bus_wr{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
-        master_bus_en = f'master_bus_en{("_" if self._pipeline_master > 0 else "") + "d"*self._pipeline_master}'
+        # Make the delayed enable signals
+        for d in range(1,self._max_enable_delay):
+            hdl += f'    signal master_bus_en_{"d"*(p-1)}: std_logic;\n'
+        hdl += "\n"
         
-        if self._pipeline_master > 0:
-            hdl += f'    signal master_bus_miso_int : std_logic_vector({self.word_bits-1} downto 0);\n'
-            for p in range(self._pipeline_master):
-                hdl += f'    signal master_bus_mosi_{"d"*(p+1)}    : std_logic_vector({self.word_bits-1} downto 0);\n'
-                hdl += f'    signal master_bus_miso_int_{"d"*(p+1)} : std_logic_vector({self.word_bits-1} downto 0);\n'
-                hdl += f'    signal master_bus_addr_{"d"*(p+1)}    : std_logic_vector({round(np.log2(num_ports))-1} downto 0);\n'
-                hdl += f'    signal master_bus_wr_{"d"*(p+1)}      : std_logic;\n'
-                hdl += f'    signal master_bus_en_{"d"*(p+1)}      : std_logic;\n\n'
-        
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            if direction & BusRegisters.INPUT:
-                for p in range(pipeline):
-                    hdl += f'    signal {reg_name}_miso_{"d"*(p+1)}: std_logic_vector({self.word_bits-1} downto 0);\n'
-            if direction & BusRegisters.OUTPUT:
-                hdl += f'    signal {reg_name}_mosi_reg : std_logic_vector({self.word_bits-1} downto 0);\n'
-                for p in range(pipeline):
-                    hdl += f'    signal {reg_name}_mosi_reg_{"d"*(p+1)}: std_logic_vector({self.word_bits-1} downto 0);\n'
+        for port_name, port in self._ports.items():
+            if port["direction"] == BusDataport.OUTPUT:
+                hdl += f'    signal {port_name}_pregate: std_logic_vector({port["width"]-1} downto 0);\n'
+                for p in range(1,port["pipeline"]):
+                    hdl += f'    signal {port_name}_{"d"*p}: std_logic_vector({port["width"]-1} downto 0);\n'
+                    
             hdl += f'\n'
-        hdl += f'begin\n'
+        hdl += f'\nbegin\n'
+        
+        # Delay the enable signals
+        if self._max_delay_enable > 1:
+            hdl += f"    delay_enable_proc: process(master_bus_clk) begin\n"
+            hdl += f"        if rising_edge(master_bus_clk) then\n"
+            for d in range(1,self._max_delay_enable):
+                hdl += f'            master_bus_en_{"d"*p} <= master_bus_en{"" if d == 1 else "_" + "d"*p};\n'
+            hdl += f"        end if;"
+            hdl += f"    end process delay_enable_proc;\n\n"
         
         # Pipeline interfaces as specified
-        hdl += f'    pipeline_proc : process(master_bus_clk) begin\n'
-        hdl += f'        if rising_edge(master_bus_clk) then\n'
-        
-        for p in range(self._pipeline_master):
-            hdl += f'        master_bus_mosi_{"d"*(p+1)} <= master_bus_mosi{("_" if p > 0 else "") + "d"*p};\n'
-            hdl += f'        master_bus_miso_int_{"d"*(p+1)} <= master_bus_miso_int{("_" if p > 0 else "") + "d"*p};\n'
-            hdl += f'        master_bus_addr_{"d"*(p+1)} <= master_bus_addr{("_" if p > 0 else "") + "d"*p};\n'
-            hdl += f'        master_bus_en_{"d"*(p+1)} <= master_bus_en{("_" if p > 0 else "") + "d"*p};\n'
-            hdl += f'        master_bus_wr_{"d"*(p+1)} <= master_bus_wr{("_" if p > 0 else "") + "d"*p};\n'
-        
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            if direction & BusRegisters.INPUT:
-                for p in range(pipeline):
-                    hdl += f'        {reg_name}_miso_{"d"*(p+1)} <= {reg_name}_miso{("_" if p > 0 else "") + "d"*p};\n'
-            if direction & BusRegisters.OUTPUT:
-                for p in range(pipeline):
-                    hdl += f'        {reg_name}_mosi_reg_{"d"*(p+1)} <= {reg_name}_mosi_reg{("_" if p > 0 else "") + "d"*p};\n'
-            hdl += f'\n'
+        for port_name, port in self._ports.items():
+            port_slice = f'({port["width"] + port["offset"] - 1} downto {port["offset"]})'
             
-        hdl += f'        end if;\n'    
-        hdl += f'    end process pipeline_proc;\n\n'
-        
-        if self._pipeline_master > 0:
-            hdl += f'    master_bus_miso <= master_bus_miso_int_{"d"*self._pipeline_master};\n\n'
-        
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            if direction & BusRegisters.OUTPUT:
-                hdl += f'    {reg_name}_mosi <= {reg_name}_mosi_reg{("_" if pipeline > 0 else "") + "d"*pipeline};\n'
-        hdl += f'\n'
-        
-        # Multiplex the master input
-        hdl += f'    master_bus_miso_int   <= '
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            if direction & BusRegisters.INPUT:
-                hdl += f'                  {reg_name}_miso{("_" if pipeline > 0 else "") + "d"*pipeline} when to_integer(unsigned({master_bus_addr}({self.size_bits-1} downto 0))) = {i} else \n'
-        hdl += f'                  (others => \'0\');\n\n'
-        
-        # Connect all the register outputs
-        hdl += f'    {self.name}_regs_proc : process(master_bus_clk) begin\n'
-        hdl += f'        if rising_edge(master_bus_clk) then\n'
-        
-        for i,(reg_name, (symbol, direction, pipeline)) in enumerate(self._regs.items()):
-            if direction & BusRegisters.OUTPUT:
-                hdl += f'            if(nrst = \'0\') then\n'
-                hdl += f'                {reg_name}_mosi_reg <= (others => \'0\'); -- bus address 0x{symbol.value:08X}\n'
-                hdl += f'            elsif({master_bus_wr} = \'1\' and {master_bus_en} = \'1\' and to_integer(unsigned({master_bus_addr}({self.size_bits-1} downto 0))) = {i}) then\n'
-                hdl += f'                {reg_name}_mosi_reg <= {master_bus_mosi}; -- bus address 0x{symbol.value:08X}\n'
-                hdl += f'            end if;\n'
-            
-        hdl += f'        end if;\n'    
-        hdl += f'    end process {self.name}_regs_proc;\n\n'
-        hdl += f'end rtl;\n\n'
-        
+            if port["pipeline"] == 0:
+                # Combinational connection, just connect to the bus data pins except for any output reset gating
+                if port["direction"] == BusDataport.INPUT:
+                    hdl += f'    master_bus_miso{port_slice} <= {port_name};\n\n'
+                elif port["gate"] == BusDataport.GATE_RESET:
+                    hdl += f'    {port_name} <= master_bus_miso{port_slice} when master_bus_en = \'1\' else (others => \'0\');\n\n'
+                else:
+                    hdl += f'    {port_name} <= master_bus_miso{port_slice};\n\n'
+            else:
+                # Pipelined connection, create a process with the appropriate control signals (chip enables or resets as appropriate)
+                hdl += f'    {port_name}_proc : process(master_bus_clk) begin\n'
+                hdl += f'        if rising_edge(master_bus_clk) then\n'
+                
+                if port["direction"] == BusDataport.INPUT:
+                    for p in range(port["pipeline"]):
+                        hdl += f'        {"master_bus_miso"+port_slice if p == port["pipeline"]-1 else reg_name + "_" + "d"*p} <= {port_name}{"" if p == 0 else "_" + "d"*p};\n'
+                else:
+                    for p in range(port["pipeline"]):
+                        if port["gate"] == BusDataport.GATE_RESET:
+                            hdl += f'        if(nrst = \'0\') then;\n'
+                        else:
+                            hdl += f'        if(nrst = \'0\' or master_bus_en{"" if p == 0 else "_" + "d"*p} = \'1\') then;\n'
+                            
+                        hdl += f'            {port_name}{"" if p == port["pipeline"]-1 else "_" + "d"*p} <= (others => \'0\');\n'  
+                        hdl += f'        end if;\n'
+                            
+                        if port["gate"] == BusDataport.GATE_REGCE:
+                            hdl += f'        elsif(master_bus_en{"" if p == 0 else "_" + "d"*p} = \'1\') then\n'
+                        else:
+                            hdl += f'        else'
+                            
+                        hdl += f'            {port_name}{"" if p == port["pipeline"]-1 else "_" + "d"*p} <= {"master_bus_mosi"+port_slice if p == 0 else reg_name + "_" + "d"*p};\n'
+                        hdl += f'        end if;\n\n'
+                    
+                hdl += f'        end if;\n'    
+                hdl += f'    end process {port_name}_proc;\n\n'
+                        
         return hdl
     
 class BusDecoder(BusDevice, HDLModule):
@@ -530,11 +694,12 @@ class BusDecoder(BusDevice, HDLModule):
                 hdl += f'        if rising_edge(master_bus_clk) then\n'
                 hdl += f'            {obj.name}_mosi <= master_bus_mosi;\n'
                 hdl += f'            {obj.name}_addr <= master_bus_addr({low_address_bit-1} downto 0);\n'
-                hdl += f'            {obj.name}_wr   <= master_bus_wr;\n'
                 hdl += f'            if (master_bus_addr({region_bits}) = "{f"{i:b}".zfill(decoder_inputs)}") then \n'
                 hdl += f'                {obj.name}_en   <= \'1\';\n'
+                hdl += f'                {obj.name}_wr   <= master_bus_wr;\n'
                 hdl += f'            else\n'
                 hdl += f'                {obj.name}_en   <= \'0\';\n'
+                hdl += f'                {obj.name}_wr   <= \'0\';\n'
                 hdl += f'            end if;\n'
                 hdl += f'        end if;\n'
                 hdl += f'    end process {obj.name}_proc;\n'
