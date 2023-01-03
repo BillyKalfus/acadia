@@ -1,17 +1,5 @@
 from ..assembler import Symbol
-import numpy as np
-
-def next_highest_power_of_2(num):
-    # https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-    n = np.uint32(num)
-    n -= 1
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    n += 1
-    return n
+from .utils import next_highest_power_of_2
 
 class HDLModule(object):
     """
@@ -95,14 +83,6 @@ class BusDevice(Symbol):
         """
         return self._bus_bits
     
-    @property
-    def size_bits(self):
-        """
-        :return: The number of bits needed to encode the object size.
-        :rtype: int
-        """
-        return round(np.log2(next_highest_power_of_2(self._size)))
-    
 class BusDataport(BusDevice, HDLModule):
     
     INPUT = "in"
@@ -167,7 +147,6 @@ class BusDataport(BusDevice, HDLModule):
         hdl += f'        -- Slave interface\n'
         hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
         hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
-        hdl += f'        master_bus_addr : in  std_logic_vector({round(np.log2(num_ports))-1} downto 0);\n'
         hdl += f'        master_bus_wr   : in  std_logic;\n'
         hdl += f'        master_bus_clk  : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n\n'
@@ -185,32 +164,32 @@ class BusDataport(BusDevice, HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
         
         # Make the delayed enable signals
         for d in range(1,self._max_enable_delay):
-            hdl += f'    signal master_bus_en_{"d"*(p-1)}: std_logic;\n'
+            hdl += f'    signal master_bus_en_{"d"*d}: std_logic;\n'
         hdl += "\n"
         
         for port_name, port in self._ports.items():
-            if port["direction"] == BusDataport.OUTPUT:
-                hdl += f'    signal {port_name}_pregate: std_logic_vector({port["width"]-1} downto 0);\n'
-                for p in range(1,port["pipeline"]):
+            for p in range(1,port["pipeline"]):
+                if port["direction"] == BusDataport.OUTPUT:
+                    hdl += f'    signal master_bus_mosi_{"d"*p}_{port_name}: std_logic_vector({port["width"]-1} downto 0);\n'
+                elif port["direction"] == BusDataport.INPUT:
                     hdl += f'    signal {port_name}_{"d"*p}: std_logic_vector({port["width"]-1} downto 0);\n'
                     
             hdl += f'\n'
         hdl += f'\nbegin\n'
         
         # Delay the enable signals
-        if self._max_delay_enable > 1:
+        if self._max_enable_delay > 1:
             hdl += f"    delay_enable_proc: process(master_bus_clk) begin\n"
             hdl += f"        if rising_edge(master_bus_clk) then\n"
-            for d in range(1,self._max_delay_enable):
-                hdl += f'            master_bus_en_{"d"*p} <= master_bus_en{"" if d == 1 else "_" + "d"*p};\n'
-            hdl += f"        end if;"
+            for d in range(1,self._max_enable_delay):
+                hdl += f'            master_bus_en_{"d"*d} <= master_bus_en{"" if d == 1 else ("_" + "d"*d)};\n'
+            hdl += f"        end if;\n"
             hdl += f"    end process delay_enable_proc;\n\n"
         
         # Pipeline interfaces as specified
@@ -222,9 +201,9 @@ class BusDataport(BusDevice, HDLModule):
                 if port["direction"] == BusDataport.INPUT:
                     hdl += f'    master_bus_miso{port_slice} <= {port_name};\n\n'
                 elif port["gate"] == BusDataport.GATE_RESET:
-                    hdl += f'    {port_name} <= master_bus_miso{port_slice} when master_bus_en = \'1\' else (others => \'0\');\n\n'
+                    hdl += f'    {port_name} <= master_bus_mosi{port_slice} when master_bus_en = \'1\' else (others => \'0\');\n\n'
                 else:
-                    hdl += f'    {port_name} <= master_bus_miso{port_slice};\n\n'
+                    hdl += f'    {port_name} <= master_bus_mosi{port_slice};\n\n'
             else:
                 # Pipelined connection, create a process with the appropriate control signals (chip enables or resets as appropriate)
                 hdl += f'    {port_name}_proc : process(master_bus_clk) begin\n'
@@ -232,27 +211,28 @@ class BusDataport(BusDevice, HDLModule):
                 
                 if port["direction"] == BusDataport.INPUT:
                     for p in range(port["pipeline"]):
-                        hdl += f'        {"master_bus_miso"+port_slice if p == port["pipeline"]-1 else reg_name + "_" + "d"*p} <= {port_name}{"" if p == 0 else "_" + "d"*p};\n'
+                        hdl += f'        {"master_bus_miso"+port_slice if p == port["pipeline"]-1 else port_name + "_" + "d"*(p+1)} <= {port_name}{"" if p == 0 else "_" + "d"*p};\n'
                 else:
                     for p in range(port["pipeline"]):
                         if port["gate"] == BusDataport.GATE_RESET:
-                            hdl += f'        if(nrst = \'0\') then;\n'
+                            hdl += f'            if(nrst = \'0\' or master_bus_en{"" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
                         else:
-                            hdl += f'        if(nrst = \'0\' or master_bus_en{"" if p == 0 else "_" + "d"*p} = \'1\') then;\n'
+                            hdl += f'            if(nrst = \'0\') then\n'
                             
-                        hdl += f'            {port_name}{"" if p == port["pipeline"]-1 else "_" + "d"*p} <= (others => \'0\');\n'  
-                        hdl += f'        end if;\n'
+                        hdl += f'                {"" if p == port["pipeline"]-1 else ("master_bus_mosi_" + "d"*(p+1) + "_")}{port_name} <= (others => \'0\');\n'  
                             
                         if port["gate"] == BusDataport.GATE_REGCE:
-                            hdl += f'        elsif(master_bus_en{"" if p == 0 else "_" + "d"*p} = \'1\') then\n'
+                            hdl += f'            elsif(master_bus_en{"" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
                         else:
-                            hdl += f'        else'
+                            hdl += f'            else'
                             
-                        hdl += f'            {port_name}{"" if p == port["pipeline"]-1 else "_" + "d"*p} <= {"master_bus_mosi"+port_slice if p == 0 else reg_name + "_" + "d"*p};\n'
-                        hdl += f'        end if;\n\n'
+                        hdl += f'                {"" if p == port["pipeline"]-1 else ("master_bus_mosi_" + "d"*(p+1) + "_")}{port_name} <= master_bus_mosi{port_slice if p == 0 else ("_" + "d"*p + "_" + port_name)};\n'
+                        hdl += f'            end if;\n\n'
                     
                 hdl += f'        end if;\n'    
                 hdl += f'    end process {port_name}_proc;\n\n'
+                
+        hdl += f'end rtl;\n'
                         
         return hdl
     
@@ -285,7 +265,7 @@ class BusDecoder(BusDevice, HDLModule):
             raise TypeError("Can only add BusDevices to a BusDecoder.")
             
     def max_slave_size(self):
-        return next_highest_power_of_2(np.array(list(map(lambda x: x[0].size, self._bus_objects))).max())
+        return next_highest_power_of_2(max(map(lambda x: x[0].size, self._bus_objects)))
     
     def items(self):
         return [obj for (obj,_) in self._bus_objects]
@@ -358,8 +338,8 @@ class BusDecoder(BusDevice, HDLModule):
         # The max region size tells us how many lower bits we can ignore.
         # We then need enough bits to decode the number of regions that we have
         # We can then ignore all the bits above that
-        decoder_inputs = round(np.log2(num_ports)) # We've guaranteed these numbers to be powers of 2 above
-        low_address_bit = round(np.log2(max_size))
+        decoder_inputs = next_highest_power_of_2(num_ports, log=True) # We've guaranteed these numbers to be powers of 2 above
+        low_address_bit = next_highest_power_of_2(max_size, log=True)
         
         # Finally, write the HDL for the decoder
         hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\n'
@@ -368,7 +348,7 @@ class BusDecoder(BusDevice, HDLModule):
         hdl += f'        -- Slave interface\n'
         hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
         hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
-        hdl += f'        master_bus_addr : in  std_logic_vector({round(np.log2(self.size))-1} downto 0);\n'
+        hdl += f'        master_bus_addr : in  std_logic_vector({next_highest_power_of_2(self.size, log=True)-1} downto 0);\n'
         hdl += f'        master_bus_wr   : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n'
         hdl += f'        master_bus_clk  : in  std_logic;\n\n'
@@ -521,7 +501,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             raise ValueError("Device must be assigned before generating HDL.")
             
         num_ports = next_highest_power_of_2(self.size)
-        bus_addr_bits = round(np.log2(num_ports))
+        bus_addr_bits = next_highest_power_of_2(num_ports, log=True)
         
         # Throw an error if a smarter strategy is needed
         if num_ports > (2**self.bus_bits):

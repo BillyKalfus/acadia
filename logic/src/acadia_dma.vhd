@@ -29,14 +29,8 @@ entity acadia_dma is
     );
     port (
         clk                 : in  std_logic;
-        
-        -- Reset control
         rst                 : in  std_logic;
-        rst_en              : in  std_logic;
-        
-        -- Trigger control
         trig                : in  std_logic;
-        trig_en             : in  std_logic;
         
         -- Descriptor memory interface
         descriptor_mem_dout : in  std_logic_vector(63 downto 0);
@@ -143,9 +137,9 @@ begin
 
     running_proc: process(clk) begin
         if rising_edge(clk) then
-            if((rst = '1' and rst_en = '1') or (sequence_last_dec_cycle = '1' and seq_continue_int = '0')) then
+            if(rst = '1' or (sequence_last_dec_cycle = '1' and seq_continue_int = '0')) then
                 running <= '0';
-            elsif(trig = '1' and trig_en = '1') then
+            elsif(trig = '1') then
                 running <= '1';
             end if;
         end if;
@@ -180,7 +174,7 @@ begin
     -- Assign signals from descriptor fields
     descriptor_field_load_proc: process(clk) begin
         if rising_edge(clk) then
-            if(desc_load = '1' or (descriptor_last_point and point_last_dec_cycle) = '1') then
+            if(before_descriptor_first_cycle = '1') then
                 desc_lm1  <= descriptor_mem_dout(15 downto 0);
                 desc_addr <= descriptor_mem_dout(31 downto 16);
                 desc_dec  <= descriptor_mem_dout(39 downto 32);

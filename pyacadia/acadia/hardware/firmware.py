@@ -1,5 +1,5 @@
 from . import hdl
-from .tcl_utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module
+from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg, next_highest_power_of_2
 import os
 import numpy as np
 
@@ -75,6 +75,9 @@ class Firmware(object):
         :type filename: str, optional
         """
         self._hedgehog_tcl_filename = os.path.join(self._project_dir, filename)
+        with open(self._hedgehog_tcl_filename, "w") as f:
+            # Read the VHDL file containing our custom modules
+            f.write(f"read_vhdl {self._hdl_filename}\n")
 
 class StandardFirmware(Firmware):
     # Designate some addresses for memory slave segments
@@ -121,7 +124,7 @@ class StandardFirmware(Firmware):
     NUM_ADC = 4
     NUM_CMACC = 4
     NUM_PS_GPIO = 91
-    NUM_PS_INT = 1
+    NUM_PS_IRQ = 2
     NUM_PS_GDMA = 8
     
     """
@@ -173,13 +176,13 @@ class StandardFirmware(Firmware):
         for label,count in [("dac", StandardFirmware.NUM_DAC), ("adc", StandardFirmware.NUM_ADC), ("cmacc", StandardFirmware.NUM_CMACC)]:
             for i in range(count):
                 dataport = hdl.BusDataport(name=f"{label}_dma{i}_seq", 
-                                       ports=[{"name": f"start", 
+                                       ports=[{"name": f"seq_start", 
                                               "direction": hdl.BusDataport.OUTPUT, 
                                               "offset": 0,
                                               "width": 16,
                                               "gate": hdl.BusDataport.GATE_REGCE,
                                               "pipeline": 2},
-                                             {"name": f"end", 
+                                             {"name": f"seq_end", 
                                               "direction": hdl.BusDataport.OUTPUT, 
                                               "offset": 16,
                                               "width": 16,
@@ -210,93 +213,67 @@ class StandardFirmware(Firmware):
         self.add(cmacc_status)
 
         # Create dataports for interacting with the PS GPIO
-        ps_gpio_dataports = []
+        for gpio_num, size in [(3, 32), (4, 32), (5, StandardFirmware.NUM_PS_GPIO % 32)]:
+            ps_gpio_dataports = []
 
-        for i in range(StandardFirmware.NUM_PS_GPIO):
-            ps_gpio_dataports += [{"name": f"ps_gpio{i}_in",
+            ps_gpio_dataports += [{"name": f"gpio_out",
                                        "direction": hdl.BusDataport.INPUT,
-                                       "offset": i,
-                                       "width": 1,
+                                       "offset": 0,
+                                       "width": size,
                                        "pipeline": 2}]
-            ps_gpio_dataports += [{"name": f"ps_gpio{i}_out",
+            ps_gpio_dataports += [{"name": f"gpio_in",
                                        "direction": hdl.BusDataport.OUTPUT,
-                                       "offset": i,
-                                       "width": 1,
+                                       "offset": 0,
+                                       "width": size,
                                        "gate": hdl.BusDataport.GATE_REGCE,
                                        "pipeline": 2}]
-        if StandardFirmware.NUM_PS_GPIO <= 32:
-            ps_gpio = hdl.BusDataport(name="ps_gpio3", ports=ps_gpio_dataports)
+
+            ps_gpio = hdl.BusDataport(name=f"ps_gpio{gpio_num}", ports=ps_gpio_dataports)
             sequencer_bus_decoder.add(ps_gpio)
             self.add(ps_gpio)
-        elif StandardFirmware.NUM_PS_GPIO <= 64:
-            ps_gpio3 = hdl.BusDataport(name="ps_gpio3", ports=ps_gpio_dataports[:32])
-            sequencer_bus_decoder.add(ps_gpio3)
-            self.add(ps_gpio3)
             
-            ps_gpio4 = hdl.BusDataport(name="ps_gpio4", ports=ps_gpio_dataports[32:StandardFirmware.NUM_PS_GPIO])
-            sequencer_bus_decoder.add(ps_gpio4)
-            self.add(ps_gpio4)
-        else:
-            ps_gpio3 = hdl.BusDataport(name="ps_gpio3", ports=ps_gpio_dataports[:32])
-            sequencer_bus_decoder.add(ps_gpio3)
-            self.add(ps_gpio3)
-            
-            ps_gpio4 = hdl.BusDataport(name="ps_gpio4", ports=ps_gpio_dataports[32:64])
-            sequencer_bus_decoder.add(ps_gpio4)
-            self.add(ps_gpio4)
-            
-            ps_gpio5 = hdl.BusDataport(name="ps_gpio5", ports=ps_gpio_dataports[64:StandardFirmware.NUM_PS_GPIO])
-            sequencer_bus_decoder.add(ps_gpio5)
-            self.add(ps_gpio5)
-            
-        ps_int_dataports = []
-        for i in range(StandardFirmware.NUM_PS_INT):
-            ps_int_dataports += [{"name": f"int{i}_in",
-                                       "direction": hdl.BusDataport.INPUT,
-                                       "offset": i,
-                                       "width": 1,
-                                       "pipeline": 2}]
-            ps_int_dataports += [{"name": f"int{i}_out",
+        ps_irq_dataports = []
+        for i in range(StandardFirmware.NUM_PS_IRQ):
+            ps_irq_dataports += [{"name": f"irq{i}",
                                        "direction": hdl.BusDataport.OUTPUT,
                                        "offset": i,
                                        "width": 1,
                                        "gate": hdl.BusDataport.GATE_REGCE,
                                        "pipeline": 2}]
-        for i in range(StandardFirmware.NUM_PS_GDMA):
-            ps_int_dataports += [{"name": f"gdma_int{i}",
-                                       "direction": hdl.BusDataport.INPUT,
-                                       "offset": StandardFirmware.NUM_PS_INT + i,
-                                       "width": 1,
-                                       "pipeline": 2}]
         
-        ps_int = hdl.BusDataport(name="ps_int", ports=ps_int_dataports)
-        sequencer_bus_decoder.add(ps_int)
-        self.add(ps_int)
+        ps_irq_dataports += [{"name": f"gdma_irq",
+                                   "direction": hdl.BusDataport.INPUT,
+                                   "offset": StandardFirmware.NUM_PS_IRQ + i,
+                                   "width": StandardFirmware.NUM_PS_GDMA,
+                                   "pipeline": 2}]
+        
+        ps_irq_dataports = hdl.BusDataport(name="ps_irq", ports=ps_irq_dataports)
+        sequencer_bus_decoder.add(ps_irq)
+        self.add(ps_irq)
         
         ps_gdma_dataports = []
-        for i in range(StandardFirmware.NUM_PS_GDMA):
-            ps_gdma_dataports += [{"name": f"gdma{i}_cvld",
-                                       "direction": hdl.BusDataport.OUTPUT,
-                                       "offset": i,
-                                       "width": 1,
-                                       "gate": hdl.BusDataport.GATE_REGCE,
-                                       "pipeline": 2}]
-            ps_gdma_dataports += [{"name": f"gdma{i}_tack",
-                                       "direction": hdl.BusDataport.OUTPUT,
-                                       "offset": StandardFirmware.NUM_PS_GDMA + i,
-                                       "width": 1,
-                                       "gate": hdl.BusDataport.GATE_REGCE,
-                                       "pipeline": 2}]
-            ps_gdma_dataports += [{"name": f"gdma{i}_cack",
-                                       "direction": hdl.BusDataport.INPUT,
-                                       "offset": i,
-                                       "width": 1,
-                                       "pipeline": 2}]
-            ps_gdma_dataports += [{"name": f"gdma{i}_tvld",
-                                       "direction": hdl.BusDataport.INPUT,
-                                       "offset": StandardFirmware.NUM_PS_GDMA + i,
-                                       "width": 1,
-                                       "pipeline": 2}]
+        ps_gdma_dataports += [{"name": f"cvld",
+                                   "direction": hdl.BusDataport.OUTPUT,
+                                   "offset": 0,
+                                   "width": StandardFirmware.NUM_PS_GDMA,
+                                   "gate": hdl.BusDataport.GATE_REGCE,
+                                   "pipeline": 2}]
+        ps_gdma_dataports += [{"name": f"tack",
+                                   "direction": hdl.BusDataport.OUTPUT,
+                                   "offset": StandardFirmware.NUM_PS_GDMA,
+                                   "width": StandardFirmware.NUM_PS_GDMA,
+                                   "gate": hdl.BusDataport.GATE_REGCE,
+                                   "pipeline": 2}]
+        ps_gdma_dataports += [{"name": f"cack",
+                                   "direction": hdl.BusDataport.INPUT,
+                                   "offset": 0,
+                                   "width": StandardFirmware.NUM_PS_GDMA,
+                                   "pipeline": 2}]
+        ps_gdma_dataports += [{"name": f"tvld",
+                                   "direction": hdl.BusDataport.INPUT,
+                                   "offset": StandardFirmware.NUM_PS_GDMA ,
+                                   "width": StandardFirmware.NUM_PS_GDMA,
+                                   "pipeline": 2}]
         ps_gdma = hdl.BusDataport(name="ps_gdma", ports=ps_gdma_dataports)
         sequencer_bus_decoder.add(ps_gdma)
         self.add(ps_gdma)    
@@ -330,7 +307,7 @@ class StandardFirmware(Firmware):
             mem_decoder.add(hdl.BusDevice(f"cmacc{i}_kernel_mem", size=StandardFirmware.CMACC_KERNEL_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
 
         for i in range(16):
-            mem_decoder.add(hdl.BusDevice(f"dac{i}_dma_descriptor_mem", size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_descriptor_mem", size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
 
         for i in range(4):
             mem_decoder.add(hdl.BusDevice(f"adc_dma{i}_descriptor_mem", size=StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
@@ -348,7 +325,7 @@ class StandardFirmware(Firmware):
         self.add(dac_mem_decoder)
         
         for i in range(16):
-            dac_mem_decoder.add(hdl.BusDevice(f"dac{i}_mem", size=StandardFirmware.DAC_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            dac_mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_mem", size=StandardFirmware.DAC_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
         
         # Assign decoder addresses
         sequencer_bus_decoder.assign(0)
@@ -360,9 +337,9 @@ class StandardFirmware(Firmware):
         """
         super().write_hedgehog_tcl(filename)
         
-        with open(self._hedgehog_tcl_filename, "w") as f:
+        with open(self._hedgehog_tcl_filename, "a") as f:
 
-            # ------------------- Design Initialization -------------------- #            
+            # ------------------- Design Initialization -------------------- #  
 
             # Create a constant that we"ll use a few times
             create_ip(f, name="hedgehog/xlconst_FFFF", vlnv="xilinx.com:ip:xlconstant:1.1")
@@ -406,38 +383,39 @@ class StandardFirmware(Firmware):
             # that reflect this)
             create_ip(f, name="hedgehog/clk_wiz", vlnv="xilinx.com:ip:clk_wiz:6.0")
             set_property(f, name="hedgehog/clk_wiz", properties={"PRIM_IN_FREQ.VALUE_SRC": "USER"})
-            set_property(f, {"PRIMITIVE {MMCM} "
-                    "CONFIG.USE_DYN_RECONFIG {true} "
-                    "CONFIG.PRIM_SOURCE {Global_buffer} "
-                    "CONFIG.PRIM_IN_FREQ {300.000} "
-                    "CONFIG.CLKOUT2_USED {true} "
-                    "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {300.000} "
-                    "CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {30.000} "
-                    "CONFIG.CLK_OUT1_PORT {clk_300} "
-                    "CONFIG.CLK_OUT2_PORT {clk_30} "
-                    "CONFIG.CLKIN1_JITTER_PS {33.330000000000005} "
-                    "CONFIG.CLKOUT1_DRIVES {Buffer} "
-                    "CONFIG.CLKOUT2_DRIVES {Buffer} "
-                    "CONFIG.CLKOUT3_DRIVES {Buffer} "
-                    "CONFIG.CLKOUT4_DRIVES {Buffer} "
-                    "CONFIG.CLKOUT5_DRIVES {Buffer} "
-                    "CONFIG.CLKOUT6_DRIVES {Buffer} "
-                    "CONFIG.CLKOUT7_DRIVES {Buffer} "
-                    "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
-                    "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
-                    "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
-                    "CONFIG.MMCM_CLKFBOUT_MULT_F {4.000} "
-                    "CONFIG.MMCM_CLKIN1_PERIOD {3.333} "
-                    "CONFIG.MMCM_CLKIN2_PERIOD {10.0} "
-                    "CONFIG.MMCM_COMPENSATION {AUTO} "
-                    "CONFIG.MMCM_CLKOUT0_DIVIDE_F {4.000} "
-                    "CONFIG.MMCM_CLKOUT1_DIVIDE {40} "
-                    "CONFIG.PLL_CLKIN_PERIOD {3.333} "
-                    "CONFIG.NUM_OUT_CLKS {2} "
-                    "CONFIG.CLKOUT1_JITTER {81.814} "
-                    "CONFIG.CLKOUT1_PHASE_ERROR {77.836} "
-                    "CONFIG.CLKOUT2_JITTER {128.977} "
-                    "CONFIG.CLKOUT2_PHASE_ERROR {77.836}"})
+            set_property(f, name="hedgehog/clk_wiz",
+                             properties="CONFIG.PRIMITIVE {MMCM} "
+                                        "CONFIG.USE_DYN_RECONFIG {true} "
+                                        "CONFIG.PRIM_SOURCE {Global_buffer} "
+                                        "CONFIG.PRIM_IN_FREQ {300.000} "
+                                        "CONFIG.CLKOUT2_USED {true} "
+                                        "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {300.000} "
+                                        "CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {30.000} "
+                                        "CONFIG.CLK_OUT1_PORT {clk_300} "
+                                        "CONFIG.CLK_OUT2_PORT {clk_30} "
+                                        "CONFIG.CLKIN1_JITTER_PS {33.330000000000005} "
+                                        "CONFIG.CLKOUT1_DRIVES {Buffer} "
+                                        "CONFIG.CLKOUT2_DRIVES {Buffer} "
+                                        "CONFIG.CLKOUT3_DRIVES {Buffer} "
+                                        "CONFIG.CLKOUT4_DRIVES {Buffer} "
+                                        "CONFIG.CLKOUT5_DRIVES {Buffer} "
+                                        "CONFIG.CLKOUT6_DRIVES {Buffer} "
+                                        "CONFIG.CLKOUT7_DRIVES {Buffer} "
+                                        "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
+                                        "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
+                                        "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
+                                        "CONFIG.MMCM_CLKFBOUT_MULT_F {4.000} "
+                                        "CONFIG.MMCM_CLKIN1_PERIOD {3.333} "
+                                        "CONFIG.MMCM_CLKIN2_PERIOD {10.0} "
+                                        "CONFIG.MMCM_COMPENSATION {AUTO} "
+                                        "CONFIG.MMCM_CLKOUT0_DIVIDE_F {4.000} "
+                                        "CONFIG.MMCM_CLKOUT1_DIVIDE {40} "
+                                        "CONFIG.PLL_CLKIN_PERIOD {3.333} "
+                                        "CONFIG.NUM_OUT_CLKS {2} "
+                                        "CONFIG.CLKOUT1_JITTER {81.814} "
+                                        "CONFIG.CLKOUT1_PHASE_ERROR {77.836} "
+                                        "CONFIG.CLKOUT2_JITTER {128.977} "
+                                        "CONFIG.CLKOUT2_PHASE_ERROR {77.836}")
 
             # Connect the clock for the AXI lite interface to the PS clock
             connect_bd_net(f, f"hedgehog/PS_clk_250", f"hedgehog/clk_wiz/s_axi_aclk")
@@ -523,6 +501,7 @@ class StandardFirmware(Firmware):
             for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
                 for seg in ["DDR_HIGH", "DDR_LOW", "LPS_OCM", "QSPI"]:
                     exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_{seg}",  "ps/Data")
+                    
 
             # ------------------- DDR4 Connections -------------------- #
 
@@ -539,7 +518,7 @@ class StandardFirmware(Firmware):
             connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/master_bus", f"hedgehog/sequencer_bus")
 
             # Create an NCO real-time port register interface
-            create_module(f, f"hedgehog/nco_regs", "nco_port_regs")
+            create_module(f, f"hedgehog/nco_regs", "acadia_nco_port_regs")
             connect_bd_net(f, f"hedgehog/nco_regs/clk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/nco_regs/nco_dest_clk", f"hedgehog/PS_clk_250")
             connect_bd_net(f, f"hedgehog/nco_regs/nrst", f"hedgehog/seq_peripheral_aresetn")
@@ -554,9 +533,10 @@ class StandardFirmware(Firmware):
                 if isinstance(module, hdl.BusDataport):
                     create_module(f, f"hedgehog/{module.name}_dataport", module.name)
                     connect_bd_intf_net(f, f"hedgehog/{module.name}_dataport/master_bus", f"hedgehog/sequencer_bus_decoder/{module.name}")
-
+                    connect_bd_intf_net(f, f"hedgehog/{module.name}_dataport/nrst", f"hedgehog/seq_peripheral_aresetn")
+                                        
             # Add the memory decoder for cache and instructions and its AXI BRAM controller
-            create_module(f, f"hedgehog/mem_decoder", mem_decoder.name)
+            create_module(f, f"hedgehog/mem_decoder", "mem_decoder")
             create_ip(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
             set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0, "READ_LATENCY": 3})
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/s_axi_aclk", f"hedgehog/clk_wiz/clk_300")
@@ -564,40 +544,38 @@ class StandardFirmware(Firmware):
 
             # Connect the memory decoder to the BRAM controller through an address slicer 
             # (to account for the fact that, for some reason, the AXI bram controller uses byte addressing on the BRAM slave port)
-            create_module(f, f"hedgehog/axi_StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR_slice", "axi_bram_ctrl_addr_slice")
-            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/BRAM_PORTA", f"hedgehog/axi_StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR_slice/BRAM_CTRL")
-            connect_bd_intf_net(f, f"hedgehog/axi_StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR_slice/SLAVE", f"hedgehog/mem_decoder/master_bus")
+            create_module(f, f"hedgehog/axi_bram_ctrl_mem_decoder_addr_slice", "acadia_axi_bram_ctrl_addr_slice")
+            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/BRAM_PORTA", f"hedgehog/axi_bram_ctrl_mem_decoder_addr_slice/BRAM_CTRL")
+            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder_addr_slice/SLAVE", f"hedgehog/mem_decoder/master_bus")
 
             # Connect the memory decoder AXI BRAM controller to the config SmartConnect and assign address space; also configure the address slicer
             connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI", f"hedgehog/config_smartconnect/M02_AXI")
-            mem_decoder_addr_range = next_highest_power_of_2(mem_decoder.words(word_bits=8))
-            set_property(f, name=f"hedgehog/axi_StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": round(np.log2(mem_decoder_addr_range))})
-            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=mem_decoder_addr_range)
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["mem_decoder"].words(word_bits=8), log=True)})
+            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(word_bits=8)))
 
             # Add the DAC memory decoder for the PS master and its AXI BRAM controller
-            create_module(f, f"hedgehog/dac_mem_decoder", dac_mem_decoder.name)
-            create_module(f, f"hedgehog/axi_StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR_slice", "axi_bram_ctrl_addr_slice")
+            create_module(f, f"hedgehog/dac_mem_decoder", "dac_mem_decoder")
+            create_module(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice", "acadia_axi_bram_ctrl_addr_slice")
             create_ip(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
             set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0})
 
             # Because the DAC memory is ultraram, it needs to be synchronous to the sequencer clock
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/s_axi_aclk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/s_axi_aresetn", f"hedgehog/seq_peripheral_aresetn")
-            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/BRAM_PORTA", f"hedgehog/axi_StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR_slice/BRAM_CTRL")
-            connect_bd_intf_net(f, f"hedgehog/axi_StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR_slice/SLAVE", f"hedgehog/dac_mem_decoder/master_bus")
+            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/BRAM_PORTA", f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice/BRAM_CTRL")
+            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice/SLAVE", f"hedgehog/dac_mem_decoder/master_bus")
 
             # Connect the DAC memory decoder to the config smartconnect and assign it address space
             connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI", f"hedgehog/config_smartconnect/M03_AXI")
-            dac_mem_decoder_addr_range = next_highest_power_of_2(dac_mem_decoder.words(word_bits=8))
-            set_property(f, name=f"hedgehog/axi_StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": round(np.log2(dac_mem_decoder_addr_range))})
-            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=dac_mem_decoder_addr_range)
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8), log=True)})
+            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8)))
 
              # ------------------- Sequencer cache -------------------- #
 
             # Add cache memory and connect it to the sequencer bus decoder
             create_ip(f, name="hedgehog/cache_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
             set_property(f, name="hedgehog/cache_mem",                  
-                            properties="CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
+                            properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                         f"CONFIG.Enable_32bit_Address {{false}} "
                                         f"CONFIG.Use_Byte_Write_Enable {{false}} "
                                         f"CONFIG.Byte_Size {{9}} "
@@ -630,17 +608,16 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_cache/s_axi_aresetn", f"hedgehog/seq_peripheral_aresetn")
 
             # Connect the cache to the BRAM controller through a slice
-            create_module(f, f"hedgehog/axi_StandardFirmware.BRAM_CTRL_CACHE_ADDR_slice", "axi_bram_ctrl_addr_slice")
-            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_cache/BRAM_PORTA", f"hedgehog/axi_StandardFirmware.BRAM_CTRL_CACHE_ADDR_slice/BRAM_CTRL")
-            connect_bd_intf_net(f, f"hedgehog/axi_StandardFirmware.BRAM_CTRL_CACHE_ADDR_slice/SLAVE", f"hedgehog/cache_mem/BRAM_PORTA")
+            create_module(f, f"hedgehog/axi_bram_cache_ctrl_addr_slice", "acadia_axi_bram_ctrl_addr_slice")
+            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_cache/BRAM_PORTA", f"hedgehog/axi_bram_cache_ctrl_addr_slice/BRAM_CTRL")
+            connect_bd_intf_net(f, f"hedgehog/axi_bram_cache_ctrl_addr_slice/SLAVE", f"hedgehog/cache_mem/BRAM_PORTA")
 
             # Connect the cache BRAM controller to the smartconnect and assign it address space
             connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_cache/S_AXI", f"hedgehog/config_smartconnect/M04_AXI")
-            cache_addr_range = StandardFirmware.CACHE_SIZE_BITS // 8
-            set_property(f, name=f"hedgehog/axi_StandardFirmware.BRAM_CTRL_CACHE_ADDR_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": round(np.log2(cache_addr_range))})
-            assign_bd_address(f, addr_seg="hedgehog/axi_bram_ctrl_cache/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=cache_addr_range)
+            set_property(f, name=f"hedgehog/axi_bram_cache_ctrl_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8, log=True)})
+            assign_bd_address(f, addr_seg="hedgehog/axi_bram_ctrl_cache/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8))
 
-             # ------------------- Sequencer Instruction and Stack Memory -------------------- #
+             # ------------------- Sequencer Instruction Memory -------------------- #
 
             # Create instruction memory for the sequencer and add it to the memory decoder
             create_ip(f, name="hedgehog/instruction_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
@@ -678,7 +655,36 @@ class StandardFirmware(Firmware):
             # and the next 4 to the MSBs of the accumulator values AND'ed with the last signal
             create_concatenator(f, "hedgehog/xlconcat_sequencer_flags", [1]*4 + [1]*4 + [32-8])
             connect_bd_net(f, f"hedgehog/sequencer_flags", f"hedgehog/xlconcat_sequencer_flags/dout")
+            
+            # ------------------- PS GPIO and Interrupt Connections -------------------- #
+            
+            # Create a concatenator for the PS inputs
+            create_concatenator(f, "hedgehog/xlconcat_ps_gpio_in", [32, 32, StandardFirmware.NUM_PS_GPIO % 32])
+            connect_bd_net(f, "hedgehog/xlconcat_ps_gpio_in/dout", "hedgehog/PS_GPIO_IN")
+            
+            for idx, gpio_port in enumerate([3,4,5]):
+                connect_bd_net(f, f"hedgehog/xlconcat_ps_gpio_in/In{idx}", f"hedgehog/ps_gpio{gpio_port}_dataport/gpio_in")
+                
+                # Slice the PS outputs
+                create_slice(f, name=f"hedgehog/xlslice_ps_gpio{gpio_port}_out", 
+                                 input_width=StandardFirmware.NUM_PS_GPIO, 
+                                 input_from=(StandardFirmware.NUM_PS_GPIO if gpio_port == 5 else (idx+1)*32-1),
+                                 input_to=idx*32)
+                connect_bd_net(f, f"hedgehog/xlslice_ps_gpio{gpio_port}_out/Din", f"hedgehog/PS_GPIO_OUT")
+                connect_bd_net(f, f"hedgehog/xlslice_ps_gpio{gpio_port}_out/Dout", f"hedgehog/ps_gpio{gpio_port}_dataport/gpio_out")
+                
+            # IRQ signals
+            for i in range(StandardFirmware.NUM_PS_IRQ):
+                connect_bd_net(f, f"hedgehog/ps_irq_dataport/irq{i}", f"hedgehog/PS_IRQ{i}")
+                
+            # ------------------- PS GDMA Connections -------------------- #
 
+            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/cack", f"hedgehog/ps_gdma_cack")
+            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/tvld", f"hedgehog/ps_gdma_tvld")
+            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/tack", f"hedgehog/ps_gdma_tack")
+            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/cvld", f"hedgehog/ps_gdma_cvld")
+            connect_bd_net(f, f"hedgehog/ps_irq_dataport/gdma_irq", f"hedgehog/ps_gdma_irq")
+            
             # ------------------- ADC AXIS Switch -------------------- #
 
             # Create an AXI switch for multiplexing the ADC outputs to the AXI DMAs
@@ -693,7 +699,7 @@ class StandardFirmware(Firmware):
                                         "CONFIG.TDEST_WIDTH.VALUE_SRC USER "
                                         "CONFIG.TUSER_WIDTH.VALUE_SRC USER")
             set_property(f, name="hedgehog/axis_switch_adc", 
-                             properties="NUM_SI {16} "
+                             properties="CONFIG.NUM_SI {16} "
                                         "CONFIG.NUM_MI {8} "
                                         "CONFIG.ROUTING_MODE {1} "
                                         "CONFIG.TDATA_NUM_BYTES {16} "
@@ -705,6 +711,10 @@ class StandardFirmware(Firmware):
 
             connect_bd_net(f, f"hedgehog/axis_switch_adc/aclk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/axis_switch_adc/aresetn", f"hedgehog/seq_peripheral_aresetn")
+            
+            connect_bd_intf_net(f, f"hedgehog/axis_switch_adc/S_AXI_CTRL", f"hedgehog/config_smartconnect/M05_AXI")
+            connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aclk", f"hedgehog/clk_wiz/clk_300")
+            connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aresetn", f"hedgehog/seq_peripheral_aresetn")
 
             # Create concatenator and constant for the switch inputs
             create_concatenator(f, "hedgehog/xlconcat_axis_switch_adc_data", [128]*16)
@@ -795,14 +805,14 @@ class StandardFirmware(Firmware):
 
             # Exclude the PS DDR High segments and QSPI
             for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
-                exclude_bd_address(f, f"ps/SAXIGP{idx}/{port}_DDR_HIGH", "hedgehog/cfg_axi_dm/Data_MM2S")
-                exclude_bd_address(f, f"ps/SAXIGP{idx}/{port}_QSPI", "hedgehog/cfg_axi_dm/Data_MM2S")
+                exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_DDR_HIGH", "hedgehog/cfg_axi_dm/Data_MM2S")
+                exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_QSPI", "hedgehog/cfg_axi_dm/Data_MM2S")
 
-            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=mem_decoder_addr_range, addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0")
-            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=dac_mem_decoder_addr_range, addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0")
+            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(word_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0")
+            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0")
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.RFDC_ADDR, range="256K", addr_seg=f"hedgehog/rfdc/s_axi/Reg")
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.CLK_WIZ_ADDR, range="256K", addr_seg=f"hedgehog/clk_wiz/s_axi_lite/Reg")
-            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=cache_addr_range, addr_seg=f"hedgehog/axi_bram_ctrl_cache/S_AXI/Mem0")
+            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8), addr_seg=f"hedgehog/axi_bram_ctrl_cache/S_AXI/Mem0")
 
             # ------------------- ADC DMAs -------------------- #
 
@@ -817,12 +827,12 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/adc_dma{d}_seq_dataport/seq_end", f"hedgehog/adc_dma{d}/seq_end")
                 connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/adc_dma{d}_sequence_done", f"hedgehog/adc_dma{d}/sequence_done")
                 connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/adc_dma{d}_trig", f"hedgehog/adc_dma{d}/trig")
-                connect_bd_net(f, f"hedgehog/dma_continue_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/continue")
+                connect_bd_net(f, f"hedgehog/dma_continue_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/seq_continue")
 
                 # Create and configure ADC Descriptor BRAMs 
                 create_ip(f, name=f"hedgehog/adc_dma{d}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/adc_dma{d}_descriptor_mem", 
-                                 properties="CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
                                             f"CONFIG.Use_Byte_Write_Enable {{false}} "
                                             f"CONFIG.Byte_Size {{9}} "
@@ -874,18 +884,18 @@ class StandardFirmware(Firmware):
                 set_property(f, name=f"hedgehog/adc_dm{d}", 
                                  properties="CONFIG.c_m_axi_s2mm_data_width.VALUE_SRC USER CONFIG.c_s_axis_s2mm_tdata_width.VALUE_SRC USER")
                 set_property(f, name=f"hedgehog/adc_dm{d}", 
-                                 properties="c_include_mm2s {Omit} "
-                        "CONFIG.c_include_mm2s_stsfifo {false} "
-                        "CONFIG.c_m_axi_s2mm_data_width {128} "
-                        "CONFIG.c_s_axis_s2mm_tdata_width {128} "
-                        "CONFIG.c_s2mm_btt_used {23} "
-                        "CONFIG.c_s2mm_support_indet_btt {true} "
-                        "CONFIG.c_mm2s_include_sf {false} "
-                        "CONFIG.c_s2mm_include_sf {false} "
-                        "CONFIG.c_enable_cache_user {true} "
-                        "CONFIG.c_enable_mm2s {0} "
-                        "CONFIG.c_enable_s2mm_adv_sig {0} "
-                        f"CONFIG.c_addr_width {{40}}")
+                                 properties="CONFIG.c_include_mm2s {Omit} "
+                                            "CONFIG.c_include_mm2s_stsfifo {false} "
+                                            "CONFIG.c_m_axi_s2mm_data_width {128} "
+                                            "CONFIG.c_s_axis_s2mm_tdata_width {128} "
+                                            "CONFIG.c_s2mm_btt_used {23} "
+                                            "CONFIG.c_s2mm_support_indet_btt {true} "
+                                            "CONFIG.c_mm2s_include_sf {false} "
+                                            "CONFIG.c_s2mm_include_sf {false} "
+                                            "CONFIG.c_enable_cache_user {true} "
+                                            "CONFIG.c_enable_mm2s {0} "
+                                            "CONFIG.c_enable_s2mm_adv_sig {0} "
+                                            f"CONFIG.c_addr_width {40}")
 
                 # Connect clocks and resets
                 connect_bd_net(f, f"hedgehog/adc_dm{d}/m_axi_s2mm_aclk", "hedgehog/clk_wiz/clk_300")
@@ -935,7 +945,7 @@ class StandardFirmware(Firmware):
             for d in range(4):
 
                 # ------------------- The CMACC modules -------------------- #
-                create_module(f, f"hedgehog/cmacc{d}", "acadia_complex_macc")
+                create_module(f, f"hedgehog/cmacc{d}", "acadia_fast_complex_macc")
                 connect_bd_net(f, f"hedgehog/cmacc{d}/clk", f"hedgehog/clk_wiz/clk_300")
 
                 # Connect the CMACC signal input to the ADC switch through a slice
@@ -946,7 +956,7 @@ class StandardFirmware(Firmware):
                 # ------------------- Kernel BRAMs -------------------- #        
                 create_ip(f, name=f"hedgehog/cmacc{d}_kernel_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/cmacc{d}_kernel_mem", 
-                                 properties="CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
                                             f"CONFIG.Use_Byte_Write_Enable {{false}} "
                                             f"CONFIG.Byte_Size {{9}} "
@@ -997,7 +1007,7 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_re_msb/Din", f"hedgehog/xlslice_cmacc{d}_accumulator_re/Dout")
 
                 create_ip(f, name=f"hedgehog/cmacc{d}_accumulator_re_msb_and", vlnv="xilinx.com:ip:util_vector_logic:2.0")
-                set_property(f, name=f"hedgehog/cmacc{d}_accumulator_re_msb_and", properties="CONFIG.C_SIZE {{1}} CONFIG.C_OPERATION {{and}} CONFIG.LOGO_FILE {{data/sym_andgate.png}}")
+                set_property(f, name=f"hedgehog/cmacc{d}_accumulator_re_msb_and", properties=f"CONFIG.C_SIZE {{1}} CONFIG.C_OPERATION {{and}} CONFIG.LOGO_FILE {{data/sym_andgate.png}}")
                 connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_re_msb/Dout", f"hedgehog/cmacc{d}_accumulator_re_msb_and/Op1")
                 connect_bd_net(f, f"hedgehog/cmacc{d}/accumulator_tlast", f"hedgehog/cmacc{d}_accumulator_re_msb_and/Op2")
                 connect_bd_net(f, f"hedgehog/xlconcat_sequencer_flags/In{d+4}", f"hedgehog/cmacc{d}_accumulator_re_msb_and/Res")
@@ -1012,7 +1022,7 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/cmacc_dma{d}_seq_dataport/seq_end", f"hedgehog/cmacc_dma{d}/seq_end")
                 connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/cmacc_dma{d}_sequence_done", f"hedgehog/cmacc_dma{d}/sequence_done")
                 connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/cmacc_dma{d}_trig", f"hedgehog/cmacc_dma{d}/trig")
-                connect_bd_net(f, f"hedgehog/dma_continue_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/continue")
+                connect_bd_net(f, f"hedgehog/dma_continue_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/seq_continue")
 
                 # Connect the CMACC DMA to the CMACC DMA port
                 connect_bd_intf_net(f, f"hedgehog/cmacc_dma{d}/addr", f"hedgehog/cmacc{d}/kernel_mem_addr")
@@ -1020,7 +1030,7 @@ class StandardFirmware(Firmware):
                 # Create and configure CMACC Descriptor BRAMs 
                 create_ip(f, name=f"hedgehog/cmacc_dma{d}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/cmacc_dma{d}_descriptor_mem", 
-                                 properties="CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
                                             f"CONFIG.Use_Byte_Write_Enable {{false}} "
                                             f"CONFIG.Byte_Size {{9}} "
@@ -1076,7 +1086,7 @@ class StandardFirmware(Firmware):
                                             "CONFIG.c_enable_cache_user {true} "
                                             "CONFIG.c_enable_mm2s {0} "
                                             "CONFIG.c_enable_s2mm_adv_sig {0} "
-                                            "CONFIG.c_addr_width {{40}}")
+                                            "CONFIG.c_addr_width {40}")
 
                 # Connect clocks and resets
                 connect_bd_net(f, f"hedgehog/cmacc_dm{d}/m_axi_s2mm_aclk", "hedgehog/clk_wiz/clk_300")
@@ -1123,13 +1133,13 @@ class StandardFirmware(Firmware):
 
             # ------------------- DAC channels -------------------- #
 
-            for channel in range(16):
+            for channel in range(StandardFirmware.NUM_DAC):
                 tile = channel // 4
                 block = channel % 4
                 # Create and configure DAC UltraRAM
-                create_ip(f, name=f"hedgehog/dac{channel}_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
-                set_property(f, name=f"hedgehog/dac{channel}_mem", 
-                                 properties="CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                create_ip(f, name=f"hedgehog/dac_dma{channel}_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
+                set_property(f, name=f"hedgehog/dac_dma{channel}_mem", 
+                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
                                             f"CONFIG.PRIM_type_to_Implement {{URAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
                                             f"CONFIG.Use_RSTB_Pin {{true}} "
@@ -1157,12 +1167,12 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.READ_LATENCY_B {{1}}")
 
                 # Connect the DAC BRAM to the memory decoder
-                connect_bd_intf_net(f, f"hedgehog/dac{channel}_mem/BRAM_PORTA", f"hedgehog/dac_mem_decoder/dac{channel}_mem")
+                connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}_mem/BRAM_PORTA", f"hedgehog/dac_mem_decoder/dac_dma{channel}_mem")
 
                 # Create a DMA for the DAC and connect it to the read port of the BRAM
                 create_module(f, f"hedgehog/dac_dma{channel}", "acadia_dma")
                 connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}/mem_control", f"hedgehog/dac_dma{channel}_mem/BRAM_PORTB")
-                connect_bd_net(f, f"hedgehog/dac_dma{channel}_dma/clk", f"hedgehog/clk_wiz/clk_300")
+                connect_bd_net(f, f"hedgehog/dac_dma{channel}/clk", f"hedgehog/clk_wiz/clk_300")
 
                 # Connect the DAC memory output to the RFDAC interface
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}_mem/doutb", f"hedgehog/rfdc/s{tile}{block}_axis_tdata")
@@ -1172,12 +1182,12 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}_seq_dataport/seq_end", f"hedgehog/dac_dma{channel}/seq_end")
                 connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/dac_dma{channel}_sequence_done", f"hedgehog/dac_dma{channel}/sequence_done")
                 connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/dac_dma{channel}_trig", f"hedgehog/dac_dma{channel}/trig")
-                connect_bd_net(f, f"hedgehog/dma_continue_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/continue")
+                connect_bd_net(f, f"hedgehog/dma_continue_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/seq_continue")
 
                 # Create and configure DAC Descriptor BRAMs and connect them to the DMA
-                create_ip(f, name=f"hedgehog/dac{channel}_dma_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
-                set_property(f, name=f"hedgehog/dac{channel}_dma_descriptor_mem", 
-                                 properties="CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                create_ip(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
+                set_property(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", 
+                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
                                             f"CONFIG.Use_Byte_Write_Enable {{false}} "
                                             f"CONFIG.Byte_Size {{9}} "
@@ -1198,8 +1208,8 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Port_B_Enable_Rate {{100}} "
                                             f"CONFIG.use_bram_block {{Stand_Alone}} "
                                             f"CONFIG.EN_SAFETY_CKT {{true}}")
-                connect_bd_intf_net(f, f"hedgehog/dac{channel}_dma_descriptor_mem/BRAM_PORTB", f"hedgehog/dac{channel}_dma/DESCRIPTOR_MEM")
+                connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}_descriptor_mem/BRAM_PORTB", f"hedgehog/dac_dma{channel}/DESCRIPTOR_MEM")
 
                 # Connect the DAC Descriptor BRAMs to the memory controller through a pipeline
-                connect_bd_intf_net(f, f"hedgehog/mem_decoder/dac{channel}_dma_descriptor_mem", f"hedgehog/dac{channel}_dma_descriptor_mem/BRAM_PORTA")
+                connect_bd_intf_net(f, f"hedgehog/mem_decoder/dac_dma{channel}_descriptor_mem", f"hedgehog/dac_dma{channel}_descriptor_mem/BRAM_PORTA")
                 

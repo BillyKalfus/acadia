@@ -27,8 +27,8 @@ class Operation(metaclass=Operable):
     :param op: An object representing the operation being performed on the provided arguments. This can be any object, since it is up to the eventual receiver of these objects to interpret this field. For example, the eventual receiver may want this to be a callable object that it can directly call on the arguments, or it may want it to be a string that it can interpret, etc.
     :type op: object
     """
-    def __init__(self, func_name, *args, **kwargs):          
-        self._func = func
+    def __init__(self, op, *args, **kwargs):          
+        self._op = op
         self._args = args
         self._kwargs = kwargs
         
@@ -169,7 +169,7 @@ class Processor:
     :type instruction_limit: int
     """
     def __init__(self, instruction_limit=None):
-        self.Instruction = ManagedResource(instance_limit=instruction_limit)
+        self.Registers = ManagedResource(instance_limit=instruction_limit)
         
         # For every instruction, bind a new method to the instance with the name of the instruction
         for instruction in instruction_set:

@@ -167,7 +167,7 @@ set files [list \
  [file normalize "${origin_dir}/acadia_sequencer.vhd" ]\
  [file normalize "${origin_dir}/acadia_nco_port_regs.vhd" ]\
  [file normalize "${origin_dir}/acadia_axi_bram_ctrl_addr_slice.vhd" ]\
- [file normalize "${origin_dir}/acadia_complex_macc.vhd" ]\
+ [file normalize "${origin_dir}/acadia_fast_complex_macc.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma.vhd" ]\
  [file normalize "${origin_dir}/acadia_bram_write_pipeline.vhd" ]\
 ]
@@ -218,7 +218,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "acadia_complex_macc.vhd"
+set file "acadia_fast_complex_macc.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -392,7 +392,7 @@ set obj [get_filesets utils_1]
 set_property -name "name" -value "utils_1" -objects $obj
 
 # Proc to create BD acadia_bd
-proc cr_bd_acadia_bd { parentCell } {
+proc cr_bd_acadia_bd { parentCell hedgehogTclDir } {
   # CHANGE DESIGN NAME HERE
   set design_name acadia_bd
 
@@ -663,7 +663,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_bd_pin -dir I debug_clk
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_cack
   create_bd_pin -dir O -from 31 -to 0 ps_gdma_cvld
-  create_bd_pin -dir I -from 7 -to 0 ps_gdma_int
+  create_bd_pin -dir I -from 7 -to 0 ps_gdma_irq
   create_bd_pin -dir O -from 31 -to 0 ps_gdma_tack
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_tvld
   create_bd_pin -dir O seq_clk
@@ -1696,7 +1696,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net interconnect_aresetn_1 [get_bd_pins hedgehog/seq_interconnect_aresetn] [get_bd_pins seq_reset/interconnect_aresetn]
   connect_bd_net -net ps_emio_gpio_o [get_bd_pins hedgehog/PS_GPIO_OUT] [get_bd_pins ps/emio_gpio_o] [get_bd_pins seq_rst_slice/Din] [get_bd_pins seq_run_slice/Din]
   connect_bd_net -net ps_gdma_cack_1 [get_bd_pins hedgehog/ps_gdma_cack] [get_bd_pins ps/gdma_perif_cack]
-  connect_bd_net -net ps_gdma_int_1 [get_bd_pins hedgehog/ps_gdma_int] [get_bd_pins ps/ps_pl_irq_gdma_chan]
+  connect_bd_net -net ps_gdma_irq_1 [get_bd_pins hedgehog/ps_gdma_irq] [get_bd_pins ps/ps_pl_irq_gdma_chan]
   connect_bd_net -net ps_gdma_tvld_1 [get_bd_pins hedgehog/ps_gdma_tvld] [get_bd_pins ps/gdma_perif_tvld]
   connect_bd_net -net ps_pl_clk0 [get_bd_pins hedgehog/PS_clk_250] [get_bd_pins ps/pl_clk0]
   connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins ps/pl_resetn0] [get_bd_pins seq_reset/ext_reset_in] [get_bd_pins xpm_cdc_DDR4_C0_MIG/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_MIG/src_rst]
@@ -1710,6 +1710,9 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net xpm_cdc_seq_run_dest_rst_out [get_bd_pins sequencer/run] [get_bd_pins xpm_cdc_seq_run/dest_rst_out]
 
   # Create address segments
+  
+  # Create the HEDGEHOG logic before we make the wrapper
+  source [file normalize "${hedgehogTclDir}/hedgehog.tcl" ]
 
   # Perform GUI Layout
   regenerate_bd_layout -layout_string {
@@ -1830,7 +1833,7 @@ preplace netloc hedgehog_ps_gdma_cvld 1 1 6 380 1620 NJ 1620 NJ 1620 NJ 1620 NJ 
 preplace netloc hedgehog_ps_gdma_tack 1 1 6 430 1580 NJ 1580 NJ 1580 NJ 1580 NJ 1580 3320
 preplace netloc ps_gdma_tvld_1 1 2 4 1150 1250 1680J 1150 NJ 1150 NJ
 preplace netloc ps_gdma_cack_1 1 2 4 1180 990 NJ 990 NJ 990 2460J
-preplace netloc ps_gdma_int_1 1 2 4 1160 1110 NJ 1110 NJ 1110 2450J
+preplace netloc ps_gdma_irq_1 1 2 4 1160 1110 NJ 1110 NJ 1110 2450J
 preplace netloc xlconcat_ps_gdma_clk_dout 1 1 1 N 1070
 preplace netloc seq_run_slice_Dout 1 3 1 1630 470n
 preplace netloc seq_rst_slice_Dout 1 3 1 1650 590n
@@ -1924,7 +1927,7 @@ pagesize -pg 1 -db -bbox -sgen -230 0 4320 1670
   close_bd_design $design_name 
 }
 # End of cr_bd_acadia_bd()
-cr_bd_acadia_bd ""
+cr_bd_acadia_bd "" $project_dir
 set_property EXCLUDE_DEBUG_LOGIC "0" [get_files acadia_bd.bd ] 
 set_property GENERATE_SYNTH_CHECKPOINT "1" [get_files acadia_bd.bd ] 
 set_property IS_ENABLED "1" [get_files acadia_bd.bd ] 
@@ -1941,26 +1944,26 @@ set_property USED_IN_SIMULATION "1" [get_files acadia_bd.bd ]
 set_property USED_IN_SYNTHESIS "1" [get_files acadia_bd.bd ] 
 
 #call make_wrapper to create wrapper files
-if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
-  import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
-} else {
-  set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
-  add_files -norecurse -fileset sources_1 $wrapper_path
-}
+# if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
+#   import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
+# } else {
+#   set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
+#   add_files -norecurse -fileset sources_1 $wrapper_path
+# }
 
-if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
-  import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
-} else {
-  set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
-  add_files -norecurse -fileset sources_1 $wrapper_path
-}
+# if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
+#   import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
+# } else {
+#   set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
+#   add_files -norecurse -fileset sources_1 $wrapper_path
+# }
 
-if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
-  import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
-} else {
-  set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
-  add_files -norecurse -fileset sources_1 $wrapper_path
-}
+# if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
+#   import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
+# } else {
+set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
+add_files -norecurse -fileset sources_1 $wrapper_path
+# }
 
 
 # Create 'synth_1' run (if not found)
