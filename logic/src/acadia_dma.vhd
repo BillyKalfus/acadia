@@ -86,6 +86,7 @@ architecture rtl of acadia_dma is
 
     -- Run state
     signal running                              : std_logic;
+    signal running_d                            : std_logic;
 
     -- Descriptor fields
     signal desc_lm1                             : std_logic_vector(15 downto 0);
@@ -106,14 +107,12 @@ architecture rtl of acadia_dma is
     
     -- Signals indicating that settings loading is in progress
     signal seq_load                             : std_logic;
-    signal desc_load                            : std_logic;
     
     -- Combinational progress flags
     signal point_first_dec_cycle                : std_logic;
     signal point_last_dec_cycle                 : std_logic;
     signal descriptor_first_point               : std_logic;
     signal descriptor_last_point                : std_logic;
-    signal sequence_last_descriptor             : std_logic;
     signal sequence_done_int                    : std_logic;
     signal sequence_last_dec_cycle              : std_logic;
     
@@ -126,17 +125,18 @@ begin
     -- Note that these signals are defined combinationally and depend
     -- on the instantaneous value of a memory output,
     -- so for reliable timing they should only be evaluated synchronously
-    point_first_dec_cycle    <= '1' when to_integer(unsigned(dec_cycle)) = 0 and desc_load = '0'        else '0';
-    point_last_dec_cycle     <= '1' when dec_cycle = desc_dec                                           else '0';
-    descriptor_first_point   <= '1' when to_integer(unsigned(descriptor_point)) = 0 and desc_load = '0' else '0';
-    descriptor_last_point    <= '1' when descriptor_point = desc_lm1                                    else '0';
-    sequence_last_descriptor <= '1' when descriptor_addr = seq_end_int                                  else '0';
+    point_first_dec_cycle  <= '1' when to_integer(unsigned(dec_cycle)) = 0 and running_d = '1'        else '0';
+    point_last_dec_cycle   <= '1' when dec_cycle = desc_dec                                           else '0';
+    descriptor_first_point <= '1' when to_integer(unsigned(descriptor_point)) = 0 and running_d = '1' else '0';
+    descriptor_last_point  <= '1' when descriptor_point = desc_lm1                                    else '0';
     
-    before_descriptor_first_cycle <= desc_load or (descriptor_last_point and point_last_dec_cycle);
+    seq_load <= (not running) or (sequence_last_descriptor_in_progress and seq_continue_int and descriptor_first_point);
+    before_descriptor_first_cycle <= (not running_d) or (descriptor_last_point and point_last_dec_cycle);
     sequence_last_dec_cycle  <= sequence_last_descriptor_in_progress and descriptor_last_point and point_last_dec_cycle;
 
     running_proc: process(clk) begin
         if rising_edge(clk) then
+            running_d <= running;
             if(rst = '1' or (sequence_last_dec_cycle = '1' and seq_continue_int = '0')) then
                 running <= '0';
             elsif(trig = '1') then
@@ -144,19 +144,6 @@ begin
             end if;
         end if;
     end process running_proc;
-
-    -- Manage when sequence settings are loaded
-    -- This will also automatically clear sequence_done_int if we are continuing
-    -- since sequence_done_int is reset when seq_load is set
-    seq_load_proc: process(clk) begin
-        if rising_edge(clk) then
-            if(running = '0') then
-                seq_load <= '1';
-            else
-                seq_load <= seq_continue_int and sequence_last_dec_cycle;
-            end if;
-        end if;
-    end process seq_load_proc;
     
     -- Load sequence settings from external input
     sequence_settings_load_proc: process(clk) begin
@@ -164,9 +151,6 @@ begin
             if(seq_load = '1') then
                 seq_end_int      <= seq_end;
                 seq_continue_int <= seq_continue;
-                desc_load        <= '1';
-            else
-                desc_load <= '0';
             end if;    
         end if;
     end process sequence_settings_load_proc;
@@ -188,7 +172,7 @@ begin
     -- Count cycles for decimation
     dec_count_proc: process(clk) begin
         if rising_edge(clk) then
-            if((point_last_dec_cycle or seq_load or desc_load) = '1') then
+            if(point_last_dec_cycle = '1' or running = '0' or running_d = '0') then
                 dec_cycle <= (others => '0');
             else
                 dec_cycle <= std_logic_vector(unsigned(dec_cycle) + 1);
@@ -199,7 +183,7 @@ begin
     -- Progress through the descriptor one point at a time
     descriptor_point_proc: process(clk) begin
         if rising_edge(clk) then
-            if(desc_load = '1') then
+            if(running = '0') then
                 descriptor_point <= (others => '0');
             elsif(point_last_dec_cycle = '1') then
                 if(descriptor_last_point = '1') then
@@ -213,7 +197,7 @@ begin
     
     -- Since new descriptor fields are loaded at the last cycle of the current descriptor
     -- and since descriptors must be at least 2 cycles long,
-    -- we can load in the next address to the descriptor memory at the first cycle of the .
+    -- we can load in the next address to the descriptor memory at the first cycle of the descriptor.
     descriptor_addr_proc: process(clk) begin
         if rising_edge(clk) then
             if(seq_load = '1') then
@@ -227,14 +211,14 @@ begin
     -- Detect when we're in the last descriptor so that we can properly signal when we're done
     -- The following elsif condition will be satisfied when in the last cycle of 
     -- the second-to-last descriptor because the descriptor address will be loaded one cycle early.
-    -- In case the sequence is one descriptor long, also use desc_load.
+    -- In case the sequence is one descriptor long, before_descriptor_first_cycle will be set (because running_d = 0).
     -- Therefore sequence_last_descriptor_in_progress will go high
     -- as the first cycle of the last descriptor starts
     sequence_last_descriptor_in_progress_proc: process(clk) begin
         if rising_edge(clk) then
-            if(seq_load = '1') then
+            if(running = '0' or running_d = '0' or sequence_last_dec_cycle = '1') then
                 sequence_last_descriptor_in_progress <= '0';
-            elsif((sequence_last_descriptor and before_descriptor_first_cycle) = '1') then
+            elsif(descriptor_addr = seq_end_int and before_descriptor_first_cycle = '1') then
                 sequence_last_descriptor_in_progress <= '1';
             end if;
         end if;
@@ -246,7 +230,7 @@ begin
     -- (which depends on sequence_last_descriptor_in_progress)
     sequence_done_int_proc: process(clk) begin
         if rising_edge(clk) then
-            if(seq_load = '1') then
+            if(running = '0') then
                 sequence_done_int <= '0';
             elsif(sequence_last_dec_cycle = '1') then
                 sequence_done_int <= '1';
