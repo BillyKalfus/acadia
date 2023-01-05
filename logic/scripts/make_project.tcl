@@ -345,7 +345,7 @@ set_property -name "nl.sdf_anno" -value "1" -objects $obj
 set_property -name "nl.write_all_overrides" -value "0" -objects $obj
 set_property -name "source_set" -value "sources_1" -objects $obj
 set_property -name "systemc_include_dirs" -value "" -objects $obj
-set_property -name "top" -value "bd_tb" -objects $obj
+set_property -name "top" -value "acadia_tb" -objects $obj
 set_property -name "top_auto_set" -value "0" -objects $obj
 set_property -name "top_lib" -value "xil_defaultlib" -objects $obj
 set_property -name "transport_int_delay" -value "0" -objects $obj
@@ -2677,3 +2677,6 @@ move_dashboard_gadget -name {drc_1} -row 2 -col 0
 move_dashboard_gadget -name {timing_1} -row 0 -col 1
 move_dashboard_gadget -name {utilization_2} -row 1 -col 1
 move_dashboard_gadget -name {methodology_1} -row 2 -col 1
+
+set_property source_mgmt_mode All [current_project]
+update_compile_order -fileset sources_1

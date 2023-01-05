@@ -5,10 +5,12 @@ William Kalfus, Yale University
 December 2022
 """
 from types import MethodType
+from abc import ABC
+import uuid
 from operator import and_
 
 class Operable(type):
-    OPERATORS = ["eq", "ne", "neg", "abs", "invert", "add", "radd", "sub", "rsub", "mul", "rmul", "floordiv", "rfloordiv", "truediv", "rtruediv", "mod", "rmod", "pow", "rpow", "lshift", "rlshift", "rshift", "rrshift", "and", "rand", "or", "ror", "xor", "rxor", "bool", "len", "contains", "iter", "getitem", "setitem", "enter", "exit", "copy", "deepcopy"]
+    OPERATORS = ["eq", "ne", "neg", "abs", "invert", "add", "radd", "sub", "rsub", "mul", "rmul", "floordiv", "rfloordiv", "truediv", "rtruediv", "mod", "rmod", "pow", "rpow", "lshift", "rlshift", "rshift", "rrshift", "and", "rand", "or", "ror", "xor", "rxor", "bool", "len", "contains", "iter", "getitem", "setitem", "getattr", "setattr", "call", "enter", "exit", "copy", "deepcopy"]
     
     """
     A metaclass used to capture operators acting on instances of derived classes and return a symbolic representation of the operator call.
@@ -38,19 +40,33 @@ class Operation(metaclass=Operable):
 class Symbol(metaclass=Operable):
     """
     A symbolic variable with a value not necessarily known to the user but guaranteed to be available at the time of translation. A canonical example of an :class:`Operable` class, it allows objects or values to be distributed throughout a program that depend on the future decisions of higher-level entities (e.g., a program translator deciding memory locations or array lengths). This requires operator evaluation to be deferred to a future time (and potentially in different ways, depending on the involved objects). In such a situation, this object acts as a placeholder for the desired object.
+    All :class:`Symbol` objects are assigned an ID at instantiation which may optionally be provided by the user. This ID primarily serves to track the instance, refer to it in human-readable representations, and allow instances to be used as keys to `dict` objects. The value of this should be globally unique.
     :param value: The value of the :class:`Symbol`, if known at instantiation. If not provided, may be assigned later.
     :type value: object, optional
+    :param id: A unique identifier 
     """
-    def __init__(self, value=None):
+    def __init__(self, value=None, id=None):
         self._value = value
         self._assigned = value != None
                 
     def assign(self, v, force=False):
+        """
+        Assigns a value to the :class:`Symbol`. By default, assignment is only supposed to occur once, so an error will be thrown if this is called on an already-assigned :class:`Symbol`. This can be overridden by setting `force=True`.
+        :param v: Value to assign
+        :param force: IF `True`, allows reassignment of already-assigned :class:`Symbol` objects
+        :type force: bool
+        """
         if Symbol.assigned(self) and not force:
             raise ValueError("Attempted reassignment of Symbol. If you're sure that this is the correct operation, set argument force=True.")
             
         self._assigned = True
         self._value = v
+        
+    def __str__(self):
+        return f"Symbol(assigned={self._assigned}, value={self._value}, id={id(self)})"
+    
+    def __repr__(self):
+        return str(self)
     
     @property
     def value(self):
@@ -83,7 +99,7 @@ class ManagedResource(Operable):
         
         def cls_new(cls, allocate=True, resource_id=None, *inst_args, **inst_kwargs):
             """
-            Create a new instance representing a hardware resource. If a resource limit has been provided and reached, existing allocations will be checked to see if they were released, and if so, may be returned. Created resources can also defer allocation until the future, allowing strategic control of the allocation value.
+            Create a new instance representing a hardware resource. If a resource limit has been provided and reached, existing allocations will be checked to see if they were released, and if so, may be returned. Created resources can also defer allocation until the future, allowing strategic control of the allocation value. 
             :param allocate: If `False`, the returned instance will not be added to the list of managed resources, the :field:`resource_id` field will not be assigned, and the class :field:`allocation_index` field will not be updated.
             :type allocate: bool
             :param resource_id: The ID of resource, which may be any type and whose interpretation is left to the owning class. If not provided, a new :class:`Symbol` will be instantiated.
@@ -150,39 +166,3 @@ class ManagedResource(Operable):
         cls_attrs = {"instances": [], "allocation_index": 0, "__new__": cls_new, "allocate": allocate, "is_allocated": is_allocated, "is_released": is_released, "release": release, **dct}
         return super().__new__(cls, name, bases, cls_attrs)
         
-class Processor:
-    instruction_set = {}
-    
-    @classmethod
-    def instruction(cls, func):
-        """
-        A decorator for specifying an instruction belonging to the instruction set of the :class:`Processor`. The provided method is understood to "translate" the associated instruction call and return machine code for the object that will be programmed with these instructions, the exact format of which is left up to the specific derived classes. 
-        Calling an instruction method on the :class:`Processor` class itself is understood to express an intent to translate an instruction with provided arguments by calling the underlying function. However, calling the method on an instance expresses an intent to command the :class:`Processor` to execute the represented instruction at that point in the program, meaning that the underlying function should not be called but should simply be added as an entry in the instance's instruction list. This decorator implements this behavior by returning a `classmethod` which will then be automatically bound to the class. Then, the default initializer of this class will iterate through the class' instruction set and bind a new method with the same name to the instance which when called, rather than calling the class method, will make a request from the object's . 
-        """
-        cls.instruction_set.append(func)
-        return classmethod(func)
-    
-    """
-    A base class for objects that represent entities capable of being commanded by a set of native "instructions". Native instructions are defined in derived classes by decorating methods that produce their machine code with :meth:`Processor.instruction`.
-    Because calling a method decorated with :meth:`instruction` on an instance expresses an intent to command the :class:`Processor` to execute the represented instruction, an entry in the instance's instruction list should be added. This is handled by having trhe initializer iterate through the class' instruction set and bind a new method with the same name to the instance which when called, rather than calling the class method will make a request from the object's :field:`_instructions` ManagedResource. 
-    :param instruction_limit: Maximum number of instructions allowed to be called on the :class:`Processor`.
-    :type instruction_limit: int
-    """
-    def __init__(self, instruction_limit=None):
-        self.Registers = ManagedResource(instance_limit=instruction_limit)
-        
-        # For every instruction, bind a new method to the instance with the name of the instruction
-        for instruction in instruction_set:
-            def append_instruction(self, *args, **kwargs):
-                self.instructions.append({"instruction": instruction, "args": args, **kwargs})
-                
-            setattr(self, instruction.__name__, MethodType(append_instruction, self))
-            
-    def __new__(cls, *args, **kwargs):
-        """
-        Prevents a :class:`Processor` from being directly instantiated. This is typically handled with the `abc` module, but because :class:`Processor` doesn't actually implement any abstract methods, ABCMeta will not prevent :class:`Processor` from being directly instantiated. Therefore, to implement this, we'll just override :meth:`__new__` and fail to return a new object if its class is :class:`Processor`.
-        """
-        if cls is Processor:
-            raise TypeError("Processor cannot be directly instantiated; one must define a subclass.")
-        
-        return super().__new__(cls, *args, **kwargs)

@@ -247,7 +247,7 @@ class StandardFirmware(Firmware):
                                    "width": StandardFirmware.NUM_PS_GDMA,
                                    "pipeline": 2}]
         
-        ps_irq_dataports = hdl.BusDataport(name="ps_irq", ports=ps_irq_dataports)
+        ps_irq = hdl.BusDataport(name="ps_irq", ports=ps_irq_dataports)
         sequencer_bus_decoder.add(ps_irq)
         self.add(ps_irq)
         
@@ -500,7 +500,7 @@ class StandardFirmware(Firmware):
             # Because of the SmartConnect topology, there"s a path from the PS masters to the PS slaves. Exclude these addresses
             for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
                 for seg in ["DDR_HIGH", "DDR_LOW", "LPS_OCM", "QSPI"]:
-                    exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_{seg}",  "ps/Data")
+                    exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_{seg}", target_address_space="ps/Data")
                     
 
             # ------------------- DDR4 Connections -------------------- #
@@ -533,7 +533,7 @@ class StandardFirmware(Firmware):
                 if isinstance(module, hdl.BusDataport):
                     create_module(f, f"hedgehog/{module.name}_dataport", module.name)
                     connect_bd_intf_net(f, f"hedgehog/{module.name}_dataport/master_bus", f"hedgehog/sequencer_bus_decoder/{module.name}")
-                    connect_bd_intf_net(f, f"hedgehog/{module.name}_dataport/nrst", f"hedgehog/seq_peripheral_aresetn")
+                    connect_bd_net(f, f"hedgehog/{module.name}_dataport/nrst", f"hedgehog/seq_peripheral_aresetn")
                                         
             # Add the memory decoder for cache and instructions and its AXI BRAM controller
             create_module(f, f"hedgehog/mem_decoder", "mem_decoder")
@@ -668,7 +668,7 @@ class StandardFirmware(Firmware):
                 # Slice the PS outputs
                 create_slice(f, name=f"hedgehog/xlslice_ps_gpio{gpio_port}_out", 
                                  input_width=StandardFirmware.NUM_PS_GPIO, 
-                                 input_from=(StandardFirmware.NUM_PS_GPIO if gpio_port == 5 else (idx+1)*32-1),
+                                 input_from=(StandardFirmware.NUM_PS_GPIO-1 if gpio_port == 5 else (idx+1)*32-1),
                                  input_to=idx*32)
                 connect_bd_net(f, f"hedgehog/xlslice_ps_gpio{gpio_port}_out/Din", f"hedgehog/PS_GPIO_OUT")
                 connect_bd_net(f, f"hedgehog/xlslice_ps_gpio{gpio_port}_out/Dout", f"hedgehog/ps_gpio{gpio_port}_dataport/gpio_out")
@@ -805,8 +805,8 @@ class StandardFirmware(Firmware):
 
             # Exclude the PS DDR High segments and QSPI
             for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
-                exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_DDR_HIGH", "hedgehog/cfg_axi_dm/Data_MM2S")
-                exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_QSPI", "hedgehog/cfg_axi_dm/Data_MM2S")
+                exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_DDR_HIGH", target_address_space="hedgehog/cfg_axi_dm/Data_MM2S")
+                exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_QSPI", target_address_space="hedgehog/cfg_axi_dm/Data_MM2S")
 
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(word_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0")
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0")
@@ -935,7 +935,7 @@ class StandardFirmware(Firmware):
                 # Exclude the PS DDR High segments and QSPI
                 for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
                     for seg in ["DDR_HIGH", "QSPI"]:
-                        exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_{seg}", f"hedgehog/adc_dm{d}/Data_S2MM")
+                        exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_{seg}", target_address_space=f"hedgehog/adc_dm{d}/Data_S2MM")
 
                 # Connect the AXI DMA TKEEP input to a constant
                 connect_bd_net(f, f"hedgehog/adc_dm{d}/s_axis_s2mm_tkeep", f"hedgehog/xlconst_FFFF/Dout")
@@ -1126,7 +1126,7 @@ class StandardFirmware(Firmware):
                 # Exclude the PS DDR High segments and QSPI
                 for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
                     for seg in ["DDR_HIGH", "QSPI"]:
-                        exclude_bd_addr_seg(f, f"ps/SAXIGP{idx}/{port}_{seg}", f"hedgehog/cmacc_dm{d}/Data_S2MM")
+                        exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_{seg}", target_address_space=f"hedgehog/cmacc_dm{d}/Data_S2MM")
 
                 # Connect the AXI DMA TKEEP input to a constant
                 connect_bd_net(f, f"hedgehog/cmacc_dm{d}/s_axis_s2mm_tkeep", f"hedgehog/xlconst_FFFF/Dout")
