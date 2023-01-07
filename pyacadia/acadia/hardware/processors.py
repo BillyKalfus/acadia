@@ -80,13 +80,13 @@ class PythonProcessor(Processor):
         # Create a ManagedResource for keeping track of imports and allowing their members to be called
         def import_init(import_self, lib_name):
             import_self._lib_name = lib_name
-            self("import", lib_name)
+            self(Operation("import", lib_name))
             
         def import_getattr(import_self, attr):
             return Operation("__getattr__", lib_name, attr)
                 
         self.Import = ManagedResource("Import", (,), {"__init__": import_init, "__getattr__": import_getattr})
-        
+        operator = self.Import("operator")
     @classmethod
     def subroutine(cls, func):
         """
@@ -157,13 +157,37 @@ class PythonProcessor(Processor):
             # Translate the operation being performed into a Python string that can be compiled
             if obj._op == "__getattr__":
                 if len(obj._args) != 2 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with __getattr__ must have exactly 2 positional arguments.")
-                return f"{obj._args[0]}.{obj._args[1]}"
+                    raise ValueError(f"An Operation with __getattr__ must have exactly two positional arguments.")
+                return f"getattr({obj._args[0]}, \"{obj._args[1]}\"")
             if obj._op == "__setattr__":
                 if len(obj._args) != 3 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with __setattr__ must have exactly 3 positional arguments.")
+                    raise ValueError(f"An Operation with __setattr__ must have exactly three positional arguments.")
                 translated_value = translate_obj(obj._args[2], identifier, instruction_resource)
-                return f"{obj._args[0]}.{obj._args[1]} = {translated_value}"
+                return f"setattr({obj._args[0]}, \"{obj._args[1]}\", {translated_value})"
+            if obj._op == "__call__":
+                if len(obj._args) == 0 or len(obj._kwargs) != 0:
+                    raise ValueError("An Operation with __call__ must have at least one positional argument.")
+                callname = obj._args[0]
+                translated_args = [translate_obj(arg, identifier, instruction_resource) for arg in obj._args[1:]]
+                translated_kwargs = [f"{k}={translate_obj(v, identifier, instruction_resource)}" for k,v in obj._kwargs.items()]
+                return f"{callname}({','.join(translated_args)}, {','.join(translated_kwargs)})"
+            if obj._op in ["__neg__", "__abs__", "__invert__"]:
+                # Unary operators
+                if len(obj._args) != 1 or len(obj._kwargs) != 0:
+                    raise ValueError(f"An Operation with {obj._op} must have exactly one positional argument.")
+                return f"operator.{obj._op}({obj._args[0]})
+            if obj._op in ["__add__", "__sub__", "__mul__", "__floordiv__", "__truediv__", "__mod__", "__pow__", "__lshift__", "__rshift__", "__and__", "__or__", "__xor__"]:
+                # Binary operators
+                if len(obj._args) != 2 or len(obj._kwargs) != 0:
+                    raise ValueError(f"An Operation with {obj._op} must have exactly two positional arguments.")
+                return f"operator.{obj._op}({obj._args[0]}, {obj._args[1]})
+            if obj._op in ["__radd__", "__rsub__", "__rmul__", "__rfloordiv__", "__rtruediv__", "__rmod__", "__rpow__", "__rlshift__", "__rrshift__", "__rand__", "__ror__", "__rxor__"]:
+                # Right-handed binary operators
+                if len(obj._args) != 2 or len(obj._kwargs) != 0:
+                    raise ValueError(f"An Operation with {obj._op} must have exactly two positional arguments.")
+                return f"operator.{obj._op}({obj._args[1]}, {obj._args[0]})
+            
+            raise ValueError(f"Unable to translate operation {obj._op}")
             
         if isinstance(obj, Symbol):
             # Cache the Symbol and return a string that retrieves its value at runtime
