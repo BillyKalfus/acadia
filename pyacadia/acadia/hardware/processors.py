@@ -18,20 +18,19 @@ class Processor:
         
         return named_instruction_decorator
     
-    """
-    A base class for objects that represent entities capable of being commanded by a set of native "instructions". Native instructions are defined in derived classes by decorating methods that produce their machine code with :meth:`Processor.instruction`.
-    Because calling a method decorated with :meth:`instruction` on an instance expresses an intent to command the :class:`Processor` to execute the represented instruction, an entry in the instance's instruction list should be added. This is handled by having trhe initializer iterate through the class' instruction set and bind a new method with the same name to the instance which when called, rather than calling the class method will make a request from the object's :field:`_instructions` ManagedResource. 
-    
-    Optionally, one can choose to pretranslate the program, in which case instructions will be translated to their binary equivalents when invoked.
-    :param instruction_limit: Maximum number of instructions allowed to be called on the :class:`Processor`.
-    :type instruction_limit: int, optional
-    :param pretranslate: If `True`, instructions are translated at the time of invocation.
-    :type pretranslate: bool, optional
-    """
-    def __init__(self, identifier=None, instruction_limit=None, pretranslate=False):
+    def __init__(self, instruction_limit=None, pretranslate=False):
+        """
+        A base class for objects that represent entities capable of being commanded by a set of native "instructions". Native instructions are defined in derived classes by decorating methods that produce their machine code with :meth:`Processor.instruction`.
+        Because calling a method decorated with :meth:`instruction` on an instance expresses an intent to command the :class:`Processor` to execute the represented instruction, an entry in the instance's instruction list should be added. This is handled by having trhe initializer iterate through the class' instruction set and bind a new method with the same name to the instance which when called, rather than calling the class method will make a request from the object's :field:`_instructions` ManagedResource. 
+
+        Optionally, one can choose to pretranslate the program, in which case instructions will be translated to their binary equivalents when invoked.
+        :param instruction_limit: Maximum number of instructions allowed to be called on the :class:`Processor`.
+        :type instruction_limit: int, optional
+        :param pretranslate: If `True`, instructions are translated at the time of invocation.
+        :type pretranslate: bool, optional
+        """
         self.Instruction = ManagedResource("Instruction", (dict,), {}, instance_limit=instruction_limit)
         self._translated_program = []
-        self._identifier = identifier if identifier is not None else f"processor{uuid.uuid4().int}"
         
         # For every instruction, bind a new method to the instance with the name of the instruction
         for instruction_name,translator in self.__class__._instruction_set.items():
@@ -67,15 +66,15 @@ class Processor:
 class PythonProcessor(Processor):
     _subroutines = []
     
-    """
-    A processor capable of executing Python commands. 
-    """
-    def __init__(self, identifier=None, instruction_limit=None, pretranslate=False):
-        super().__init__(identifier, instruction_limit, pretranslate)
+    def __init__(self, instruction_limit=None, pretranslate=False):
+        """
+        A processor capable of executing Python commands. 
+        """
+        super().__init__(instruction_limit, pretranslate)
         
         # Create an object that will accept arbitrary attributes, which we'll use as a stand-in for global variables during runtime
         # https://stackoverflow.com/questions/2280334/shortest-way-of-creating-an-object-with-arbitrary-attributes-in-python
-        self.data = type('', (), {{}})()
+        self.data = {}
         
         # Create a ManagedResource for keeping track of imports and allowing their members to be called
         def import_init(import_self, lib_name):
@@ -87,19 +86,21 @@ class PythonProcessor(Processor):
                 
         self.Import = ManagedResource("Import", (,), {"__init__": import_init, "__getattr__": import_getattr})
         operator = self.Import("operator")
+        
     @classmethod
     def subroutine(cls, func):
         """
         A decorator for creating callable subroutines from Python functions. Because `__getattr__` cannot distinguish between method calls and member field accesses, the primary purpose of this decorator is to indicate that when the decorated function is accessed as an attribute of a :class:`Processor` instance, an :class:`Instruction` should be generated that calls the corresponding subroutine (which is stored in the instance). Because of this, when a subroutine is called in the arguments to a function, the :class:`Instruction` created by the subroutine call will be used to populate a new temporary variable, which is then provided to the function.   
         """
+        subroutine_idx = len(cls._subroutines)
         cls._subroutines.append(func)
         
         @cls.instruction(name=func.__name__)
         def subroutine_instruction(self, instruction_resource):
             # Because this is meant to be called at runtime, we can't just use the arguments provided,
             # we have to build a string that will extract them at runtime from the processor's program
-            instruction_instance = f"{self._identifier}.Instruction.instances[{instruction_resource._resource_id}]"
-            code_string = f"{func.__name__}(*({instruction_instance}[\'args\']), **({instruction_instance}[\'kwargs\']))"
+            instruction_instance = f"self.Instruction.instances[{instruction_resource._resource_id}]"
+            code_string = f"self.__class__._subroutines[{subroutine_idx}](*({instruction_instance}[\'args\']), **({instruction_instance}[\'kwargs\']))"
             instruction_resource["code"] = code_string
             return compile(code_string, "", "eval")
         
@@ -121,7 +122,7 @@ class PythonProcessor(Processor):
             instruction_resource["code"] = op
             return compile(op, "", "eval")
         elif isinstance(op, Operation):
-            code = translate_obj(op, self._identifier, instruction_resource)
+            code = translate_obj(op, "self", instruction_resource)
             instruction_resource["code"] = code
             return compile(code, "", "eval")
 
@@ -131,7 +132,7 @@ class PythonProcessor(Processor):
         """
         Access a Python object in the namespace of the compiled program. While it's desirable to be able to call arbitrary functions by calling `processor.<function name>`, this is difficult to implement because we can't know whether the attribute being accessed is a function being called or a variable being accessed, and only the former requires an instruction to be generated. It is this reason that in order to call a function in the global scope, one must either define a subroutine or call this instance's `__call__` method.
         """
-        return Operation("__getattr__", f"{self._identifier}.data", attr)
+        return Operation("__getitem__", f"self.data", attr)
         
     def __setattr__(self, attr, value):
         """
@@ -140,67 +141,88 @@ class PythonProcessor(Processor):
         :type attr: str
         :param value: The value to assign to the variable
         """
-        return Operation("__setattr__", f"{self._identifier}.data", attr, value)
+        return Operation("__setitem__", f"self.data", attr, value)
     
     @staticmethod
-    def translate_obj(obj, identifier, instruction_resource):
+    def translate_obj(obj, instruction_resource):
         """
-        Translates a symbolic object into an equivalent line of Python. 
+        Translates a symbolic object into an equivalent line of Python thate creates it.
         :param obj: Object to be converted
-        :type obj: any subclass of :class:`Operable`
+        :return: A string representing a valid line of Python.
+        :rtype: str
         """
-        if isinstance(obj, Number) or isinstance(obj, str) or isinstance(obj, bool):
+        if isinstance(obj, Number) or isinstance(obj, bool):
             # A constant or literal, just return it since it should be able to be directly converted into a string
-            return obj
+            return str(obj)
+        
+        if isinstance(obj, str):
+            # A literal string, we just need to add quotes for it to be valid
+            return f"'{obj}'"
         
         if isinstance(obj, Operation):
             # Translate the operation being performed into a Python string that can be compiled
-            if obj._op == "__getattr__":
-                if len(obj._args) != 2 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with __getattr__ must have exactly two positional arguments.")
-                return f"getattr({obj._args[0]}, \"{obj._args[1]}\"")
-            if obj._op == "__setattr__":
-                if len(obj._args) != 3 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with __setattr__ must have exactly three positional arguments.")
-                translated_value = translate_obj(obj._args[2], identifier, instruction_resource)
-                return f"setattr({obj._args[0]}, \"{obj._args[1]}\", {translated_value})"
-            if obj._op == "__call__":
-                if len(obj._args) == 0 or len(obj._kwargs) != 0:
-                    raise ValueError("An Operation with __call__ must have at least one positional argument.")
-                callname = obj._args[0]
-                translated_args = [translate_obj(arg, identifier, instruction_resource) for arg in obj._args[1:]]
-                translated_kwargs = [f"{k}={translate_obj(v, identifier, instruction_resource)}" for k,v in obj._kwargs.items()]
-                return f"{callname}({','.join(translated_args)}, {','.join(translated_kwargs)})"
-            if obj._op in ["__neg__", "__abs__", "__invert__"]:
-                # Unary operators
-                if len(obj._args) != 1 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with {obj._op} must have exactly one positional argument.")
-                return f"operator.{obj._op}({obj._args[0]})
-            if obj._op in ["__add__", "__sub__", "__mul__", "__floordiv__", "__truediv__", "__mod__", "__pow__", "__lshift__", "__rshift__", "__and__", "__or__", "__xor__"]:
-                # Binary operators
-                if len(obj._args) != 2 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with {obj._op} must have exactly two positional arguments.")
-                return f"operator.{obj._op}({obj._args[0]}, {obj._args[1]})
-            if obj._op in ["__radd__", "__rsub__", "__rmul__", "__rfloordiv__", "__rtruediv__", "__rmod__", "__rpow__", "__rlshift__", "__rrshift__", "__rand__", "__ror__", "__rxor__"]:
-                # Right-handed binary operators
-                if len(obj._args) != 2 or len(obj._kwargs) != 0:
-                    raise ValueError(f"An Operation with {obj._op} must have exactly two positional arguments.")
-                return f"operator.{obj._op}({obj._args[1]}, {obj._args[0]})
-            
-            raise ValueError(f"Unable to translate operation {obj._op}")
-            
-        if isinstance(obj, Symbol):
-            # Cache the Symbol and return a string that retrieves its value at runtime
-            cache_idx = len(instruction_resource["cache"])
-            instruction_resource["cache"].append(obj)
-            return f"{identifier}.Instruction.instances[{instruction_resource._resource_id}][\"cache\"][{cache_idx}].value"
+            return translate_operation(obj, instruction_resource)
             
         # Other type (potentially an object we want to reference at runtime)
         # Cache it and return the string that retrieves it
+        # add some special behavior at runtime
         cache_idx = len(instruction_resource["cache"])
         instruction_resource["cache"].append(obj)
-        return f"{identifier}.Instruction.instances[{instruction_resource._resource_id}][\"cache\"][{cache_idx}]"
-                    
+        return f"self.Instruction.instances[{instruction_resource._resource_id}][\"cache\"][{cache_idx}]{'.value' if isinstance(obj, Symbol) else ''}"
+    
+    @staticmethod
+    def translate_operation(operation, instruction_resource):
+        """
+        Translates a symbolic operation into an equivalent line of Python.
+        :param operation: :class:`Operation` to be converted
+        :type operation: :class:`Operation`
+        :return: A string representing a valid line of Python.
+        :rtype: str
+        """
+        if operation._op == "__getattr__":
+            if len(operation._args) != 2 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with __getattr__ must have exactly two positional arguments.")
+            return f"getattr({operation._args[0]}, \"{operation._args[1]}\")"
+        if operation._op == "__setattr__":
+            if len(operation._args) != 3 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with __setattr__ must have exactly three positional arguments.")
+            translated_value = translate_operation(operation._args[2], instruction_resource)
+            return f"setattr({operation._args[0]}, \"{operation._args[1]}\", {translated_value})"
+        if operation._op == "__getitem__":
+            if len(operation._args) != 2 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with __getitem__ must have exactly two positional arguments.")
+            translated_key = translate_operation(operation._args[1], instruction_resource)
+            return f"{operation._args[0]}[{translated_key}]"
+        if operation._op == "__setitem__":
+            if len(operation._args) != 3 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with __setitem__ must have exactly three positional arguments.")
+            translated_key = translate_operation(operation._args[1], instruction_resource)
+            translated_value = translate_operation(operation._args[2], instruction_resource)
+            return f"{operation._args[0]}[{translated_key}] = {translated_value}"
+        if operation._op == "__call__":
+            if len(operation._args) == 0 or len(operation._kwargs) != 0:
+                raise ValueError("An Operation with __call__ must have at least one positional argument.")
+            callname = operation._args[0]
+            translated_args = [translate_operation(arg, identifier, instruction_resource) for arg in operation._args[1:]]
+            translated_kwargs = [f"{k}={translate_operation(v, identifier, instruction_resource)}" for k,v in operation._kwargs.items()]
+            return f"{callname}({','.join(translated_args)}, {','.join(translated_kwargs)})"
+        if operation._op in ["__neg__", "__abs__", "__invert__"]:
+            # Unary operators
+            if len(operation._args) != 1 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with {operation._op} must have exactly one positional argument.")
+            return f"operator.{operation._op}({operation._args[0]})"
+        if operation._op in ["__eq__", "__ne__", "__lt__", "__gt__", "__le__", "__ge__", "__add__", "__sub__", "__mul__", "__floordiv__", "__truediv__", "__mod__", "__pow__", "__lshift__", "__rshift__", "__and__", "__or__", "__xor__"]:
+            # Binary operators
+            if len(operation._args) != 2 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with {operation._op} must have exactly two positional arguments.")
+            return f"operator.{operation._op}({operation._args[0]}, {operation._args[1]})"
+        if operation._op in ["__radd__", "__rsub__", "__rmul__", "__rfloordiv__", "__rtruediv__", "__rmod__", "__rpow__", "__rlshift__", "__rrshift__", "__rand__", "__ror__", "__rxor__"]:
+            # Right-handed binary operators
+            if len(operation._args) != 2 or len(operation._kwargs) != 0:
+                raise ValueError(f"An Operation with {operation._op} must have exactly two positional arguments.")
+            return f"operator.{operation._op}({operation._args[1]}, {operation._args[0]})"
+
+        raise ValueError(f"Unable to translate operation {operation._op}")
     
     def run(self):
         """

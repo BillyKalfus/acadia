@@ -10,7 +10,7 @@ import uuid
 from operator import and_
 
 class Operable(type):
-    OPERATORS = ["eq", "ne", "neg", "abs", "invert", "add", "radd", "sub", "rsub", "mul", "rmul", "floordiv", "rfloordiv", "truediv", "rtruediv", "mod", "rmod", "pow", "rpow", "lshift", "rlshift", "rshift", "rrshift", "and", "rand", "or", "ror", "xor", "rxor", "bool", "len", "contains", "iter", "getitem", "setitem", "getattr", "setattr", "call", "enter", "exit", "copy", "deepcopy"]
+    OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", "neg", "abs", "invert", "add", "radd", "sub", "rsub", "mul", "rmul", "floordiv", "rfloordiv", "truediv", "rtruediv", "mod", "rmod", "pow", "rpow", "lshift", "rlshift", "rshift", "rrshift", "and", "rand", "or", "ror", "xor", "rxor", "bool", "len", "contains", "iter", "getitem", "setitem", "getattr", "setattr", "call", "enter", "exit", "copy", "deepcopy"]
     
     """
     A metaclass used to capture operators acting on instances of derived classes and return a symbolic representation of the operator call.
