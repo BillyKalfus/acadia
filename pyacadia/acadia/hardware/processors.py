@@ -1,67 +1,105 @@
 import pickle
-import uuid
 from numbers import Number
+from abc import ABC, abstractmethod
+
 from ..assembler import Operation, Processor, Symbol, ManagedResource
 
-class Processor:
+class Processor(ABC):
     _instruction_set = {}
     
     @classmethod
     def instruction(cls, name=None):
         """
-        A decorator for specifying an instruction "natively" implemented by the entity abstracted by this :class:`Processor`. The provided method is understood to "translate" an :class:`Instruction` object passed as the sole argument into machine code for the object that will be programmed with these instructions, the exact format of which is left up to the specific derived classes. The :class:`Instruction` object is a subclass of `dict` and a :class:`ManagedResource`.
-        Calling a decorated method on the :class:`Processor` class itself is understood to express an intent to translate an instruction with provided arguments by calling the underlying translation function. However, calling the method on an instance expresses an intent to command the :class:`Processor` to execute the represented instruction at that point in the program, meaning that the underlying translation function should not be called but should simply be added as an entry in the instance's instruction list. This decorator implements this behavior by returning a `classmethod` which will then be automatically bound to the class. Then, the default initializer of this class will iterate through the class' instruction set and bind a new method with the same name to the instance which when called, rather than calling the class method, will add an :class:`Instruction` to the program. 
+        A decorator for specifying an instruction "natively" implemented by the entity abstracted by this :class:`Processor`. The decorated method is understood to translate an :class:`Instruction` object (passed as the sole argument) into machine code for the object that will be programmed with these instructions, the exact format of which is left up to the specific subclasses.   
+        
+        Calling a decorated method on a :class:`Processor` instance expresses an intent to command the :class:`Processor` to execute the represented instruction at that point in the program, meaning that the underlying translation function should not be called yet. To implement this behavior, the default instance initializer will iterate through the class instruction set and bind a new method with the name of the decorated function to the instance which, when called, will add an :class:`Instruction` to the program list. Then, when an instance is translating its program list, it can refer to the translation functions stored in the class instruction set.
         """
         def named_instruction_decorator(translation_func):
+            # We will intentionally return None from this decorator since we don't want to actually create a
+            # function for the class, we just want to cache it in the instruction set
             cls._instruction_set[translation_func.__name__ if name is None else name] = translation_func
-            return staticmethod(func)
-        
+            
         return named_instruction_decorator
     
-    def __init__(self, instruction_limit=None, pretranslate=False):
+    def __init__(self, instruction_limit=None, preassemble=False):
         """
-        A base class for objects that represent entities capable of being commanded by a set of native "instructions". Native instructions are defined in derived classes by decorating methods that produce their machine code with :meth:`Processor.instruction`.
-        Because calling a method decorated with :meth:`instruction` on an instance expresses an intent to command the :class:`Processor` to execute the represented instruction, an entry in the instance's instruction list should be added. This is handled by having trhe initializer iterate through the class' instruction set and bind a new method with the same name to the instance which when called, rather than calling the class method will make a request from the object's :field:`_instructions` ManagedResource. 
-
-        Optionally, one can choose to pretranslate the program, in which case instructions will be translated to their binary equivalents when invoked.
+        A base class for objects that represent entities capable of being commanded by a set of native "instructions". Native instructions are defined in subclasses by decorating methods that produce machine code with :meth:`Processor.instruction` (see its documentation for a description of how instructions are implemented). 
+        
+        Instances of :class:`Processor` maintain an internal list of all instructions invoked on it, referred to as the "program list". Within the program list, each instruction has an associated "block number", each of which identifies a unique contiguous sequence of instructions in memory. If a block is started within an existing block, by default it will later be moved to a different part of instruction memory in order to maintain the contiguity of the outer block. However, in certain situation it is advantageous to have the inner block interrupt this contiguity, so this can be overridden by defining the new block as "in-place". 
+        
+        Compiling a program for a :class:`Processor` consists of three distinct steps:
+        
+        #. Resource Allocation
+            
+            This first step occurs implicitly when the Python code containing the program is executed. When instruction functions are called on :class:`Processor` objects in a script, this creates :class:`Instruction` objects which are then stored in the program list. These objects contain metadata about that particular instruction invocation, such as the arguments to the instruction and any resources requested from the :class:`Processor` needed to carry out the instruction. Because classes of metaclass :class:`ManagedResource` assign addresses to their instances upon creation, when the script finishes all addressable resources for all processors will have been assigned and allocated. At the end of this stage, the program list will be fully populated and all :class:`Symbol` objects representing automatically-allocated memory locations will be assigned.
+            
+        #. Compilation
+        
+            In this step, each instruction created during symbolic compilation is translated into one or more native instructions. Because the functions that the user calls when commanding a :class:`Processor` are directly representative of its native instructions, the primary function of this step is to translate the symbolic arguments passed to the instructions and potentially insert additional instructions when needed (such as for expanding compound expressions). At the end of this stage, the "compiled" field of all instructions will be populated with data representing the compiled instruction and arguments. While this data is ultimately hardware-specific, it is assumed that the data is in a form that allows it to be directly translated into machine code with no further symbolic solving (except for potentially retrieving the value of an assigned :class:`Symbol`). The program list will also be rearranged to match the desired block structure.
+        
+        #. Assembly
+        
+            Finally, the data stored as a result of compilation is converted into machine code for the hardware. All :class:`Symbol` objects contained in instructions will be accessed, and simplifications may be performed. 
+        
         :param instruction_limit: Maximum number of instructions allowed to be called on the :class:`Processor`.
         :type instruction_limit: int, optional
         :param pretranslate: If `True`, instructions are translated at the time of invocation.
         :type pretranslate: bool, optional
         """
-        self.Instruction = ManagedResource("Instruction", (dict,), {}, instance_limit=instruction_limit)
-        self._translated_program = []
+        
+        # The custom resource for storing instructions
+        self.Instruction = ManagedResource(f"{self.__class__}Instruction", (dict,), {}, instance_limit=instruction_limit)
+        
+        # A stack for keeping track of instruction blocks and their ordering. 
+        # The last element is the current block number, to which instructions will be added
+        self.instruction_block = [0] 
+        
+        # For every block, we'll need to know whether the instrcutions in the block must be located "in place"
+        # (meaning, they are inserted in memory at the point in the main block at which the block was declared,
+        # rather than just being grouped together and appended to the end)
+        self.instruction_block_inline = [True]
         
         # For every instruction, bind a new method to the instance with the name of the instruction
         for instruction_name,translator in self.__class__._instruction_set.items():
             def append_instruction(proc_self, *args, **kwargs):
-                instruction_resource = proc_self.Instruction({"instruction": instruction_name, "translator": translator, "args": args, **kwargs, "cache": []})
-                if pretranslate:
-                    translated_resource = translator(proc_self, instruction_resource)
-                    proc_self._translated_program.append(translated_resource)
+                """
+                Append an instruction to a program list. The `dict` encapsulated by the :class:`ManagedResource` contains a few dedicated fields:
+                
+                * `instruction`: The name of the instruction to execute, which is used to look up the translation function in the dictionary defining the class' instruction set.
+                * `args`: Positional arguments provided to the instruction when called.
+                * `kwargs`: Keywords arguments provided to the instruction when called.
+                * `block`: 
+                """
+                instruction_resource = proc_self.Instruction({"instruction": instruction_name, "args": args, "kwargs": kwargs, "block": proc_self.instruction_block[-1], "cache": [], "compiled": None})
+                if preassemble+:
+                    proc_self.translate_instruction(instruction_resource)
                 return instruction_resource
                 
             setattr(self, instruction_name, MethodType(append_instruction, self))
-                        
-    def __new__(cls, *args, **kwargs):
-        """
-        Prevents a :class:`Processor` from being directly instantiated. This is typically handled with the `abc` module, but because :class:`Processor` doesn't actually implement any abstract methods, ABCMeta will not prevent :class:`Processor` from being directly instantiated. Therefore, to implement this, we'll just override :meth:`__new__` and fail to return a new object if its class is :class:`Processor`.
-        """
-        if cls is Processor:
-            raise TypeError("Processor cannot be directly instantiated; one must define a subclass.")
-        
-        return super().__new__(cls, *args, **kwargs)
-    
-    def translate(self, force=False):
-        """
-        A method for translating the symbolic instructions contained in the instance into a representation that is meaningful for the particular hardware abstracted by this :class:`Processor`. There is no restriction on the return type of this object, but it is understood that the returned value must be capable of being "executable", whatever that may mean for a given physical processor.
-        """
-        if len(self._translated_program) > 0:
-            raise ValueError("Attempted translation of already-translated program. If this is intentional, set force=True.")
             
-        self._translated_program = []
+    def start_block(self, inline=True):
+        """
+        """
+        self.instruction_block.append(len(self.instruction_block_inline))
+        self.instruction_block_inline.append(inline)
         
-        for 
+    def end_block(self):
+        if len(self.instruction_block) == 1:
+            raise ValueError("Instruction block stack popped below main; there is likely a mismatched block end here.")
+        self.instruction_block.pop()
+    
+    def compile_instruction(self, instruction_resource, force=False):
+        """
+        Translates a single instruction in a program.
+        """
+        
+    @staticmethod
+    @abstractmethod
+    def translate_arg(arg, instruction_resource)
+        """
+        Translates arguments provided to instructions when invoked. As this is highly dependent on the "binary" format of the :class:`Processor`, subclasses must define this.
+        """
+        raise TypeError(f"Unable to translate argument {arg}.")
 
 class PythonProcessor(Processor):
     _subroutines = []
@@ -102,11 +140,11 @@ class PythonProcessor(Processor):
             instruction_instance = f"self.Instruction.instances[{instruction_resource._resource_id}]"
             code_string = f"self.__class__._subroutines[{subroutine_idx}](*({instruction_instance}[\'args\']), **({instruction_instance}[\'kwargs\']))"
             instruction_resource["code"] = code_string
-            return compile(code_string, "", "eval")
+            instruction_resource["translation"] = compile(code_string, "", "exec")
         
         return subroutine_instruction
     
-    @Processor.instruction 
+    @Processor.instruction() 
     def __call__(self, instruction_resource):
         """
         Calling a :class:`PythonProcessor` object executes a statement. There are multiple ways to specify the execution; if `processor` is an instance of :class:`Processor`, then the following call signatures apply: 
@@ -122,7 +160,7 @@ class PythonProcessor(Processor):
             instruction_resource["code"] = op
             return compile(op, "", "eval")
         elif isinstance(op, Operation):
-            code = translate_obj(op, "self", instruction_resource)
+            code = translate_arg(op, instruction_resource)
             instruction_resource["code"] = code
             return compile(code, "", "eval")
 
@@ -144,9 +182,9 @@ class PythonProcessor(Processor):
         return Operation("__setitem__", f"self.data", attr, value)
     
     @staticmethod
-    def translate_obj(obj, instruction_resource):
+    def translate_arg(obj, instruction_resource):
         """
-        Translates a symbolic object into an equivalent line of Python thate creates it.
+        Translates an instruction argument (provided as an arbitrary object) into an equivalent line of Python that creates it. If it can't be created at runtime, it is cached in the instruction resource and code is added to retrieve it at runtime.
         :param obj: Object to be converted
         :return: A string representing a valid line of Python.
         :rtype: str
@@ -161,7 +199,7 @@ class PythonProcessor(Processor):
         
         if isinstance(obj, Operation):
             # Translate the operation being performed into a Python string that can be compiled
-            return translate_operation(obj, instruction_resource)
+            return PythonProcessor.translate_operation(obj, instruction_resource)
             
         # Other type (potentially an object we want to reference at runtime)
         # Cache it and return the string that retrieves it
@@ -186,25 +224,25 @@ class PythonProcessor(Processor):
         if operation._op == "__setattr__":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with __setattr__ must have exactly three positional arguments.")
-            translated_value = translate_operation(operation._args[2], instruction_resource)
+            translated_value = translate_arg(operation._args[2], instruction_resource)
             return f"setattr({operation._args[0]}, \"{operation._args[1]}\", {translated_value})"
         if operation._op == "__getitem__":
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with __getitem__ must have exactly two positional arguments.")
-            translated_key = translate_operation(operation._args[1], instruction_resource)
+            translated_key = translate_arg(operation._args[1], instruction_resource)
             return f"{operation._args[0]}[{translated_key}]"
         if operation._op == "__setitem__":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with __setitem__ must have exactly three positional arguments.")
-            translated_key = translate_operation(operation._args[1], instruction_resource)
-            translated_value = translate_operation(operation._args[2], instruction_resource)
+            translated_key = translate_arg(operation._args[1], instruction_resource)
+            translated_value = translate_arg(operation._args[2], instruction_resource)
             return f"{operation._args[0]}[{translated_key}] = {translated_value}"
         if operation._op == "__call__":
             if len(operation._args) == 0 or len(operation._kwargs) != 0:
                 raise ValueError("An Operation with __call__ must have at least one positional argument.")
             callname = operation._args[0]
-            translated_args = [translate_operation(arg, identifier, instruction_resource) for arg in operation._args[1:]]
-            translated_kwargs = [f"{k}={translate_operation(v, identifier, instruction_resource)}" for k,v in operation._kwargs.items()]
+            translated_args = [translate_arg(arg, instruction_resource) for arg in operation._args[1:]]
+            translated_kwargs = [f"{k}={translate_arg(v, instruction_resource)}" for k,v in operation._kwargs.items()]
             return f"{callname}({','.join(translated_args)}, {','.join(translated_kwargs)})"
         if operation._op in ["__neg__", "__abs__", "__invert__"]:
             # Unary operators

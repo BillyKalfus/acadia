@@ -40,12 +40,10 @@ class Operation(metaclass=Operable):
 class Symbol(metaclass=Operable):
     """
     A symbolic variable with a value not necessarily known to the user but guaranteed to be available at the time of translation. A canonical example of an :class:`Operable` class, it allows objects or values to be distributed throughout a program that depend on the future decisions of higher-level entities (e.g., a program translator deciding memory locations or array lengths). This requires operator evaluation to be deferred to a future time (and potentially in different ways, depending on the involved objects). In such a situation, this object acts as a placeholder for the desired object.
-    All :class:`Symbol` objects are assigned an ID at instantiation which may optionally be provided by the user. This ID primarily serves to track the instance, refer to it in human-readable representations, and allow instances to be used as keys to `dict` objects. The value of this should be globally unique.
     :param value: The value of the :class:`Symbol`, if known at instantiation. If not provided, may be assigned later.
     :type value: object, optional
-    :param id: A unique identifier 
     """
-    def __init__(self, value=None, id=None):
+    def __init__(self, value=None):
         self._value = value
         self._assigned = value != None
                 
@@ -63,7 +61,7 @@ class Symbol(metaclass=Operable):
         self._value = v
         
     def __str__(self):
-        return f"Symbol(assigned={self._assigned}, value={self._value}, id={id(self)})"
+        return f"Symbol(assigned={self._assigned}, value={self._value})"
     
     def __repr__(self):
         return str(self)
@@ -95,7 +93,7 @@ class ManagedResource(Operable):
     :param use_instance_size: If `True`, indicates that the allocation offset should be increased by an amount equal to the provided `size` keyword.  
     :type use_instance_size: bool, optional
     """
-    def __new__(cls, name, bases, dct, instance_limit=None, use_instance_size=True):
+    def __new__(cls_meta_new, name, bases, dct, instance_limit=None, use_instance_size=True):
         
         def cls_new(cls, allocate=True, resource_id=None, *inst_args, **inst_kwargs):
             """
@@ -111,20 +109,16 @@ class ManagedResource(Operable):
                         instance._released = False
                         return instance
                     
-                raise ValueError(f"Unable to allocate resource; instance limit reached for ManagedResource {name} with no released instance found.")
+                raise ValueError(f"Unable to allocate resource; instance limit reached for {cls} with no released instance found.")
                 
             instance = super().__new__(cls, *inst_args, **inst_kwargs)
-            instance._released = True
-            instance._allocated = False
+            instance._released = allocate
+            instance._resource_id = Symbol() if resource_id is None else resource_id
+            cls.instances.append(instance)
             
-            if resource_id is None:
-                instance._resource_id = Symbol()
-            else:
-                instance._resource_id = resource_id
-            
-            if allocate: 
+            if allocate:
                 instance.allocate()
-                
+            
             return instance
                         
         def allocate(self, force=False):
@@ -136,12 +130,23 @@ class ManagedResource(Operable):
             if isinstance(self._resource_id, Symbol):
                 self._resource_id.assign(self.__class__.allocation_index, force=force)
             else:
-                raise TypeError(f'Attempted assignment to non-Symbol resource ID.')
+                raise TypeError(f'Attempted allocation of resource with non-Symbol resource ID.')
             
             self._released = False
-            self._allocated = True
-            cls.instances.append(instance)
             cls.allocation_index += self.size if use_instance_size and hasattr(self, "size") else 1
+        
+        def insert(cls, res, before=None, reallocate=True):
+            """
+            Insert a resource before a specified resource in the instance list. If no resource is specified to determine the insertion location, the resource to be inserted is removed from its current location and appended to the end.
+            :param res: Resource to insert
+            :param before: Resource before which to insert `res`
+            """
+            cls.instances.remove(res)
+            cls.instances.insert(cls.instances.index(before) if before is not None else len(cls.instances), res)
+            
+            cls.allocation_index = 0
+            for instance in cls.instances:
+                instance.allocate(force=True)
             
         def is_released(self):
             """
@@ -149,13 +154,6 @@ class ManagedResource(Operable):
             :rtype: `bool`
             """
             return self._released
-        
-        def is_allocated(self):
-            """
-            :return: `True` if the resource has been allocated.
-            :rtype: `bool`
-            """
-            return self._allocated
 
         def release(self):
             """
@@ -163,6 +161,6 @@ class ManagedResource(Operable):
             """
             self._released = True
             
-        cls_attrs = {"instances": [], "allocation_index": 0, "__new__": cls_new, "allocate": allocate, "is_allocated": is_allocated, "is_released": is_released, "release": release, **dct}
-        return super().__new__(cls, name, bases, cls_attrs)
+        cls_attrs = {"instances": [], "allocation_index": 0, "__new__": cls_new, "allocate": allocate, "insert": classmethod(insert), "is_released": is_released, "release": release, **dct}
+        return super().__new__(cls_meta_new, name, bases, cls_attrs)
         
