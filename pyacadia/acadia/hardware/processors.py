@@ -25,7 +25,13 @@ class Processor(ABC):
         """
         A base class for objects that represent entities capable of being commanded by a set of native "instructions". Native instructions are defined in subclasses by decorating methods that produce machine code with :meth:`Processor.instruction` (see its documentation for a description of how instructions are implemented). 
         
-        Instances of :class:`Processor` maintain an internal list of all instructions invoked on it, referred to as the "program list". Within the program list, each instruction has an associated "block number", each of which identifies a unique contiguous sequence of instructions in memory. If a block is started within an existing block, by default it will later be moved to a different part of instruction memory in order to maintain the contiguity of the outer block. However, in certain situation it is advantageous to have the inner block interrupt this contiguity, so this can be overridden by defining the new block as "in-place". 
+        Instances of :class:`Processor` maintain an internal list of all instructions invoked on it, referred to as the "program list". The order of the instructions inside the program list is understood to be the order in which the instructions will execute, in the absence of branching. 
+        
+        In some situations it is desirable to define a distinct "block" of instructions which are to be executed (potentially conditionally), and then have program flow continue from the point immediately following that at which the block was invoked. The compiler must decide where to place the instructions comprising the block, with the option of either inserting them at the point at which the block is declared, or placing them in a disjoint region of program memory to which execution is branched when the block is invoked, and returned from when the block is completed.
+        
+        A choice between these two methods will depend on whether the block is expected to be executed a majority of the time (or unconditionally); if it is, it is more desirable to place the instructions at the point of invocation to avoid the additional latency associated with branching, at the expense of increased program memory usage should the block need to be reused in multiple places. This concept arises in other programming languages when defining subroutines, typically referred to as "inlining" the subroutine. In contrast, if it is expected that the block will typically not be executed (for example, because a condition determining its execution will typically not be satisfied), it is preferable to place the block elsewhere so that the majority of the time, execution will simply continue past the conditional branch instruction with no additional latency incurred.
+        
+        The ability to dynamically choose between these methods is referred to as "speculative execution" and is a hardware feature of most modern processors (which, rather than deciding where to place instructions, makes a decision about the location in instruction memory from which to load the instruction following the branch). Here, we explicitly expose this decision to the user with the keyword `inline`, 
         
         Compiling a program for a :class:`Processor` consists of three distinct steps:
         
@@ -50,15 +56,6 @@ class Processor(ABC):
         # The custom resource for storing instructions
         self.Instruction = ManagedResource(f"{self.__class__}Instruction", (dict,), {}, instance_limit=instruction_limit)
         
-        # A stack for keeping track of instruction blocks and their ordering. 
-        # The last element is the current block number, to which instructions will be added
-        self.instruction_block = [0] 
-        
-        # For every block, we'll need to know whether the instrcutions in the block must be located "in place"
-        # (meaning, they are inserted in memory at the point in the main block at which the block was declared,
-        # rather than just being grouped together and appended to the end)
-        self.instruction_block_inline = [True]
-        
         # For every instruction, bind a new method to the instance with the name of the instruction
         for instruction_name,translator in self.__class__._instruction_set.items():
             def append_instruction(proc_self, *args, **kwargs):
@@ -68,45 +65,66 @@ class Processor(ABC):
                 * `instruction`: The name of the instruction to execute, which is used to look up the translation function in the dictionary defining the class' instruction set.
                 * `args`: Positional arguments provided to the instruction when called.
                 * `kwargs`: Keywords arguments provided to the instruction when called.
-                * `block`: 
+                * `block_start`: If `True`, indicates that this instruction is the first in a non-inlined block
+                * `block_end`: If `True`, indicates that this instruction is the lats in a non-inlined block
+                * `cache`: A list of objects cached during assembly
                 """
-                instruction_resource = proc_self.Instruction({"instruction": instruction_name, "args": args, "kwargs": kwargs, "block": proc_self.instruction_block[-1], "cache": [], "compiled": None})
-                if preassemble+:
+                instruction_resource = proc_self.Instruction({"instruction": instruction_name, "args": args, "kwargs": kwargs, "cache": [], block_start=proc_self.block_start, block_end=proc_self.block_end})
+                proc_self.block_start = False
+                proc_self.block_end = False
+                if preassemble:
                     proc_self.translate_instruction(instruction_resource)
                 return instruction_resource
                 
             setattr(self, instruction_name, MethodType(append_instruction, self))
             
-    def start_block(self, inline=True):
+    def block_start(self):
         """
+        Indicate that the next instruction called is the first in a non-inlined block.
         """
-        self.instruction_block.append(len(self.instruction_block_inline))
-        self.instruction_block_inline.append(inline)
+        self.block_start = True
         
-    def end_block(self):
-        if len(self.instruction_block) == 1:
-            raise ValueError("Instruction block stack popped below main; there is likely a mismatched block end here.")
-        self.instruction_block.pop()
+    def block_end(self):
+        """
+        Indicate that the next instruction called is the last in a non-inlined block.
+        """
+        self.block_end = True
     
-    def compile_instruction(self, instruction_resource, force=False):
-        """
-        Translates a single instruction in a program.
-        """
-        
-    @staticmethod
+    @classmethod
     @abstractmethod
-    def translate_arg(arg, instruction_resource)
+    def compile_single(cls, instruction_resource):
         """
-        Translates arguments provided to instructions when invoked. As this is highly dependent on the "binary" format of the :class:`Processor`, subclasses must define this.
+        Compiles a single instruction in a program.
         """
-        raise TypeError(f"Unable to translate argument {arg}.")
-
+        pass
+        
+    def compile(self):
+        """
+        Compiles the complete program by iterating through the program list and calling :meth:`comple_single` on every instruction, while restructuring the program to obey the desired block structure.
+        """
+        blocks = [[]]
+        block_prev = None
+        block_current = 0
+        for instruction in self.Instruction.instances:
+            if instruction["block_start"]:
+                blocks.append([])
+                block_prev = block_current
+                block_current = len(blocks)
+                
+            compiled_instruction = self.compile_single(instruction)
+            blocks[block_current].append(compiled_instruction)
+            
+            if instruction["block_end"]:
+                block_current = block_prev
+                
+        return blocks
+        
 class PythonProcessor(Processor):
     _subroutines = []
     
     def __init__(self, instruction_limit=None, pretranslate=False):
         """
-        A processor capable of executing Python commands. 
+        A processor capable of executing Python commands. For this :class:`Processor`, compiling consists of generating strings containing Python code and assembly consists of calling the Python compiler on it.
         """
         super().__init__(instruction_limit, pretranslate)
         
@@ -138,9 +156,8 @@ class PythonProcessor(Processor):
             # Because this is meant to be called at runtime, we can't just use the arguments provided,
             # we have to build a string that will extract them at runtime from the processor's program
             instruction_instance = f"self.Instruction.instances[{instruction_resource._resource_id}]"
-            code_string = f"self.__class__._subroutines[{subroutine_idx}](*({instruction_instance}[\'args\']), **({instruction_instance}[\'kwargs\']))"
-            instruction_resource["code"] = code_string
-            instruction_resource["translation"] = compile(code_string, "", "exec")
+            code_string = f"PythonProcessor._subroutines[{subroutine_idx}](*({instruction_instance}[\'args\']), **({instruction_instance}[\'kwargs\']))"
+            instruction_resource["compiled"] = code_string
         
         return subroutine_instruction
     
@@ -160,7 +177,7 @@ class PythonProcessor(Processor):
             instruction_resource["code"] = op
             return compile(op, "", "eval")
         elif isinstance(op, Operation):
-            code = translate_arg(op, instruction_resource)
+            code = self.cls.compile_arg(op, instruction_resource)
             instruction_resource["code"] = code
             return compile(code, "", "eval")
 
@@ -181,8 +198,8 @@ class PythonProcessor(Processor):
         """
         return Operation("__setitem__", f"self.data", attr, value)
     
-    @staticmethod
-    def translate_arg(obj, instruction_resource):
+    @classmethod
+    def compile_arg(cls, obj, instruction_resource):
         """
         Translates an instruction argument (provided as an arbitrary object) into an equivalent line of Python that creates it. If it can't be created at runtime, it is cached in the instruction resource and code is added to retrieve it at runtime.
         :param obj: Object to be converted
@@ -199,7 +216,7 @@ class PythonProcessor(Processor):
         
         if isinstance(obj, Operation):
             # Translate the operation being performed into a Python string that can be compiled
-            return PythonProcessor.translate_operation(obj, instruction_resource)
+            return cls.compile_operation(obj, instruction_resource)
             
         # Other type (potentially an object we want to reference at runtime)
         # Cache it and return the string that retrieves it
@@ -208,8 +225,8 @@ class PythonProcessor(Processor):
         instruction_resource["cache"].append(obj)
         return f"self.Instruction.instances[{instruction_resource._resource_id}][\"cache\"][{cache_idx}]{'.value' if isinstance(obj, Symbol) else ''}"
     
-    @staticmethod
-    def translate_operation(operation, instruction_resource):
+    @classmethod
+    def compile_operation(cls, operation, instruction_resource):
         """
         Translates a symbolic operation into an equivalent line of Python.
         :param operation: :class:`Operation` to be converted
@@ -224,25 +241,25 @@ class PythonProcessor(Processor):
         if operation._op == "__setattr__":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with __setattr__ must have exactly three positional arguments.")
-            translated_value = translate_arg(operation._args[2], instruction_resource)
+            translated_value = cls.compile_arg(operation._args[2], instruction_resource)
             return f"setattr({operation._args[0]}, \"{operation._args[1]}\", {translated_value})"
         if operation._op == "__getitem__":
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with __getitem__ must have exactly two positional arguments.")
-            translated_key = translate_arg(operation._args[1], instruction_resource)
+            translated_key = cls.compile_arg(operation._args[1], instruction_resource)
             return f"{operation._args[0]}[{translated_key}]"
         if operation._op == "__setitem__":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with __setitem__ must have exactly three positional arguments.")
-            translated_key = translate_arg(operation._args[1], instruction_resource)
-            translated_value = translate_arg(operation._args[2], instruction_resource)
+            translated_key = cls.compile_arg(operation._args[1], instruction_resource)
+            translated_value = cls.compile_arg(operation._args[2], instruction_resource)
             return f"{operation._args[0]}[{translated_key}] = {translated_value}"
         if operation._op == "__call__":
             if len(operation._args) == 0 or len(operation._kwargs) != 0:
                 raise ValueError("An Operation with __call__ must have at least one positional argument.")
             callname = operation._args[0]
-            translated_args = [translate_arg(arg, instruction_resource) for arg in operation._args[1:]]
-            translated_kwargs = [f"{k}={translate_arg(v, instruction_resource)}" for k,v in operation._kwargs.items()]
+            translated_args = [cls.compile_arg(arg, instruction_resource) for arg in operation._args[1:]]
+            translated_kwargs = [f"{k}={cls.compile_arg(v, instruction_resource)}" for k,v in operation._kwargs.items()]
             return f"{callname}({','.join(translated_args)}, {','.join(translated_kwargs)})"
         if operation._op in ["__neg__", "__abs__", "__invert__"]:
             # Unary operators
