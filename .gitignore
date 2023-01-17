@@ -6,4 +6,4 @@ lib/**/__pycache__/
 pyacadia/build/
 pyacadia/dist/
 pyacadia/pyacadia*/
-
+testing/

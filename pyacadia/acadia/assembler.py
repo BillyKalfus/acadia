@@ -17,18 +17,28 @@ class Operable(type):
     classes and return a symbolic representation of the operator call.
     """
     
-    OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", "neg", "abs", "invert",
-                 "add", "radd", "sub", "rsub", "mul", "rmul", "floordiv", 
-                 "rfloordiv", "truediv", "rtruediv", "mod", "rmod", "pow", 
-                 "rpow", "lshift", "rlshift", "rshift", "rrshift", "and", 
-                 "rand", "or", "ror", "xor", "rxor", "bool", "len", "contains", 
-                 "iter", "getitem", "setitem", "getattr", "setattr", "call", 
-                 "enter", "exit", "copy", "deepcopy"]
+    OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", 
+                 "neg", "abs", "invert",
+                 "add", "radd", "iadd", 
+                 "sub", "rsub", "isub", 
+                 "mul", "rmul", "imul",
+                 "floordiv", "rfloordiv", "ifloordiv",
+                 "truediv", "rtruediv", "itruediv", 
+                 "mod", "rmod","imod", 
+                 "pow", "rpow", "ipow", 
+                 "lshift", "rlshift", "ilshift",
+                 "rshift", "rrshift", "irshift", 
+                 "and", "rand", "iand", 
+                 "or", "ror", "ior", 
+                 "xor", "rxor", "ixor", 
+                 "bool", "len", "contains", 
+                 "iter", "getitem", "setitem", 
+                 "call", "enter", "exit", "copy", "deepcopy"]
      
     def __new__(cls, name, bases, dct):
         for op in Operable.OPERATORS:
             def op_func(*args, **kwargs):
-                return Operation(op, *args, *kwargs)
+                return Operation(op, *args, **kwargs)
             dct[f"__{op}__"] = op_func
                 
         return super().__new__(cls, name, bases, dct)
@@ -50,13 +60,14 @@ class Operation(metaclass=Operable):
     
     :type op: object
     """
-    def __init__(self, op, *args, **kwargs):          
+    def __init__(self, op, *args, **kwargs):    
+        import pdb; pdb.set_trace()
         self._op = op
         self._args = args
         self._kwargs = kwargs
         
     def __str__(self):
-        return f"Operation({self._args}, {self._kwargs})"
+        return f"Operation({self._op}, {self._args}, {self._kwargs})"
     
 class Symbol(metaclass=Operable):
     """
@@ -88,7 +99,7 @@ class Symbol(metaclass=Operable):
         
         :param v: Value to assign
         
-        :param force: IF `True`, allows reassignment of already-assigned instances.
+        :param force: If `True`, allows reassignment of already-assigned instances.
         
         :type force: bool
         """
@@ -109,6 +120,8 @@ class Symbol(metaclass=Operable):
         if not Symbol.assigned(self):
             raise ValueError("Attempted access of an unassigned Symbol.")
         return self._value
+    
+    
     
     @staticmethod
     def assigned(obj):
@@ -155,14 +168,14 @@ class ManagedResource(Operable):
     :type use_instance_size: bool, optional
     """
     def __new__(
-        cls_meta_new, 
-        name, bases, dct, 
-        instance_limit=None, 
+        cls_meta_new,
+        name_meta_new,
+        bases_meta_new,
+        dct_meta_new,
+        instance_limit=None,
         use_instance_size=True):
         
-        def cls_new(cls, 
-                    allocate=True, 
-                    resource_id=None, *inst_args, **inst_kwargs):
+        def cls_new(cls, *inst_args, **inst_kwargs):
             """
             Create a new instance representing a hardware resource. If a 
             resource limit has been provided and reached, existing 
@@ -189,8 +202,10 @@ class ManagedResource(Operable):
                         return instance
                     
                 raise ValueError(f"Unable to allocate resource; instance limit reached for {cls} with no released instance found.")
-                
-            instance = super().__new__(cls, *inst_args, **inst_kwargs)
+            allocate = inst_kwargs.pop("allocate", True)
+            resource_id = inst_kwargs.pop("resource_id", None)
+            
+            instance = super(cls, cls).__new__(cls, *inst_args, **inst_kwargs)
             instance._released = allocate
             instance._resource_id = Symbol() if resource_id is None else resource_id
             cls.instances.append(instance)
@@ -219,7 +234,7 @@ class ManagedResource(Operable):
                 raise TypeError(f'Attempted allocation of resource with non-Symbol resource ID.')
             
             self._released = False
-            cls.allocation_index += self.size if use_instance_size and hasattr(self, "size") else 1
+            self.allocation_index += self.size if use_instance_size and hasattr(self, "size") else 1
         
         def insert(cls, res, before=None, reallocate=True):
             """
@@ -254,13 +269,16 @@ class ManagedResource(Operable):
             limit of the class is reached.
             """
             self._released = True
-            
-        cls_attrs = {"instances": [], 
-                     "allocation_index": 0, 
-                     "__new__": cls_new, 
-                     "allocate": allocate, 
-                     "insert": classmethod(insert), 
-                     "is_released": is_released, 
-                     "release": release, **dct}
-        return super().__new__(cls_meta_new, name, bases, cls_attrs)
+        
+        
+        attrs = {"instances": [],
+                "allocation_index": 0,
+                "__new__": cls_new,
+                "allocate": allocate,
+                "insert": classmethod(insert),
+                "is_released": is_released,
+                "release": release,
+                **dct_meta_new}
+        new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)
+        return new_cls
         
