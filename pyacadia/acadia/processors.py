@@ -177,15 +177,19 @@ class Processor(ABC):
         # :class:`Processor` for retrieval during assembly
         self._data = None
         
+        # A list containing machine instructions for the compiled program
+        self._compiled_program = None
+        
         # The custom resource for storing instructions. One could argue that
         # this should be defined at the class level to better represent the 
         # fact that all processors of a given type will have the same kinds
         # of instructions. The only reason we choose to make the instruction
-        # type an instance member is so that its instances can be tracked.
+        # type an instance member is so that its instances created for a 
+        # particular Processor object can be tracked
         self._Instruction = ManagedResource(
                                 f"Instruction", 
                                 (dict,), 
-                                {}, 
+                                {"OPERATORS": []}, 
                                 instance_limit=instruction_limit)
         
         # For every instruction, bind a new method to the instance with the name
@@ -285,6 +289,9 @@ class Processor(ABC):
         if self._data is not None and not overwrite:
             raise ValueError("Processor data is non-empty; set overwrite=True to overwrite.")
             
+        if self._compiled_program is not None and not overwrite:
+            raise ValueError("Compiled program is non-empty; set overwrite=True to overwrite.")
+            
         # Reset the data dictionary
         self._data = {}
         
@@ -303,20 +310,21 @@ class Processor(ABC):
         for instruction in self._Instruction.instances:
             # Create a new block if necessary
             if instruction["block_start"]:
-                blocks.append([])
                 block_prev = block_current
                 block_current = len(blocks)
+                blocks.append([])
                 block_level += 1
                 
             # Compile the instruction
             compilation_func = self._instruction_set[instruction["instruction"]]
             instruction["block_level"] = block_level
-            compiled_instructions = compilation_func(instruction)
+            compiled_instructions = compilation_func(self, instruction)
             
             # Run some sanity checks on the output
             if not isinstance(compiled_instructions, list):
                 raise TypeError(f"Expected list of compiled outputs from calling"
                                 f" compilation function; received {compiled_instructions}")
+                
             if len(compiled_instructions) == 0:
                 raise ValueError(f"Instruction resulted in empty compilation:"
                                  f" {instruction}")
@@ -335,14 +343,12 @@ class Processor(ABC):
                 block_level -= 1
                 
         # Flatten the compiled program and assign compiled instruction addresses
-        flattened_program = []
+        self._compiled_program = []
         for block in blocks:
-            for idx_instruction,instruction in block:
-                instruction["compiled_address"].assign(len(flattened_program))
-                flattened_program.extend(instruction["compiled_instructions"])
-                                
-        return flattened_program
-    
+            for idx_instruction,instruction in enumerate(block):
+                instruction["compiled_address"].assign(len(self._compiled_program))
+                self._compiled_program.extend(instruction["compiled_instructions"])
+                                    
     @classmethod
     @abstractmethod
     def assemble(cls, flattened_program):
@@ -470,7 +476,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
                              " in order to specify the operation being performed.")
             
         op = instruction_resource["args"][0]
-        compiled_kwargs = {k: self.compile_arg(v) for k,v in op._kwargs.items()}
+        compiled_kwargs = {k: self.compile_arg(v) for k,v in instruction_resource["kwargs"].items()}
         
         if isinstance(op, str):
             line_list = [op]
@@ -481,7 +487,9 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             raise TypeError(f"Operation of incompatible type ({type(op)}): {op}")
         
         indent = "    "*instruction_resource["block_level"]
-        return [indent + line.format(**compiled_kwargs) for line in line_list]
+        if len(compiled_kwargs) > 0:
+            return [indent + line.format(**compiled_kwargs) for line in line_list]
+        return [indent + line for line in line_list]
     
     def call_subroutine(self, instruction_resource):
         """
@@ -554,9 +562,9 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             if len(operation._args) != 1 or len(operation._kwargs) != 0:
                 raise ValueError("An import Operation must have exactly one positional argument"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-        if operation._op == "__call__":
+        if operation._op == "call":
             if len(operation._args) == 0:
-                raise ValueError("A __call__ Operation must have at least one positional argument"
+                raise ValueError("A call Operation must have at least one positional argument"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
                 
             if isinstance(operation._args[0], str):
@@ -564,77 +572,81 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             elif isinstance(operation._args[0], FunctionType):
                 callname = self.compile_cached_object(operation._args[0])
             else:
-                raise TypeError(f"Invalid type of callable for __call__ Operation: {operation._args[0]}")
+                raise TypeError(f"Invalid type of callable for call Operation: {operation._args[0]}")
                 
-            translated_args = [self.compile_arg(arg) for arg in operation._args[1:]]
-            translated_kwargs = [f"{k}={self.compile_arg(v)}" for k,v in operation._kwargs.items()]
-            return f"{callname}({','.join(translated_args)}, {','.join(translated_kwargs)})"
+            compiled_args = [self.compile_arg(arg) for arg in operation._args[1:]]
+            compiled_kwargs = [f"{k}={self.compile_arg(v)}" for k,v in operation._kwargs.items()]
+            return f"{callname}({','.join(compiled_args)}, {','.join(compiled_kwargs)})"
         
-        if operation._op == "__getattr__":
+        if operation._op == "getattr":
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
-                raise ValueError(f"A __getattr__ Operation must have exactly two positional arguments"
+                raise ValueError(f"A getattr Operation must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
             return f"getattr({operation._args[0]}, \"{operation._args[1]}\")"
         
-        if operation._op == "__setattr__":
+        if operation._op == "setattr":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
-                raise ValueError(f"A __setattr__ Operation must have exactly three positional arguments"
+                raise ValueError(f"A setattr Operation must have exactly three positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
             translated_value = self.compile_arg(operation._args[2])
             return f"setattr({operation._args[0]}, \"{operation._args[1]}\", {translated_value})"
         
-        if operation._op == "__getitem__":
+        if operation._op == "getitem":
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
-                raise ValueError(f"A __getitem__ Operation must have exactly two positional arguments"
+                raise ValueError(f"A getitem Operation must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
             translated_key = self.compile_arg(operation._args[1])
             return f"{operation._args[0]}[{translated_key}]"
         
-        if operation._op == "__setitem__":
+        if operation._op == "setitem":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
-                raise ValueError(f"A __setitem__ Operation must have exactly three positional arguments"
+                raise ValueError(f"A setitem Operation must have exactly three positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
             translated_key = self.compile_arg(operation._args[1])
             translated_value = self.compile_arg(operation._args[2])
             return f"{operation._args[0]}[{translated_key}] = {translated_value}"
         
-        if operation._op in ["__neg__", "__abs__", "__invert__"]:
+        if operation._op in ["neg", "abs", "invert"]:
             # Unary operators
             if len(operation._args) != 1 or len(operation._kwargs) != 0:
                 raise ValueError(f"A {operation._op} Operation must have exactly one positional argument"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            return f"operator.{operation._op}({operation._args[0]})"
+            compiled_arg = self.compile_arg(operation._args[0])
+            return f"operator.__{operation._op}__({compiled_arg})"
         
-        if operation._op in ["__eq__", "__ne__", "__lt__", "__gt__", "__le__", 
-                             "__ge__", "__add__", "__sub__", "__mul__", 
-                             "__floordiv__", "__truediv__", "__mod__", 
-                             "__pow__", "__lshift__", "__rshift__", "__and__",
-                             "__or__", "__xor__"]:
+        if operation._op in ["eq", "ne", "lt", "gt", "le", 
+                             "ge", "add", "sub", "mul", 
+                             "floordiv", "truediv", "mod", 
+                             "pow", "lshift", "rshift", "and",
+                             "or", "xor"]:
             # Binary operators
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"A {operation._op} Operation must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            return f"operator.{operation._op}({operation._args[0]}, {operation._args[1]})"
+            compiled_args = [self.compile_arg(arg) for arg in operation._args]    
+            return f"operator.__{operation._op}__({compiled_args[0]}, {compiled_args[1]})"
         
-        if operation._op in ["__radd__", "__rsub__", "__rmul__", 
-                             "__rfloordiv__", "__rtruediv__", "__rmod__", 
-                             "__rpow__", "__rlshift__", "__rrshift__", 
-                             "__rand__", "__ror__", "__rxor__"]:
+        if operation._op in ["radd", "rsub", "rmul", 
+                             "rfloordiv", "rtruediv", "rmod", 
+                             "rpow", "rlshift", "rrshift", 
+                             "rand", "ror", "rxor"]:
             # Right-handed binary operators
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with {operation._op} must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            return f"operator.{operation._op}({operation._args[1]}, {operation._args[0]})"
+            compiled_args = [self.compile_arg(arg) for arg in operation._args]
+            return f"operator.__{operation._op}__({compiled_args[1]}, {compiled_args[0]})"
         
-        if operation._op in ["__iadd__", "__isub__", "__imul__", 
-                             "__ifloordiv__", "__itruediv__", "__imod__", 
-                             "__ipow__", "__ilshift__", "__irshift__", 
-                             "__iand__", "__ior__", "__ixor__"]:
+        if operation._op in ["iadd", "isub", "imul", 
+                             "ifloordiv", "itruediv", "imod", 
+                             "ipow", "ilshift", "irshift", 
+                             "iand", "ior", "ixor"]:
             # Right-handed binary operators
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"An Operation with {operation._op} must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            return f"{operation._args[0]} = operator.{operation._op}({operation._args[0]}, {operation._args[1]})"
+            compiled_args = [self.compile_arg(arg) for arg in operation._args]
+            return f"{compiled_args[0]} = operator.__{operation._op}__({compiled_args[0]}, {compiled_args[1]})"
 
         raise ValueError(f"Unable to translate operation {operation._op} with"
                          f" args={operation._args}, kwargs={operation._kwargs}.")
@@ -645,7 +657,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         Access a Python object in the namespace of the compiled program.
         """
-        return Operation("__getitem__", f"self.data", key)
+        return Operation("getitem", f"self.data", key)
         
     def __setitem__(self, key, value):
         """
@@ -656,7 +668,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         :type key: `str`
         :param value: The value to assign to the variable
         """
-        return self(Operation("__setitem__", f"self.data", key, value))
+        return self(Operation("setitem", f"self.data", key, value))
     
     def __getattr__(self, key):
         """
@@ -664,7 +676,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         if key.startswith("_") or key == "Import" or key in self._instruction_set or hasattr(self.__class__, key):
             return super().__getattribute__(key)
-        return Operation("__getitem__", f"self.data", key)
+        return Operation("getitem", f"self.data", key)
         
     def __setattr__(self, key, value):
         """
@@ -677,7 +689,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         if key.startswith("_") or key == "Import" or key in self._instruction_set or hasattr(self.__class__, key):
             return super().__setattr__(key, value)
-        self(Operation("__setitem__", f"self.data", key, value))
+        self(Operation("setitem", f"self.data", key, value))
     
     # Macros for control flow
     

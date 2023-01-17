@@ -31,17 +31,42 @@ class Operable(type):
                  "and", "rand", "iand", 
                  "or", "ror", "ior", 
                  "xor", "rxor", "ixor", 
-                 "bool", "len", "contains", 
-                 "iter", "getitem", "setitem", 
-                 "call", "enter", "exit", "copy", "deepcopy"]
-     
-    def __new__(cls, name, bases, dct):
-        for op in Operable.OPERATORS:
+                 "bool", "len",  
+                 "iter", "getitem", "setitem", "call", "contains",]
+    
+    @staticmethod
+    def make_op_func(op):
+        """
+        A function factory for creating functions for operator calls. This is
+        mainly necessary because if we try to loop through the list of 
+        operators in __new__ like this:
+        
+        ```
+        for op in supported_operators:
             def op_func(*args, **kwargs):
                 return Operation(op, *args, **kwargs)
             dct[f"__{op}__"] = op_func
-                
-        return super().__new__(cls, name, bases, dct)
+        ```
+        
+        then the iteration variable `op` will be evaluated when `op_func` is
+        called, instead of when `op_func` is defined (you can think of this 
+        like referencing a global variable in a function; this is technically
+        exactly what's happening, since `for` loops in Python don't create a 
+        scope). Instead, we want to create a closure that will capture the 
+        value of `op` at the time of the function definition and appropriately
+        return an :class:`Operation` that stores it. See `this StackOverflow 
+        post <https://stackoverflow.com/questions/3431676/creating-functions-or-lambdas-in-a-loop-or-comprehension>` 
+        for more information.
+        """
+        def op_func(*args, **kwargs):
+            return Operation(op, *args, **kwargs)
+        return op_func
+     
+    def __new__(cls, name, bases, dct):
+        supported_operators = dct["OPERATORS"] if "OPERATORS" in dct else Operable.OPERATORS
+        for op in supported_operators:
+            dct[f"__{op}__"] = Operable.make_op_func(op)
+        return super(Operable, cls).__new__(cls, name, bases, dct)
     
 class Operation(metaclass=Operable):
     """
@@ -60,13 +85,15 @@ class Operation(metaclass=Operable):
     
     :type op: object
     """
-    def __init__(self, op, *args, **kwargs):    
-        import pdb; pdb.set_trace()
+    def __init__(self, op, *args, **kwargs):  
         self._op = op
         self._args = args
         self._kwargs = kwargs
         
     def __str__(self):
+        return f"Operation({self._op}, {self._args}, {self._kwargs})"
+    
+    def __repr__(self):
         return f"Operation({self._op}, {self._args}, {self._kwargs})"
     
 class Symbol(metaclass=Operable):
@@ -120,8 +147,6 @@ class Symbol(metaclass=Operable):
         if not Symbol.assigned(self):
             raise ValueError("Attempted access of an unassigned Symbol.")
         return self._value
-    
-    
     
     @staticmethod
     def assigned(obj):
@@ -279,6 +304,7 @@ class ManagedResource(Operable):
                 "is_released": is_released,
                 "release": release,
                 **dct_meta_new}
+
         new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)
         return new_cls
         
