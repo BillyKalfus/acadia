@@ -180,6 +180,13 @@ class Processor(ABC):
         # A list containing machine instructions for the compiled program
         self._compiled_program = None
         
+        # Create some variables that will allow us to keep track of whether the
+        # next instruction will start or end a block
+        self._block_start_next = False
+        self._block_end_next = False
+        self._inline_block_start_next = False
+        self._inline_block_end_next = False
+        
         # The custom resource for storing instructions. One could argue that
         # this should be defined at the class level to better represent the 
         # fact that all processors of a given type will have the same kinds
@@ -215,9 +222,19 @@ class Processor(ABC):
                 * `block_end`: If `True`, indicates that this instruction is 
                 the last in a non-inlined block.
                 
-                * `block_level`: The nesting level of the block to which this
-                instruction belongs. This field is automatically populated 
-                during compilation and should not be manually manipulated.
+                * `inline_block_start`: If `True`, indicates that this 
+                instruction is the first in an inlined block. This is primarily
+                used for bookkeeping and keeping track of indentation.
+                   
+                * `inline_block_end`: If `True`, indicates that this 
+                instruction is the first in an inlined block. This is primarily
+                used for bookkeeping and keeping track of indentation.
+                
+                * `inline_block_level`: The nesting level of the inline block
+                to which this instruction belongs. This is primarily used for 
+                bookkeeping and keeping track of indentation. This field is 
+                automatically populated during compilation and should not be
+                manually manipulated.
                 
                 * `compiled_address`: When this instruction is compiled, it 
                 will result in one or more native instructions in the resulting
@@ -237,46 +254,61 @@ class Processor(ABC):
                     "kwargs": kwargs, 
                     "block_start": proc_self._block_start_next, 
                     "block_end": proc_self._block_end_next,
-                    "block_level": None,
+                    "inline_block_start": proc_self._inline_block_start_next, 
+                    "inline_block_end": proc_self._inline_block_end_next,
+                    "inline_block_level": None,
                     "compiled_address": Symbol(),
                     "compiled_instructions": None,
                 })
                 
                 proc_self._block_start_next = False
                 proc_self._block_end_next = False
+                proc_self._inline_block_start_next = False
+                proc_self._inline_block_end_next = False
 
                 return instruction_resource
                 
             setattr(self.__class__, instruction_name, append_instruction)
             
-    def block_start(self, previous_instruction=False):
+    def block_start(self, inline=False, previous_instruction=False):
         """
-        Indicate that the next instruction called is the first in a non-inlined
+        Indicate that the next instruction called is the first in a
         block. Optionally, this can be applied to the previous instruction by
         setting `previous_instruction=True`.
-        :param prev: if `True`, indicates that the most recent instruction
+        :param inline: If `True`, indicates that the block being created is inline.
+        :type inline: `bool`, optional
+        :param previous_instruction: if `True`, indicates that the most recent instruction
         added should be the start of the block, rather than the next one to be 
         added.
-        :type prev: `bool`
+        :type previous_instruction: `bool`, optional
         """
         if previous_instruction:
-            self._Instruction.instances[-1]["block_start"] = True
+            self._Instruction.instances[-1]["inline_block_start" if inline else "block_start"] = True
         else:
-            self._block_start_next = True
+            if inline:
+                self._inline_block_start_next = True
+            else:
+                self._block_start_next = True
+            
         
-    def block_end(self, next_instruction=False):
+    def block_end(self, inline=False, next_instruction=False):
         """
         Indicate that the previous instruction called is the last in a 
-        non-inlined block. Optionally, this can be applied to the next 
+        block. Optionally, this can be applied to the next 
         instruction by setting `next_instruction=True`.
+        :param inline: If `True`, indicates that the block being created is inline.
+        :type inline: `bool`, optional
         :param next_instruction: if `True`, indicates that the next instruction added 
         should be the end of the block, rather than the previous one.
-        :type next_instruction: `bool`
+        :type next_instruction: `bool`, optional
         """
         if next_instruction:
-            self._block_end_next = True
+            if inline:
+                self._inline_block_end_next = True
+            else:
+                self._block_end_next = True
         else:
-            self._Instruction.instances[-1]["block_end"] = True
+            self._Instruction.instances[-1]["inline_block_end" if inline else "block_end"] = True
         
     def compile_all(self, overwrite=False):
         """
@@ -301,10 +333,15 @@ class Processor(ABC):
         # the corresponding blocks
         blocks = [[]]
         
+        # Keep track of how deep into inline blocks we go (needed to keep track
+        # of indentation)
+        inline_block_level = [0]
+        
         # Some variables for keeping track of program structure as we iterate
         block_prev = None
         block_current = 0
-        block_level = 0
+        
+        
         
         # Compile every instruction and arrange blocks as necessary
         for instruction in self._Instruction.instances:
@@ -313,11 +350,15 @@ class Processor(ABC):
                 block_prev = block_current
                 block_current = len(blocks)
                 blocks.append([])
-                block_level += 1
+                inline_block_level.append(0)
+            
+            # Start the inline block, making sure to do this after starting the full block
+            if instruction["inline_block_start"]:
+                inline_block_level[block_current] += 1
                 
             # Compile the instruction
             compilation_func = self._instruction_set[instruction["instruction"]]
-            instruction["block_level"] = block_level
+            instruction["inline_block_level"] = inline_block_level[block_current]
             compiled_instructions = compilation_func(self, instruction)
             
             # Run some sanity checks on the output
@@ -337,10 +378,13 @@ class Processor(ABC):
             instruction["compiled_instructions"] = compiled_instructions
             blocks[block_current].append(instruction)
             
+            # End the inline block, making sure to do this before ending the full block
+            if instruction["inline_block_end"]:
+                inline_block_level[block_current] -= 1
+            
             # End the block if necessary
             if instruction["block_end"]:
                 block_current = block_prev
-                block_level -= 1
                 
         # Flatten the compiled program and assign compiled instruction addresses
         self._compiled_program = []
@@ -406,11 +450,11 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
     """
     
     # A dictionary indicating which types of arguments may be cached for 
-    # retrieval at runtime. The keys are the names of the classes, and the 
+    # retrieval at runtime. The keys are the types, and the 
     # values are strings indicating any post-processing needed at runtime to
     # extract the relevant argument data (such as extracting the value of a 
-    # Symbol). This string is formatted with the key "obj" whose value is the
-    # predicate accessing the object at runtime.
+    # Symbol). This string is formatted with the key "obj" whose value is 
+    # assigned as the object at runtime.
     cacheable_types = {Symbol       : "{obj}.value",
                        range        : "{obj}",
                        list         : "{obj}",
@@ -427,7 +471,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             self(Operation("import", lib_name))
             
         def import_getattr(import_self, attr):
-            return Operation("__getattr__", lib_name, attr)
+            return Operation("getattr", import_self._lib_name, attr)
                 
         self.Import = ManagedResource("Import", 
                                       (), 
@@ -440,11 +484,6 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         # this at the macro level, so we'll just keep a running count since
         # any arbitrary unique value is fine
         self._loop_count = 0
-        
-        # Create some variables that will allow us to keep track of whether the
-        # next instruction will start or end a block
-        self._block_start_next = False
-        self._block_end_next = False
     
     # Fundamentally, PythonProcessors only have one native instruction:
     # the ability to execute a line of Python code
@@ -486,7 +525,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         else:
             raise TypeError(f"Operation of incompatible type ({type(op)}): {op}")
         
-        indent = "    "*instruction_resource["block_level"]
+        indent = "    "*instruction_resource["inline_block_level"]
         if len(compiled_kwargs) > 0:
             return [indent + line.format(**compiled_kwargs) for line in line_list]
         return [indent + line for line in line_list]
@@ -511,9 +550,9 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         if type(obj) not in self.cacheable_types:
             raise TypeError(f"Unable to cache object of type {type(obj)}: {obj}")
             
-        cache_key = f"{len(self.data)}"
-        self.data[cache_key] = obj
-        object_retrieval_string = f"self.data[{cache_key}]"
+        cache_key = f"_cached_object{len(self._data)}"
+        self._data[cache_key] = obj
+        object_retrieval_string = f"self._data['{cache_key}']"
         return self.cacheable_types[type(obj)].format(obj=object_retrieval_string)
         
     def compile_arg(self, obj):
@@ -562,6 +601,13 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             if len(operation._args) != 1 or len(operation._kwargs) != 0:
                 raise ValueError("An import Operation must have exactly one positional argument"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
+                
+            lib_name = operation._args[0]
+            if not isinstance(lib_name, str):
+                raise TypeError(f"Library name for import instruction must be of type str; received {lib_name}.")
+            
+            return f"import {lib_name}"
+        
         if operation._op == "call":
             if len(operation._args) == 0:
                 raise ValueError("A call Operation must have at least one positional argument"
@@ -572,17 +618,24 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             elif isinstance(operation._args[0], FunctionType):
                 callname = self.compile_cached_object(operation._args[0])
             else:
-                raise TypeError(f"Invalid type of callable for call Operation: {operation._args[0]}")
+                callname = self.compile_arg(operation._args[0])
                 
-            compiled_args = [self.compile_arg(arg) for arg in operation._args[1:]]
-            compiled_kwargs = [f"{k}={self.compile_arg(v)}" for k,v in operation._kwargs.items()]
-            return f"{callname}({','.join(compiled_args)}, {','.join(compiled_kwargs)})"
+            compiled_args_kwargs = [self.compile_arg(arg) for arg in operation._args[1:]]
+            compiled_args_kwargs += [f"{k}={self.compile_arg(v)}" for k,v in operation._kwargs.items()]
+            
+            tmp = f"{callname}({', '.join(compiled_args_kwargs)})"
+            
+            return tmp
         
         if operation._op == "getattr":
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"A getattr Operation must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            return f"getattr({operation._args[0]}, \"{operation._args[1]}\")"
+            if not isinstance(operation._args[1], str):
+                raise TypeError(f"Attribute must be a string; received {operation._args[1]}")
+                
+            item = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
+            return f"{item}.{operation._args[1]}"
         
         if operation._op == "setattr":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
@@ -646,7 +699,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
                 raise ValueError(f"An Operation with {operation._op} must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
             compiled_args = [self.compile_arg(arg) for arg in operation._args]
-            return f"{compiled_args[0]} = operator.__{operation._op}__({compiled_args[0]}, {compiled_args[1]})"
+            return f"operator.__{operation._op}__({compiled_args[0]}, {compiled_args[1]})"
 
         raise ValueError(f"Unable to translate operation {operation._op} with"
                          f" args={operation._args}, kwargs={operation._kwargs}.")
@@ -657,7 +710,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         Access a Python object in the namespace of the compiled program.
         """
-        return Operation("getitem", f"self.data", key)
+        return Operation("getitem", f"self._data", key)
         
     def __setitem__(self, key, value):
         """
@@ -668,7 +721,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         :type key: `str`
         :param value: The value to assign to the variable
         """
-        return self(Operation("setitem", f"self.data", key, value))
+        return self(Operation("setitem", f"self._data", key, value))
     
     def __getattr__(self, key):
         """
@@ -676,7 +729,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         if key.startswith("_") or key == "Import" or key in self._instruction_set or hasattr(self.__class__, key):
             return super().__getattribute__(key)
-        return Operation("getitem", f"self.data", key)
+        return Operation("getitem", f"self._data", key)
         
     def __setattr__(self, key, value):
         """
@@ -689,7 +742,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         if key.startswith("_") or key == "Import" or key in self._instruction_set or hasattr(self.__class__, key):
             return super().__setattr__(key, value)
-        self(Operation("setitem", f"self.data", key, value))
+        self(Operation("setitem", f"self._data", key, value))
     
     # Macros for control flow
     
@@ -704,56 +757,52 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         compiled as an argument
         """
         self("if {condition}:", condition=condition)
-        self.block_start()
+        self.block_start(inline=True)
         yield
-        self.block_end()
+        self.block_end(inline=True)
         
     @contextmanager
-    def loop(self, iterable, idx_symbol=None, element_symbol=None):
+    def loop(self, iterable, use_symbols=False):
         """
         A context manager for iterating over an iterable with a Python `for`
         statement. A block with the loop body is automatically created and
-        exited when entering and exiting the context, respectively. Optionally,
-        :class:`Symbol` objects may be provided into which the iteration index
-        of the loop and the element of the iterable at that iteration will be
-        stored, for possible retrieval at runtime.
-        
-        :param idx_symbol: :class:`Symbol` into which the loop index will be 
-        stored at each iteration
-        
-        :type idx_symbol: :class:`Symbol`, optional
-        
-        :param element_symbol: :class:`Symbol` into which the loop index will
-        be stored at each iteration
-        
-        :type element_symbol: :class:`Symbol`, optional
+        exited when entering and exiting the context, respectively. 
+        :class:`Operation` objects retrieving the iteration index and the 
+        elements are yielded in a tuple, similar to the behavior of 
+        `enumerate`. Optionally, these may be encapsulated in (and yielded as)
+        :class:`Symbol` objects which are assigned at the start of the loop 
+        body, which may be useful in certain applications.
         """
+        # Create Operation objects that will retrieve the loop variables
+        idx_operation = self[f'loop{self._loop_count}_idx']
+        element_operation = self[f'loop{self._loop_count}_element']
+        
+        if use_symbols:
+            idx_symbol = Symbol()
+            element_symbol = Symbol()
         
         # Create the loop statement itself
-        self(f"for self.data['loop{self.loop_count}_idx'],"
-             f"self.data['loop{self.loop_count}_el']"
-              " in enumerate({iterable}):", iterable=iterable)
+        self(f"for {{idx}},{{element}} in enumerate({{iterable}}):", 
+                 idx=idx_operation, element=element_operation, iterable=iterable)
         
-        # Start the block and assign any provided Symbols
-        self.block_start()
-        if idx_symbol is not None:
-            self(Operation("__call__", 
-                           Symbol.assign, 
-                           idx_symbol, 
-                           getattr(self, f'loop{self.loop_count}_idx'), 
-                           force=True))
-            
-        if element_symbol is not None:
-            self(Operation("__call__", 
-                           Symbol.assign, 
-                           element_symbol, 
-                           getattr(self, f'loop{self.loop_count}_el'), 
-                           force=True))
-            
-        self.loop_count += 1
-        yield
+        # Start the block
+        self.block_start(inline=True)
         
-        self.block_end()
+        # Assign symbols, if they were created
+        if use_symbols:
+            self("{symbol}.assign({idx}, force=True)", 
+                     symbol=idx_symbol, idx=idx_operation) 
+            self("{symbol}.assign({element}, force=True)", 
+                     symbol=element_symbol, element=element_operation) 
+
+        self._loop_count += 1
+        
+        # Yield either the data reference to the iteration variables or the
+        # Symbols encapsulating them
+        yield (idx_symbol if use_symbols else idx_operation,
+               element_symbol if use_symbols else element_operation)
+        
+        self.block_end(inline=True)
         
     @contextmanager
     def wait_until(self, condition):
@@ -768,15 +817,12 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         compiled as an argument
         """
         self("while not {condition}:", condition=condition)
-        self.block_start()
+        self.block_start(inline=True)
         yield
-        self.block_end()
+        self.block_end(inline=True)
         
     def assemble(self):
-        self._assembled_program = []
-        for op in self._Instruction.instances:
-            for compiled_instruction in op["compiled_instructions"]:
-                self._assembled_program.append(compile(compiled_instruction, "", "exec"))
+        self._assembled_program = compile("\n".join(self._compiled_program), "", "exec")
     
     def run(self):
         """

@@ -198,22 +198,14 @@ class ManagedResource(Operable):
         bases_meta_new,
         dct_meta_new,
         instance_limit=None,
-        use_instance_size=True):
+        use_instance_size=False):
         
         def cls_new(cls, *inst_args, **inst_kwargs):
             """
             Create a new instance representing a hardware resource. If a 
             resource limit has been provided and reached, existing 
             allocations will be checked to see if they were released, and if so,
-            may be returned. Created resources can also defer allocation until 
-            the future, allowing strategic control of the allocation value. 
-            
-            :param allocate: If `False`, the returned instance will not be 
-            added to the list of managed resources, the :field:`resource_id` 
-            field will not be assigned, and the class :field:`allocation_index` 
-            field will not be updated.
-            
-            :type allocate: bool
+            may be returned.
             
             :param resource_id: The ID of resource, which may be any type and 
             whose interpretation is left to the owning class. If not provided,
@@ -222,46 +214,26 @@ class ManagedResource(Operable):
             if instance_limit is not None and len(cls.instances) >= instance_limit:
                 # Find a free instance we can use, as indicated by noting that it is released
                 for instance in cls.instances:
-                    if instance.is_released():
+                    if instance._released:
                         instance._released = False
                         return instance
                     
                 raise ValueError(f"Unable to allocate resource; instance limit reached for {cls} with no released instance found.")
-            allocate = inst_kwargs.pop("allocate", True)
             resource_id = inst_kwargs.pop("resource_id", None)
             
-            instance = super(cls, cls).__new__(cls, *inst_args, **inst_kwargs)
-            instance._released = allocate
+            instance = super(cls, cls).__new__(cls)
+            instance._released = False
             instance._resource_id = Symbol() if resource_id is None else resource_id
+            
+            if isinstance(resource_id, Symbol) and not Symbol.assigned(resource_id):
+                instance._resource_id.assign(cls._allocation_index)
+            
+            cls._allocation_index += inst_kwargs["size"] if use_instance_size else 1
             cls.instances.append(instance)
             
-            if allocate:
-                instance.allocate()
-            
             return instance
-                        
-        def allocate(self, force=False):
-            """
-            Allocate the resource by assigning :field:`_resource_id`. If 
-            :field:`_resource_id` is a :class:`Symbol`, it is assigned while
-            passing the keyword argument `force`. Otherwise, :class:`TypeError`
-            is thrown, as resource IDs must be instances of :class:`Symbol` to
-            be allocated.
-            
-            :param force: The `force` argument passed to the :class:`Symbol` 
-            assignment.
-            
-            :type force: `bool`
-            """
-            if isinstance(self._resource_id, Symbol):
-                self._resource_id.assign(self.__class__.allocation_index, force=force)
-            else:
-                raise TypeError(f'Attempted allocation of resource with non-Symbol resource ID.')
-            
-            self._released = False
-            self.allocation_index += self.size if use_instance_size and hasattr(self, "size") else 1
         
-        def insert(cls, res, before=None, reallocate=True):
+        def _insert(cls, res, before=None, reallocate=True):
             """
             Insert a resource before a specified resource in the instance list.
             If no resource is specified to determine the insertion location, 
@@ -275,34 +247,14 @@ class ManagedResource(Operable):
             cls.instances.remove(res)
             cls.instances.insert(cls.instances.index(before) if before is not None else len(cls.instances), res)
             
-            cls.allocation_index = 0
+            cls._allocation_index = 0
             for instance in cls.instances:
-                instance.allocate(force=True)
-            
-        def is_released(self):
-            """
-            :return: `True` if the resource is currently released and available
-            for use or reuse.
-            
-            :rtype: `bool`
-            """
-            return self._released
-
-        def release(self):
-            """
-            Release a resource, allowing it to be reused if the allocation 
-            limit of the class is reached.
-            """
-            self._released = True
-        
+                instance._allocate(force=True)
         
         attrs = {"instances": [],
-                "allocation_index": 0,
-                "__new__": cls_new,
-                "allocate": allocate,
-                "insert": classmethod(insert),
-                "is_released": is_released,
-                "release": release,
+                 "__new__": cls_new,
+                 "_allocation_index": 0,
+                 "_insert": classmethod(_insert),
                 **dct_meta_new}
 
         new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)
