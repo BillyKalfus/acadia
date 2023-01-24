@@ -17,22 +17,28 @@ class Operable(type):
     classes and return a symbolic representation of the operator call.
     """
     
+    # A list of all operator methods that will return an Operation object
     OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", 
                  "neg", "abs", "invert",
-                 "add", "radd", "iadd", 
-                 "sub", "rsub", "isub", 
-                 "mul", "rmul", "imul",
-                 "floordiv", "rfloordiv", "ifloordiv",
-                 "truediv", "rtruediv", "itruediv", 
-                 "mod", "rmod","imod", 
-                 "pow", "rpow", "ipow", 
-                 "lshift", "rlshift", "ilshift",
-                 "rshift", "rrshift", "irshift", 
-                 "and", "rand", "iand", 
-                 "or", "ror", "ior", 
-                 "xor", "rxor", "ixor", 
+                 "add", "radd",  
+                 "sub", "rsub", 
+                 "mul", "rmul", 
+                 "floordiv", "rfloordiv", 
+                 "truediv", "rtruediv", 
+                 "mod", "rmod", 
+                 "pow", "rpow", 
+                 "lshift", "rlshift", 
+                 "rshift", "rrshift", 
+                 "and", "rand", 
+                 "or", "ror", 
+                 "xor", "rxor", 
                  "bool", "len",  
                  "iter", "getitem", "setitem", "call", "contains",]
+    
+    # A list of all operators that will require a handler
+    HANDLED_OPERATORS = ["iadd", "isub", "imul", "ifloordiv", "itruediv",
+                         "imod", "ipow", "ilshift", "irshift", "iand", "ior",
+                         "ixor"]
     
     @staticmethod
     def make_op_func(op):
@@ -44,7 +50,7 @@ class Operable(type):
         ```
         for op in supported_operators:
             def op_func(*args, **kwargs):
-                return Operation(op, *args, **kwargs)
+                return handler(op, *args, **kwargs)
             dct[f"__{op}__"] = op_func
         ```
         
@@ -59,13 +65,47 @@ class Operable(type):
         for more information.
         """
         def op_func(*args, **kwargs):
-            return Operation(op, *args, **kwargs)
+            operation = Operation(op, *args, **kwargs)
+            if op in Operable.HANDLED_OPERATORS:
+                args[0].operator_handler(operation)
+                return args[0]
+            return operation
+        
         return op_func
      
     def __new__(cls, name, bases, dct):
-        supported_operators = dct["OPERATORS"] if "OPERATORS" in dct else Operable.OPERATORS
+        """
+        Creates a new :class:`Operable` type. Certain keyword arguments
+        provided to this constructor will augment the behavior of the operator
+        methods, listed below as parameters (since they will be parameters of
+        the constructor, but will appear as entries in `dct`).
+        
+        :param operators: A list of operators that this :class:`Operable` will
+        capture. The elements in this list should be the names of the operator
+        methods to override, without the underscores.
+        :type operators: `list` of `str`
+        :param operaror_handler: For operators that are understood to modify an object 
+        in place (such as +=), the corresponding dunder method will have to 
+        return the object itself in order to not overwrite it with the 
+        :class:`Operation` object. Therefore, we designate a function as the 
+        "augmentation handler" for the :class:`Operable`. When an augmenting
+        operator is called on the :class:`Operable`, the augmentation handler
+        will be called and passed the newly-created :class:`Operation` as its
+        sole argument.
+        """
+        if "OPERATORS" in dct:
+            supported_operators = dct["OPERATORS"]
+            
+        elif "SUPPORT_HANDLED_OPERATORS" in dct:
+            supported_operators = Operable.OPERATORS
+            if dct["SUPPORT_HANDLED_OPERATORS"]:
+                supported_operators += Operable.HANDLED_OPERATORS
+        else:
+            supported_operators = Operable.OPERATORS + Operable.HANDLED_OPERATORS
+            
         for op in supported_operators:
             dct[f"__{op}__"] = Operable.make_op_func(op)
+                
         return super(Operable, cls).__new__(cls, name, bases, dct)
     
 class Operation(metaclass=Operable):
@@ -84,6 +124,9 @@ class Operation(metaclass=Operable):
     on the arguments, or it may want it to be a string that it can interpret, etc.
     
     :type op: object
+    
+    :param operator_handler: A function to be called when the :class:`Operation`
+    is acted on with an augmenting operator (e.g., +=). 
     """
     def __init__(self, op, *args, **kwargs):  
         self._op = op
@@ -95,6 +138,14 @@ class Operation(metaclass=Operable):
     
     def __repr__(self):
         return f"Operation({self._op}, {self._args}, {self._kwargs})"
+    
+    def operator_handler(self, operation):
+        """
+        Since operations do not support augmentation, throw an error if acted
+        upon by an augmenting operator.
+        """
+        raise ValueError(f"Operation object {self} acted upon by augmenting"
+                         f" operator with operation {operation}.")
     
 class Symbol(metaclass=Operable):
     """
@@ -112,10 +163,28 @@ class Symbol(metaclass=Operable):
     If not provided, may be assigned later.
     
     :type value: object, optional
+    
+    :param value_type: The type of the value, which may be specified when the
+    value is not provided.
     """
-    def __init__(self, value=None):
+    def __init__(self, value=None, value_type=None):
+        if (value is not None
+            and value_type is not None 
+            and type(value) != value_type):
+                
+            raise TypeError(f"Conflicting value and type for Symbol; expected"
+                            f" type {value_type}, received value of type"
+                            f" {type(value)} ({value}).")
+        
         self._value = value
-        self._assigned = value != None
+        self._assigned = value != None        
+        self._value_type = value_type if value_type is not None else type(value)
+        
+    def __str__(self):
+        return f"Symbol(assigned={self._assigned}, value={self._value})"
+    
+    def __repr__(self):
+        return str(self)
                 
     def assign(self, v, force=False):
         """
@@ -135,35 +204,36 @@ class Symbol(metaclass=Operable):
             
         self._assigned = True
         self._value = v
-        
-    def __str__(self):
-        return f"Symbol(assigned={self._assigned}, value={self._value})"
     
-    def __repr__(self):
-        return str(self)
-    
-    @property
     def value(self):
-        if not Symbol.assigned(self):
+        if not self.assigned():
             raise ValueError("Attempted access of an unassigned Symbol.")
         return self._value
     
-    @staticmethod
-    def assigned(obj):
-        """
-        Analyzes the provided object to determine whether all encapsulated 
-        :class:`Symbol` objects are assigned. It evaluates :class:`Operation` 
-        objects by recursively checking on their arguments, and it evaluates 
-        :class:`Symbol` objects by checking whether they are assigned. All 
-        other objects are assumed to be assigned by default.
-        
-        :param obj: Object to check for assignment.
-        """
-        if isinstance(obj, Operation):
-            return reduce(and_, map(Symbol.assigned, obj._args + [v for k,v in obj._kwargs.items()]))
-        elif isinstance(obj, Symbol):
-            return obj._assigned and Symbol.assigned(obj._value)
+    def value_type(self):
+        return self._value_type
+    
+    def assigned(self):
+        if not self._assigned:
+            return False
+        if isinstance(self._value, Symbol):
+            return self._value.assigned()
+        if isinstance(self._value, Operation):
+            for arg in self._value._args:
+                if isinstance(arg, Symbol) and not arg.assigned():
+                    return False
+            for key,value in self._value._kwargs.items():
+                if isinstance(value, Symbol) and not value.assigned():
+                    return False
         return True
+    
+    def operator_handler(self, operation):
+        """
+        Since :class:`Symbol` objects are considered immutable,
+        throw an error if acted upon by an augmenting operator.
+        """
+        raise ValueError(f"Symbol object {self} acted upon by augmenting"
+                         f" operator with operation {operation}.")
         
 class ManagedResource(Operable):
     """
@@ -223,38 +293,28 @@ class ManagedResource(Operable):
             
             instance = super(cls, cls).__new__(cls)
             instance._released = False
-            instance._resource_id = Symbol() if resource_id is None else resource_id
+            instance._resource_id = Symbol(value_type=int) if resource_id is None else resource_id
+            instance._size = inst_kwargs["size"] if "size" in inst_kwargs and use_instance_size else 1
             
-            if isinstance(resource_id, Symbol) and not Symbol.assigned(resource_id):
-                instance._resource_id.assign(cls._allocation_index)
-            
-            cls._allocation_index += inst_kwargs["size"] if use_instance_size else 1
-            cls.instances.append(instance)
+            if "index" in inst_kwargs:
+                cls.instances.insert(inst_kwargs["index"], instance)
+                cls._allocation_index = 0
+                for inst in cls.instances:
+                    inst._resource_id.assign(cls._allocation_index, force=True)
+                    cls._allocation_index += inst._size
+                    
+            else:
+                if isinstance(resource_id, Symbol) and not resource_id.assigned():
+                    instance._resource_id.assign(cls._allocation_index)
+                
+                cls.instances.append(instance)
+                cls._allocation_index += instance._size
             
             return instance
-        
-        def _insert(cls, res, before=None, reallocate=True):
-            """
-            Insert a resource before a specified resource in the instance list.
-            If no resource is specified to determine the insertion location, 
-            the resource to be inserted is removed from its current location 
-            and appended to the end.
-            
-            :param res: Resource to insert
-            
-            :param before: Resource before which to insert `res`
-            """
-            cls.instances.remove(res)
-            cls.instances.insert(cls.instances.index(before) if before is not None else len(cls.instances), res)
-            
-            cls._allocation_index = 0
-            for instance in cls.instances:
-                instance._allocate(force=True)
         
         attrs = {"instances": [],
                  "__new__": cls_new,
                  "_allocation_index": 0,
-                 "_insert": classmethod(_insert),
                 **dct_meta_new}
 
         new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)

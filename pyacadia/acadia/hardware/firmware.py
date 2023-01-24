@@ -1,14 +1,18 @@
+__all__ = ["Firmware", "StandardFirmware"]
+import os
 from . import hdl
 from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg, next_highest_power_of_2
-import os
-import numpy as np
 
 class Firmware(object):
     
     def __init__(self, project_dir="/tmp"):
         """
-        Initializes the object with a path to a temporary directory for building the firmware image.
-        :param project_dir: Directory in which to generate the project and all associated files.
+        Initializes the object with a path to a temporary directory for
+        building the firmware image.
+        
+        :param project_dir: Directory in which to generate the project and all
+        associated files.
+        :type project_dir: `str`
         """
         self._modules = []
         self._project_dir = project_dir
@@ -27,14 +31,15 @@ class Firmware(object):
     
     def keys(self):
         """
-        :return: A `list` of all module names, as extracted by accessing the `name` attribute of the :class:`hdl.HDLModule` objects.
+        :return: A `list` of all module names, as extracted by accessing the 
+        `name` attribute of the :class:`hdl.HDLModule` objects.
         :rtype: `list` of strings
         """
         return [m.name for m in self._modules]
     
     def __iter__(self):
         """
-        :return: An iterator over the result of :
+        :return: An iterator over the names of modules contained in the firmware.
         """
         return iter(self.keys())
             

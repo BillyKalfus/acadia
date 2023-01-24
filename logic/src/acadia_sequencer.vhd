@@ -107,8 +107,7 @@ architecture rtl of acadia_sequencer is
     constant DEST_DSP_C_LO : natural := 20;
     constant DEST_DSP_C_HI : natural := 24;
     constant DEST_DSP_CFG  : natural := 28;
-    constant DEST_DSP_CIN  : natural := 29;
-    constant DEST_DSP_P_EN : natural := 30;
+    constant DEST_DSP_P_EN : natural := 29;
 
     -- General type for array of words
     type word_array is array (natural range <>) of std_logic_vector(31 downto 0);
@@ -188,10 +187,7 @@ architecture rtl of acadia_sequencer is
     signal dsp_c_en                 : std_logic_vector(3 downto 0);
     signal dsp_p                    : dsp_array(0 to 3);
     signal dsp_p_en                 : std_logic_vector(3 downto 0);
-    signal dsp_p_en_reg             : std_logic_vector(3 downto 0);                         
-    signal dsp_cin                  : std_logic_vector(3 downto 0);
-    signal dsp_cin_en               : std_logic_vector(3 downto 0);
-                              
+    signal dsp_p_en_reg             : std_logic_vector(3 downto 0);                                 
     -- DSP pattern detector signals
     signal dsp_patterndetect        : std_logic_vector(3 downto 0);
     signal dsp_patternbdetect       : std_logic_vector(3 downto 0);
@@ -208,7 +204,6 @@ architecture rtl of acadia_sequencer is
     signal dsp_opmode               : std_logic_vector(8 downto 0);
     signal dsp_rst_ab               : std_logic_vector(3 downto 0);
     signal dsp_rst_c                : std_logic_vector(3 downto 0); 
-    signal dsp_rst_cin              : std_logic_vector(3 downto 0);
     signal dsp_rst_p                : std_logic_vector(3 downto 0);
                               
 begin
@@ -515,11 +510,11 @@ begin
     -- Instantiate the DSP slices
     dsp_gen: for i in 0 to 3 generate
         
-        -- Gate the reset signals with the configuration selectors
-        dsp_rst_ab(i)  <= dsp_cfg_sel(i) and dsp_cfg_data(13);
-        dsp_rst_c(i)   <= dsp_cfg_sel(i) and dsp_cfg_data(14);
-        dsp_rst_cin(i) <= dsp_cfg_sel(i) and dsp_cfg_data(15);
+        -- Gate the reset signals and carry in signals with the configuration selectors
+        dsp_rst_ab(i)  <= dsp_cfg_sel(i) and dsp_cfg_data(14);
+        dsp_rst_c(i)   <= dsp_cfg_sel(i) and dsp_cfg_data(15);
         dsp_rst_p(i)   <= dsp_cfg_sel(i) and dsp_cfg_data(16);
+                             
                              
         -- Multiplex the A and B inputs
         dsp_ab(i) <= (src1 & X"0000") when dest1_dec(DEST_DSP_AB) = '1' else (src2 & X"0000");
@@ -544,14 +539,6 @@ begin
         dsp_c(i)(15 downto 0)  <= dsp_c_lo_src(i)(15 downto 0)
                                   when dsp_c_lo_wr(i) = '1' else
                                   (others => '0');
-                             
-        -- Control the carry in input
-        dsp_cin(i) <= src1(i) when dest1_dec(DEST_DSP_CIN) = '1' else src2(i);
-        -- Use an XOR to ensure that either the clear or set signal for the DSP is set, and not both
-        dsp_cin_en(i) <= (dest1_dec(DEST_DSP_CIN) and (src1(i) xor src1(i+4))) 
-                             or 
-                         (dest2_dec(DEST_DSP_CIN) and (src2(i) xor src2(i+4)));
-                             
         
         DSP48E2_inst : DSP48E2
             generic map (
@@ -646,7 +633,7 @@ begin
                 A              => dsp_ab(i)(47 downto 18), -- 30-bit input: A data
                 B              => dsp_ab(i)(17 downto 0),  -- 18-bit input: B data
                 C              => dsp_c(i),                -- 48-bit input: C data
-                CARRYIN        => dsp_cin(i),              -- 1-bit input: Carry-in
+                CARRYIN        => dsp_cfg_data(13),        -- 1-bit input: Carry-in
                 D              => X"0000000",              -- 27-bit input: D data 
                 
                 -- Reset/Clock Enable inputs: Reset/Clock Enable Inputs
@@ -657,14 +644,14 @@ begin
                 CEB1           => dsp_ab_en(i),            -- 1-bit input: Clock enable for 1st stage BREG
                 CEB2           => dsp_ab_en(i),            -- 1-bit input: Clock enable for 2nd stage BREG
                 CEC            => dsp_c_en(i),             -- 1-bit input: Clock enable for CREG
-                CECARRYIN      => dsp_cin_en(i),           -- 1-bit input: Clock enable for CARRYINREG
+                CECARRYIN      => dsp_cfg_sel(i),          -- 1-bit input: Clock enable for CARRYINREG
                 CECTRL         => dsp_cfg_sel(i),          -- 1-bit input: Clock enable for OPMODEREG and CARRYINSELREG
                 CED            => '1',                     -- 1-bit input: Clock enable for DREG
                 CEINMODE       => '1',                     -- 1-bit input: Clock enable for INMODEREG
                 CEM            => '0',                     -- 1-bit input: Clock enable for MREG
                 CEP            => dsp_p_en(i),             -- 1-bit input: Clock enable for PREG
                 RSTA           => dsp_rst_ab(i),           -- 1-bit input: Reset for AREG
-                RSTALLCARRYIN  => dsp_rst_cin(i),          -- 1-bit input: Reset for CARRYINREG
+                RSTALLCARRYIN  => '0',                     -- 1-bit input: Reset for CARRYINREG
                 RSTALUMODE     => '0',                     -- 1-bit input: Reset for ALUMODEREG
                 RSTB           => dsp_rst_ab(i),           -- 1-bit input: Reset for BREG
                 RSTC           => dsp_rst_c(i),            -- 1-bit input: Reset for CREG

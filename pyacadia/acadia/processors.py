@@ -9,6 +9,7 @@ __all__ = ["Processor",
 
 from numbers import Number
 from abc import ABC, abstractmethod
+from ctypes import c_uint
 from types import MethodType, FunctionType
 from contextlib import contextmanager
 import operator
@@ -139,6 +140,21 @@ class Processor(ABC):
         understood to compile an :class:`Instruction` object (passed as the 
         sole argument) into a list of objects that directly encapsulate a 
         section of machine code for the hardware.  
+        
+        Functions decorated with this should be instance methods that accept
+        (in addition to the `self` argument required for all instance methods)
+        a single argument, which will be populated with the instruction 
+        resource being compiled. The function should populate the instruction
+        resource `"compiled"` field with the compiled instructions and return
+        a positive or negative integer if any new instructions were inserted 
+        during the compilation of that instruction, or zero if none were. If
+        nonzero, the compiler will not increment the address of the 
+        currently-compiling instruction (indicating that the instruction at 
+        that address should be recompiled), and the `"compiled"` field of the
+        instruction will be ignored (since it will be recompiled anyway). If
+        this value is negative, the compiler will continue after populating the
+        fields containing block level information, and if positive it will 
+        continue immediately.
         
         Calling a decorated method on a :class:`Processor` instance expresses 
         an intent to command the :class:`Processor` to execute the represented 
@@ -290,7 +306,6 @@ class Processor(ABC):
             else:
                 self._block_start_next = True
             
-        
     def block_end(self, inline=False, next_instruction=False):
         """
         Indicate that the previous instruction called is the last in a 
@@ -341,10 +356,21 @@ class Processor(ABC):
         block_prev = None
         block_current = 0
         
-        
+        instruction_idx = 0
         
         # Compile every instruction and arrange blocks as necessary
-        for instruction in self._Instruction.instances:
+        while instruction_idx < len(self._Instruction.instances):
+            instruction = self._Instruction.instances[idx]
+            compilation_func = self._instruction_set[instruction["instruction"]]
+            
+            # Attempt compilation
+            inserted_instructions = compilation_func(self, instruction)
+            
+            # If we had to insert instructions before the block structure is established,
+            # repeat without incrementing the instruction index
+            if inserted_instructions > 0:
+                continue
+            
             # Create a new block if necessary
             if instruction["block_start"]:
                 block_prev = block_current
@@ -356,12 +382,17 @@ class Processor(ABC):
             if instruction["inline_block_start"]:
                 inline_block_level[block_current] += 1
                 
-            # Compile the instruction
-            compilation_func = self._instruction_set[instruction["instruction"]]
+            # Assign the block level
             instruction["inline_block_level"] = inline_block_level[block_current]
-            compiled_instructions = compilation_func(self, instruction)
             
-            # Run some sanity checks on the output
+            # Repeat compilation if it needed the block level
+            if inserted_instructions < 0:
+                inserted_instructions = compilation_func(self, instruction)
+            
+            # Run some checks before continuing
+            if inserted_instructions != 0:
+                raise ValueError("Compilation failed.")
+            
             if not isinstance(compiled_instructions, list):
                 raise TypeError(f"Expected list of compiled outputs from calling"
                                 f" compilation function; received {compiled_instructions}")
@@ -375,7 +406,6 @@ class Processor(ABC):
                                  " set overwrite=True to overwrite.")
             
             # Add the compilation outputs to the block
-            instruction["compiled_instructions"] = compiled_instructions
             blocks[block_current].append(instruction)
             
             # End the inline block, making sure to do this before ending the full block
@@ -385,6 +415,8 @@ class Processor(ABC):
             # End the block if necessary
             if instruction["block_end"]:
                 block_current = block_prev
+                
+            instruction_index += 1
                 
         # Flatten the compiled program and assign compiled instruction addresses
         self._compiled_program = []
@@ -476,7 +508,8 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         self.Import = ManagedResource("Import", 
                                       (), 
                                       {"__init__": import_init, 
-                                       "__getattr__": import_getattr})
+                                       "__getattr__": import_getattr,
+                                       "SUPPORT_HANDLED_OPERATORS": False})
                 
         # Keep track of loops so that we can give the iteration variables
         # unique names, otherwise nested loops will get messed up
@@ -517,6 +550,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         op = instruction_resource["args"][0]
         compiled_kwargs = {k: self.compile_arg(v) for k,v in instruction_resource["kwargs"].items()}
         
+        # Create a list containing the lines of Python
         if isinstance(op, str):
             line_list = [op]
         elif isinstance(op, Operation):
@@ -525,10 +559,17 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         else:
             raise TypeError(f"Operation of incompatible type ({type(op)}): {op}")
         
+        # Indent the lines while formatting the lines with any kwargs
         indent = "    "*instruction_resource["inline_block_level"]
         if len(compiled_kwargs) > 0:
-            return [indent + line.format(**compiled_kwargs) for line in line_list]
-        return [indent + line for line in line_list]
+            indented_lines = [indent + line.format(**compiled_kwargs) for line in line_list]
+        else:
+            indented_lines = [indent + line for line in line_list]
+            
+        # Assign the compiled lines to the instruction resource
+        instruction_resource["compiled_instructions"] = indented_lines
+        
+        return 0
     
     def call_subroutine(self, instruction_resource):
         """
@@ -667,6 +708,14 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             compiled_arg = self.compile_arg(operation._args[0])
             return f"operator.__{operation._op}__({compiled_arg})"
         
+        if operation._op in ["bool", "int", "str", "float", "complex"]:
+            # Conversion functions
+            if len(operation._args) != 1 or len(operation._kwargs) != 0:
+                raise ValueError(f"A {operation._op} Operation must have exactly one positional argument"
+                                 f" (got args={operation._args}, kwargs={operation._kwargs}).")
+            compiled_arg = self.compile_arg(operation._args[0])
+            return f"{operation._op}({compiled_arg})"
+        
         if operation._op in ["eq", "ne", "lt", "gt", "le", 
                              "ge", "add", "sub", "mul", 
                              "floordiv", "truediv", "mod", 
@@ -688,7 +737,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
                 raise ValueError(f"An Operation with {operation._op} must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
             compiled_args = [self.compile_arg(arg) for arg in operation._args]
-            return f"operator.__{operation._op}__({compiled_args[1]}, {compiled_args[0]})"
+            return f"operator.__{operation._op[1:]}__({compiled_args[1]}, {compiled_args[0]})"
         
         if operation._op in ["iadd", "isub", "imul", 
                              "ifloordiv", "itruediv", "imod", 
@@ -701,7 +750,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             compiled_args = [self.compile_arg(arg) for arg in operation._args]
             return f"operator.__{operation._op}__({compiled_args[0]}, {compiled_args[1]})"
 
-        raise ValueError(f"Unable to translate operation {operation._op} with"
+        raise ValueError(f"Unable to compile operation {operation._op} with"
                          f" args={operation._args}, kwargs={operation._kwargs}.")
         
     # Add some macros for accessing the processor data
