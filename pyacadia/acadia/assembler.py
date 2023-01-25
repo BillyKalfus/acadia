@@ -289,26 +289,14 @@ class ManagedResource(Operable):
                         return instance
                     
                 raise ValueError(f"Unable to allocate resource; instance limit reached for {cls} with no released instance found.")
-            resource_id = inst_kwargs.pop("resource_id", None)
             
             instance = super(cls, cls).__new__(cls)
             instance._released = False
-            instance._resource_id = Symbol(value_type=int) if resource_id is None else resource_id
+            instance._resource_id = cls._allocation_index
             instance._size = inst_kwargs["size"] if "size" in inst_kwargs and use_instance_size else 1
             
-            if "index" in inst_kwargs:
-                cls.instances.insert(inst_kwargs["index"], instance)
-                cls._allocation_index = 0
-                for inst in cls.instances:
-                    inst._resource_id.assign(cls._allocation_index, force=True)
-                    cls._allocation_index += inst._size
-                    
-            else:
-                if isinstance(resource_id, Symbol) and not resource_id.assigned():
-                    instance._resource_id.assign(cls._allocation_index)
-                
-                cls.instances.append(instance)
-                cls._allocation_index += instance._size
+            cls.instances.append(instance)
+            cls._allocation_index += instance._size
             
             return instance
         

@@ -1,6 +1,14 @@
+__all__ = ["Sequencer"]
+
 from numbers import Number
 from collections import namedtuple
-from ..assembler import ManagedResource, Symbol
+from functools import reduce
+from enum import Enum
+from dataclasses import dataclass
+import operator
+import re
+
+from ..assembler import ManagedResource, Symbol, Operation
 from ..processors import Processor
 
 class Sequencer(Processor):
@@ -13,36 +21,58 @@ class Sequencer(Processor):
     NUM_REGISTERS = 8
     
     # The total number of DSP slices accessible from the sequencer
-    NUM_DSP = 4
+    NUM_DSP = 16
     
     # The constants that represent data sources
-    SRC_REG = 0
-    SRC_PC = 8
-    SRC_IMM = 9
-    SRC_TEST = 10
-    SRC_FLAGS = 11
-    SRC_STACK = 12
-    SRC_BUS_ADDR = 13
-    SRC_BUS_DATA = 14
-    SRC_BUS_PEEK = 15
-    SRC_DSP_P_LO = 16
-    SRC_DSP_P_HI = 20
+    sources = ([f"REG{i}" for i in range(8)] 
+        + ["PC", "IMM", "TEST", "FLAGS", "STACK", "BUS_ADDR", "BUS_DATA", "DSP_PATTERN"]
+        + [f"DSP{i}" for i in range(16)])
     
+    Source = Enum("Source", sources, start=0)
+
     # The constants for data destinations
-    DEST_REG = 0
-    DEST_PC = 8
-    DEST_HOLD = 9
-    DEST_MASK = 10
-    DEST_FLAGS = 11
-    DEST_STACK = 12
-    DEST_BUS_ADDR = 13
-    DEST_BUS_DATA = 14
-    DEST_DSP_AB = 16
-    DEST_DSP_C_LO = 20
-    DEST_DSP_C_HI = 24
-    DEST_DSP_CFG = 28
-    DEST_DSP_CIN = 29
-    DEST_DSP_P_EN = 30
+    destinations = ([f"REG{i}" for i in range(8)] 
+        + ["PC", "HOLD", "MASK", "FLAGS", "STACK", "BUS_ADDR", "BUS_DATA", "DSP_CFG"]
+        + [f"DSP{i}" for i in range(16)])
+                    
+    Destination = IntEnum("Destination", destinations, start=0)
+    
+    # Create dataclasses for abstracting machine code
+    @dataclass
+    class STP:
+        src1: Sequencer.Source = 0
+        src2: Sequencer.Source = 0
+        dest1: Sequencer.Destination = 0
+        dest2: Sequencer.Destination = 0
+        imm1: int = 0
+        imm2: int = 0
+        dsp_p_en: int = 0
+        push_return: bool = False
+        
+        def __post_init__(self):
+            for field_name,field_type in self.__annotations__.items():
+                field_value = getattr(self, field_name)
+                if not isinstance(field_value, field_type):
+                    raise TypeError(f"STP field {field_name} requires type"
+                                    f" {field_type}; received {field_value}.")
+
+    @dataclass
+    class STC:
+        src_stval: Sequencer.Source = 0
+        src_tval: Sequencer.Source = 0
+        dest_stval: Sequencer.Destination = 0
+        op: int = 0
+        imm_stval: int = 0
+        imm_tval: int = 0
+        dsp_p_en: int = 0
+        push_return: bool = False
+        
+        def __post_init__(self):
+            for field_name,field_type in self.__annotations__.items():
+                field_value = getattr(self, field_name)
+                if not isinstance(field_value, field_type):
+                    raise TypeError(f"STC field {field_name} requires type"
+                                    f" {field_type}; received {field_value}.")
     
     @staticmethod
     def is_numeric(obj):
@@ -57,14 +87,8 @@ class Sequencer(Processor):
         if isinstance(obj, Operation):
             return (reduce(operator.and_, map(Sequencer.is_numeric, obj._args)) 
                     and reduce(operator.and_, map(Sequencer.is_numeric, obj._kwargs.values())))
-        return False
-    
-    # Field names for instructions
-    STP_FIELDS = ["src1", "src2", "dest1", "dest2", "imm1", "imm2", 
-                  "dsp_p_en", "push_return"]
-    STC_FIELDS = ["src_stval", "src_tval", "dest_stval", "op", "imm_stval", "imm_tval", 
-                  "dsp_p_en", "push_return"]
-    
+        return False    
+                        
     # DSP operating modes
     # Create a list of all possible operations able to be implemented in the slice
     # All constants come from Xilinx UG579
@@ -101,7 +125,7 @@ class Sequencer(Processor):
                                        .replace("I", "PCIN")
                                        .replace("S", "(P >> 17)"))
 
-                            DSP_MODES[key] = DSPMode(w, z, y, x, alumode)
+                            DSP_MODES[key] = DSPMode(w, z, y, x, alumode, set_cin)
 
             # Add the two-input logic operations
             if x and z:
@@ -187,65 +211,52 @@ class Sequencer(Processor):
                                    .replace("S", "(P >> 17)"))
 
                             if key:
-                                DSP_MODES[key] = DSPMode(0, z, y, x, alumode+inv_z)
+                                DSP_MODES[key] = DSPMode(0, z, y, x, alumode+inv_z, False)
     
     def __init__(self):
-        # We'll start by making resource managers for the registers and DSP
-        # slices. For both of them, we'll delegate the main Symbol methods
-        # to the resource ID
-        def resource_id_assign(resource_self, v, force=False):
-            resource_self._resource_id.assign(v, force=force)
-            
-        def resource_id_assigned(resource_self):
-            return resource_self._resource_id.assigned()
-        
-        def resource_id_value(resource_self):
-            return resource_self._resource_id.value()
-        
-        def resource_id_value_type(resource_self):
-            return resource_self._resource_id.value_type()
-        
-        # Begin register-specific methods
-        
-        def register_load(reg_self, value):
-            compiled_value,resources = self.compile_arg(value)
-            self.STP(src1=compiled_value, dest1=reg_self)
-            for res in resources:
-                res._released = True
+        super().__init__()
                 
+        def resource_load(resource_self, value):
+            self.store(src=value, dest=resource_self)
+                        
+        def register_str(reg_self):
+            return f"Register({reg_self._resource_id})"
+        
+        def register_source(resource_self):
+            return getattr(Sequencer.Source, 
+                           f"REG{resource_self._resource_id}")
+        
+        def register_dest(resource_self):
+            return getattr(Sequencer.Destination, 
+                           f"REG{resource_self._resource_id}")
             
         self.Register = ManagedResource(
             "Register", 
-            (Symbol,), 
-            {"assign": resource_id_assign,
-             "assigned": resource_id_assigned, 
-             "value": resource_id_value,
-             "value_type": resource_id_value_type,
-             "__setattr__": resource_setattr,
+            (), 
+            {"operator_handler": resource_load,
+             "source": register_source,
+             "dest": register_dest,
+             "__str__": register_str,
+             "__repr__": register_str,
+             "load": resource_load,
              "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
-                           "mul", "rmul", "imul", # We can natively multiply by 2 or 3
+                           "mul", "rmul", "imul", 
                            "xor", "rxor", "ixor", "invert"]},
             instance_limit=Sequencer.NUM_REGISTERS)
         
         # Begin DSP-specific methods
         
-        def dsp_load(dsp_self, value):
-            compiled_value,resources = self.compile_arg(value)
-            self.STP(src1=compiled_value, dest1=reg_self)
-            for res in resources:
-                res._released = True
-        
         def dsp_configure(dsp_self, 
-                       mode=0, 
-                       rst_a=False, 
-                       rst_b=False, 
-                       rst_c=False, 
-                       rst_p=False, 
-                       dsp_data_dest="C", 
-                       dsp_data_signed=True, 
-                       dsp_cep=None):
+                           mode=Sequencer.DSPMode(0,0,0,0,0,False), 
+                           rst_a=False, 
+                           rst_b=False, 
+                           rst_c=False, 
+                           rst_p=False, 
+                           dsp_data_dest="C", 
+                           dsp_data_signed=True, 
+                           dsp_cep=None):
             """
             Creates a 32-bit value to be written to the DSP configuration port.
             :param mode: Configuration fields for the OPMODE and ALUMODE ports of 
@@ -294,65 +305,160 @@ class Sequencer(Processor):
                     | (opmode << 4)
                     | mode.alumode)
         
-        self.DSPSlice = ManagedResource("DSPSlice", 
-                                        (Symbol,), 
-                                        {"assign": resource_id_assign,
-                                         "assigned": resource_id_assigned, 
-                                         "value": resource_id_value,
-                                         "value_type": resource_id_value_type,
-                                         "config_value": dsp_config_value},
-                                        instance_limit=Sequencer.NUM_DSP)
+        def dsp_str(dsp_self):
+            return f"DSP({dsp_self._resource_id})"
         
-        self.bus = type("Bus", (), {})()
-        self.PC = type("PC", (), {})()
-        self.stack = type("Stack", (), {})()
-        self.flags = type("Flags", (), {})()
-        self.test_value = type("TestValue", (), {})()
+        def dsp_source(resource_self):
+            return getattr(Sequencer.Source, 
+                           f"DSP{resource_self._resource_id.value()}")
+        
+        def dsp_dest(resource_self):
+            return getattr(Sequencer.Destination, 
+                           f"DSP{resource_self._resource_id.value()}")
+                
+        self.DSP = ManagedResource(
+            "DSP", 
+            (), 
+            {"source": dsp_source,
+             "dest": dsp_dest,
+             "__str__": dsp_str,
+             "__repr__": dsp_str,
+             "configure": dsp_configure,
+             "load": resource_load,
+             "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
+                           "add", "radd", "iadd", "sub", "rsub", "isub", 
+                           "and", "rand", "iand", "or", "ror", "ior", 
+                           "mul", "rmul", "imul", 
+                           "xor", "rxor", "ixor", "invert"]},
+            instance_limit=Sequencer.NUM_DSP)
+     
+    def bus_read(self, address):
+        """
+        Reads a value from the bus.
+        """
+        self.store(src=address, dest=Sequencer.Destination.BUS_ADDR)
+        return Sequencer.Source.BUS_DATA
     
-    def is_argument(self, obj):
+    @Processor.instruction()
+    def bus_write(self, instruction_resource):
         """
-        :return: `True` if a given object is a valid argument for assembly.
-        :rtype: `bool`
+        Writes a value to the bus.
         """
-        return (Sequencer.is_numeric(obj)
-                    or obj in [self.bus, self.PC, self.stack, self.flags, self.test_value]
-                    or isinstance(obj, self.Register)
-                    or isinstance(obj, self.DSPSlice)) 
+        if len(instruction_resource["args"]) > 0:
+            raise ValueError("Positional arguments not supported for store;"
+                             f" received {instruction_resource._args}.")
     
-    # Then, we want to implement the behavior where we can write values to
-    # things with Python syntax
-    def compile_arg(self, obj, dsp=None):
+        src = instruction_resource["kwargs"]["src"]
+        address = instruction_resource["kwargs"]["address"]
+        
+        compiled_addr,addr_instructions,addr_resources = self.compile_source(address)
+        
+        stp = Sequencer.STP(src1=compiled_addr, 
+                            dest1=Sequencer.Destination.BUS_ADDR,
+                            src2=src, 
+                            dest2=Sequencer.Destination.BUS_DATA)
+        addr_instructions.append(stp)
+        
+        for res in addr_resources:
+            res._released = True
+            
+        instruction_resource["compiled_instructions"] = addr_instructions
+        
+    @Processor.instruction()
+    def store(self, instruction_resource):
         """
-        Compiles an object into an argument able to be directly assembled into
-        a sequencer instruction. In some cases, a resource will need to be
-        allocated to compute an argument; such resources will be returned along
-        with the compiled argument.
+        A generalized method for storing data. It is assumed that multiple 
+        consecutive calls to `store` may be aggregated into a smaller number
+        of STP and/or STC instructions.
+        
+        Keyword arguments:
+        :param src: The source of the data to store.
+        :param dest: The destination for the data.
+        :param when: The condition for the data to be stored. By default,
+        `store` operations are unconditional.
+        :type when: :class:`Operation`, optional
+        :param combine_previous: If `False`, the compiler will not attempt to 
+        combine this write with the previous one.
+        :type combine_previous: `bool`
+        :param combine_next: If `False`, the compiler will not attempt to 
+        combine this write with the next one.
+        :type combine_next: `bool`
+        """
+        
+        if len(instruction_resource["args"]) > 0:
+            raise ValueError("Positional arguments not supported for store;"
+                             f" received {instruction_resource._args}.")
+            
+        # We need src and dest; these will throw KeyError if they aren't 
+        # present, which is basically our desired behavior so no need to 
+        # manually add key checking for this
+        src = instruction_resource["kwargs"]["src"]
+        dest = instruction_resource["kwargs"]["dest"]
+        
+        instructions = []
+        if isinstance(src, Operation):    
+            # If it's not a compatible argument, it must be an Operation that
+            # requires compilation and computation with a DSP slice.
+            # If the destination is itself a DSP slice, we can pass that down
+            # so that the compiled instructions just do the computation in the
+            # desired destination slice.
+            # Otherwise, after compiling we'll need to add our own instruction
+            # to write the computed result from the slice into the destination
+            if isinstance(dest, self.DSP):
+                compiled_src,src_instructions,src_resources = self.compile_source(src, dsp=dest)
+                instructions += src_instructions
+            else:
+                compiled_src,src_instructions,src_resources = self.compile_source(src)
+                instructions += src_instructions
+                instructions.append(self.STP(src1=compiled_src, dest1=dest))
+                
+            # Before returning, release any resources needed for compilation
+            for res in src_resources:
+                res._released = True
+        else:
+            # Otherwise, we can just directly generate a single write 
+            # instruction (the dataclass will enforce types)
+            # For DSP slices, we'll need to simultaneously write the 
+            # configuration destination to load the value
+            if isinstance(dest, self.DSP):
+                cfg = dest.configure(mode="C", dsp_data_dest="C", dsp_cep="pulse")
+                instructions.append(self.STP(src1=cfg, dest1=Sequencer.DEST_DSP_CFG,
+                                                  src2=src, dest2=dest))
+            else:
+                instructions.append(self.STP(src1=src, dest1=dest))
+            
+        instruction_resource["compiled_instructions"] = instructions
+    
+    def compile_source(self, obj, dsp=None):
+        """
+        Compiles an object into a sequencer source. In some cases, a resource 
+        (or multiple) will need to be allocated to compute the appropriate 
+        source value; these resources and the additional instructions needed to
+        operate them will be returned along with the compiled argument.
         :param obj: Object to translate
+        :param dsp: A pre-allocated DSP slice for use in the computation.
+        :type dsp: :class:`self.DSPSlice`
+        :return: A reference to the object ready to be assembled, a `list` of 
+        generated instructions, and a `list` of allocated resources.
         """
-        if dsp is not None and not isinstance(dsp, self.DSPSlice):
-            raise TypeError(f"Provided resource must be a DSPSlice; received {dsp}.")
 
-        if self.is_argument(obj):
-            return obj,[]
+        instructions = []
+        resources = []
+        
+        if dsp and not isinstance(dsp, self.DSPSlice):
+            raise TypeError(f"Provided DSP resource must be a DSPSlice;"
+                            f" received {dsp}.")
+        
+        if Sequencer.is_numeric(obj):
+            return obj,[],[]
+        
+        if isinstance(obj, self.Register) or isinstance(obj, self.DSP):
+            return obj.source(),[],[]
 
         # An Operation involving a resource; compile recursively
         # The if statements above along with the "getitem" Operation form
         # the bases cases for the recursion
         if isinstance(obj, Operation):
-            if obj._op == "getitem":
-                # If we're reading from the bus, we need to calculate and write
-                # the address first
-                if obj._args[0] == self.bus:
-                    addr,addr_resources = self.compile_arg(obj._args[1], dsp=dsp)
-                    self.STP(src1=addr, dest1=DEST_BUS_ADDR)
-                    
-                    # Release any resources needed to calculate the address
-                    for resource in addr_resources:
-                        resource._released = True
-                    return self.bus,[]
-                else:
-                    raise TypeError("getitem Operations only supported for the 
-                                    f" bus; received Operation {obj}")
                
             # Check that we have the right argument structure. invert will take
             # exactly one argument, otherwise we need exactly two. In both 
@@ -372,7 +478,7 @@ class Sequencer(Processor):
             # At this point, we know we'll actually be performing some 
             # non-trivial mathematical operation on hardware on actual 
             # hardware resources (the case where the operation is between 
-            # numerics is handled in is_argument).
+            # numerics is handled in is_numeric).
             # If we were given a DSP slice, we have to decide which
             # argument to give it to when compiling, since either one could
             # require its own slice for temporary argument compilation
@@ -381,31 +487,22 @@ class Sequencer(Processor):
             arg1_dsp = dsp if isinstance(obj._args[0], Operation) else None
             arg2_dsp = dsp if not isinstance(obj._args[0], Operation) else None
             
-            arg1,arg1_resources = self.compile_arg(obj._args[0], dsp=arg1_dsp)
+            # Now, actually compile the arguments
+            arg1,arg1_instructions,arg1_resources = self.compile_source(obj._args[0], dsp=arg1_dsp)
             if not self.is_argument(arg1):
                 raise TypeError(f"Compilation returned object unsuitable for"
                                 f" compilation: {arg1}")
                 
+            instructions += arg1_instructions
+            resources += arg1_resources
+                
             if obj._op != "invert":
-                arg2,arg2_resources = self.compile_arg(obj._args[1], dsp=arg2_dsp)
+                arg2,arg2_instructions,arg2_resources = self.compile_source(obj._args[1], dsp=arg2_dsp)
                 if not self.is_argument(arg2):
                     raise TypeError(f"Compilation returned object unsuitable for"
                                     f" compilation: {arg2}")
-            else:
-                arg2 = None
-                arg2_resources = []
-                
-            resources = arg1_resources + arg2_resources
-                
-            # For certain operators we'll still need to return an Operation
-            # with the operator information, but just with the arguments
-            # properly compiled. We can return that here, and if it turns out
-            # that this Operation was actually nested in another, then the 
-            # outer call to compile_arg will throw an error (since Operation
-            # will fail an is_argument check), but if we're in the outermost
-            # call, then it'll just return
-            if obj._op in ["eq", "ne", "gt", "lt", "ge", "le"]:
-                return Operation(obj._op, arg1, arg2),resources
+                instructions += arg2_instructions
+                resources += arg2_resources
                 
             # If we're not given a DSP slice to use and we didn't allocate one
             # when compiling arg1 and arg2, we must allocate one here
@@ -413,16 +510,14 @@ class Sequencer(Processor):
             # compilation of arg2 before using that of arg1, because the one
             # allocated most recently will be able to have greater flexibility
             # in using previously-allocated slices for its PCIN input
-            # While we choose this, construct the list of allocated resources
-            # to be returned
             if dsp is not None:
                 current_dsp = dsp
-            elif arg2_resources and isinstance(arg2_resources[0], self.DSPSlice):
+            elif obj._op != "invert" and arg2_resources and isinstance(arg2_resources[0], self.DSP):
                 current_dsp = arg2_resources[0]
-            elif arg1_resources and isinstance(arg1_resources[0], self.DSPSlice):
+            elif arg1_resources and isinstance(arg1_resources[0], self.DSP):
                 current_dsp = arg1_resources[0]
             else:
-                current_dsp = self.DSPSlice()
+                current_dsp = self.DSP()
                 resources.append(current_dsp)
                 
             # Now, determine the arguments to the slice's and how they must
@@ -433,26 +528,26 @@ class Sequencer(Processor):
             # this in one cycle
             arg1_input = "AB"
             arg2_input = "C"
-            if isinstance(arg1, self.DSPSlice):
+            if isinstance(arg1, self.DSP):
                 # If we're operating on the current DSP, use the P register
-                if arg1._resource_id.value == current_dsp._resource_id.value:
+                if arg1._resource_id == current_dsp._resource_id:
                     arg1_input = "P"
                     
                 # If we're operating on the lower neighboring DSP, use the cascade input
-                elif arg1._resource_id.value == current_dsp._resource_id.value-1:
+                elif arg1._resource_id == current_dsp._resource_id-1:
                     arg1_input = "PCIN"
                     
             # For addition and subtraction, we can use the carry input
             elif isinstance(arg1, int) and abs(arg1) == 1 and obj._op in ["add", "sub"]:
                 arg1_input = str(arg1)
                     
-            if isinstance(arg2, self.DSPSlice):
+            if isinstance(arg2, self.DSP):
                 # If we're operating on the current DSP, use the P register
-                if arg2._resource_id.value == current_dsp._resource_id.value:
+                if arg2._resource_id == current_dsp._resource_id:
                     arg2_input = "P"
 
                 # If we're operating on the lower neighboring DSP, use the cascade input
-                elif arg2._resource_id.value == current_dsp._resource_id.value-1:
+                elif arg2._resource_id == current_dsp._resource_id-1:
                     arg2_input = "PCIN"
                     
             # For addition and subtraction, we can use the carry input
@@ -494,14 +589,14 @@ class Sequencer(Processor):
                                         ("or", "{} OR {}"), 
                                         ("and", "{} AND {}"),
                                         ("xor", "{} XOR {}")]:
-                # We should cover the augmenting operators here too, because
-                # the handler will take care of the actual assignment part
-                # but the name of the augmented operator will remain in the
-                # Operation object
-                if obj._op == base or obj._op == f"i{base}":
-                    dsp_mode_key = key_format.format(arg1_input, arg2_input)
-                elif obj._op == f"r{base}"
-                    dsp_mode_key = key_format.format(arg2_input, arg1_input)
+                    # We should cover the augmenting operators here too, because
+                    # the handler will take care of the actual assignment part
+                    # but the name of the augmented operator will remain in the
+                    # Operation object
+                    if obj._op == base or obj._op == f"i{base}":
+                        dsp_mode_key = key_format.format(arg1_input, arg2_input)
+                    elif obj._op == f"r{base}":
+                        dsp_mode_key = key_format.format(arg2_input, arg1_input)
                     
             if not dsp_mode_key:
                 raise ValueError(f"Unable to find a DSP configuration for"
@@ -511,34 +606,29 @@ class Sequencer(Processor):
             # If we're still using AB, it means we must be using both external
             # inputs, so it's a two-cycle config
             if arg1_input == "AB":
-                config_value = current_dsp.configure(dsp_data_dest="AB")
-                self.STP(src1=SRC_IMM, dest1=DSP_CFG, imm1=config_value,
-                         src2=arg1, dest2=DSP_DATA)
+                cfg = current_dsp.configure(dsp_data_dest="AB")
+                instructions.append(
+                    self.STP(src1=cfg, dest1=Sequencer.DEST_DSP_CFG,
+                                  src2=arg1, dest2=current_dsp)
+                )
                 
             # The next STP (or the only one, if arg1_input isn't AB)
             # will load C if necessary, and in either case CEP will be pulsed
             if arg2_input == "C":
-                config_value = current_dsp.configure(dsp_data_dest="C", dsp_cep="pulse")
-                self.STP(src1=SRC_IMM, dest1=DSP_CFG, imm1=config_value,
-                         src2=arg2, dest2=DSP_DATA)    
+                cfg = current_dsp.configure(dsp_data_dest="C", dsp_cep="pulse")
+                instructions.append(
+                    self.STP(src1=cfg, dest1=Sequencer.DEST_DSP_CFG,
+                                  src2=arg2, dest2=current_dsp)
+                )
             else:
-                config_value = current+dsp.configure(dsp_cep="pulse")
-                self.STP(src1=SRC_IMM, dest1=DSP_CFG, config_value)
-            
+                cfg = current_dsp.configure(dsp_cep="pulse")
+                instructions.append(self.STP(src1=cfg, dest1=Sequencer.DEST_DSP_CFG))
             
             # The DSP slice we used will contain the answer at the end, so 
             # return it along with any resources allocated during compilation
-            return current_dsp,resources
+            return current_dsp.source(),instructions,resources
 
         raise TypeError(f"Unable to compile {obj} (type {type(obj)}).")
     
-    @Processor.instruction()
-    def STP(self, instruction_resource):
-        if len(instruction["args"] != 0):
-            raise ValueError(f"STP does not accept positional arguments;"
-                             f" received {instruction['args']}")
-        compiled_fields = {}
-        for field in Sequencer.STP_FIELDS:
-            field_value = instruction_resource["kwargs"].pop(field, 0)
-            compiled_fields[field] = self.compile_arg()
-    
+    def assemble():
+        pass

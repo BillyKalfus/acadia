@@ -9,7 +9,6 @@ __all__ = ["Processor",
 
 from numbers import Number
 from abc import ABC, abstractmethod
-from ctypes import c_uint
 from types import MethodType, FunctionType
 from contextlib import contextmanager
 import operator
@@ -19,7 +18,7 @@ from .assembler import Operation, Symbol, ManagedResource
 class Processor(ABC):
     """
     A base class for objects that represent entities capable of being commanded
-    by a set of native "instructions". Native instructions are defined in 
+    by a set of callable "instructions". These instructions are defined in 
     subclasses by decorating methods :meth:`Processor.instruction` (see its 
     documentation for a description of its utilization). 
 
@@ -145,16 +144,7 @@ class Processor(ABC):
         (in addition to the `self` argument required for all instance methods)
         a single argument, which will be populated with the instruction 
         resource being compiled. The function should populate the instruction
-        resource `"compiled"` field with the compiled instructions and return
-        a positive or negative integer if any new instructions were inserted 
-        during the compilation of that instruction, or zero if none were. If
-        nonzero, the compiler will not increment the address of the 
-        currently-compiling instruction (indicating that the instruction at 
-        that address should be recompiled), and the `"compiled"` field of the
-        instruction will be ignored (since it will be recompiled anyway). If
-        this value is negative, the compiler will continue after populating the
-        fields containing block level information, and if positive it will 
-        continue immediately.
+        resource `"compiled_instructions"` when compilation is successful.
         
         Calling a decorated method on a :class:`Processor` instance expresses 
         an intent to command the :class:`Processor` to execute the represented 
@@ -355,21 +345,10 @@ class Processor(ABC):
         # Some variables for keeping track of program structure as we iterate
         block_prev = None
         block_current = 0
-        
-        instruction_idx = 0
-        
+                
         # Compile every instruction and arrange blocks as necessary
-        while instruction_idx < len(self._Instruction.instances):
-            instruction = self._Instruction.instances[idx]
+        for instruction in self._Instruction.instances:
             compilation_func = self._instruction_set[instruction["instruction"]]
-            
-            # Attempt compilation
-            inserted_instructions = compilation_func(self, instruction)
-            
-            # If we had to insert instructions before the block structure is established,
-            # repeat without incrementing the instruction index
-            if inserted_instructions > 0:
-                continue
             
             # Create a new block if necessary
             if instruction["block_start"]:
@@ -385,39 +364,31 @@ class Processor(ABC):
             # Assign the block level
             instruction["inline_block_level"] = inline_block_level[block_current]
             
-            # Repeat compilation if it needed the block level
-            if inserted_instructions < 0:
-                inserted_instructions = compilation_func(self, instruction)
+            if instruction["compiled_instructions"] and not overwrite:
+                raise ValueError("Instruction compilation is non-empty;"
+                                 " set overwrite=True to overwrite.")
+            
+            # Run the actual compilation
+            compilation_func(self, instruction)
             
             # Run some checks before continuing
-            if inserted_instructions != 0:
-                raise ValueError("Compilation failed.")
-            
-            if not isinstance(compiled_instructions, list):
-                raise TypeError(f"Expected list of compiled outputs from calling"
-                                f" compilation function; received {compiled_instructions}")
-                
-            if len(compiled_instructions) == 0:
+            if len(instruction["compiled_instructions"]) == 0:
                 raise ValueError(f"Instruction resulted in empty compilation:"
                                  f" {instruction}")
                 
-            if instruction["compiled_instructions"] is not None and not overwrite:
-                raise ValueError("Instruction compilation is non-empty;"
-                                 " set overwrite=True to overwrite.")
             
             # Add the compilation outputs to the block
             blocks[block_current].append(instruction)
             
-            # End the inline block, making sure to do this before ending the full block
+            # End the inline block if necessary, making sure to do this before 
+            # ending the full block
             if instruction["inline_block_end"]:
                 inline_block_level[block_current] -= 1
             
             # End the block if necessary
             if instruction["block_end"]:
                 block_current = block_prev
-                
-            instruction_index += 1
-                
+                                
         # Flatten the compiled program and assign compiled instruction addresses
         self._compiled_program = []
         for block in blocks:
@@ -568,8 +539,6 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             
         # Assign the compiled lines to the instruction resource
         instruction_resource["compiled_instructions"] = indented_lines
-        
-        return 0
     
     def call_subroutine(self, instruction_resource):
         """
