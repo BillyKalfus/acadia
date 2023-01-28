@@ -10,7 +10,7 @@ __all__ = ["Operable",
            "ProcessorSubroutineMixin"]
 
 from types import MethodType
-from abc import ABC
+from abc import ABC, abstractmethod
 from operator import and_
 
 class Operable(type):
@@ -311,10 +311,8 @@ class ManagedResource(Operable):
             instance._resource_id = cls._allocation_index
             instance._size = inst_kwargs["size"] if "size" in inst_kwargs and use_instance_size else 1
             
-            if cls._next_instance_symbol:
-                cls._next_instance_symbol.assign(instance)
-                cls._next_instance_symbol = None
-            
+            if hasattr(cls, "_next_instance_symbol") and not cls.next_instance_assigned():
+                cls._next_instance_symbol.assign(instance)            
             cls.instances.append(instance)
             cls._allocation_index += instance._size
             
@@ -329,23 +327,30 @@ class ManagedResource(Operable):
         
         def next_instance(cls):
             """
-            Generates a Symbol that will be populated with the next instance of
+            :return: A :class:`Symbol` that will be populated with the next instance of
             the resource once generated. 
             """
-            if cls._next_instance_symbol:
-                # Still haven't allocated a new instance since the last time 
-                # that this was called, just returned the symbol that's still
-                # waiting to be populated
-                return cls._next_instance_symbol
+            if not hasattr(cls, "_next_instance_symbol") or cls.next_instance_assigned():
+                cls._next_instance_symbol = Symbol(value_type=cls)
             
-            cls._next_instance_symbol = Symbol(value_type=cls)
             return cls._next_instance_symbol
+        
+        def next_instance_assigned(cls):
+            """
+            :return: A :class:`Symbol` that will be populated with the next instance of
+            the resource once generated. 
+            """
+            if not hasattr(cls, "_next_instance_symbol"):
+                return False
+            
+            return cls._next_instance_symbol.assigned()
         
         attrs = {"instances": [],
                  "__new__": cls_new,
                  "_allocation_index": 0,
-                 "_next_instance_symbol": None,
-                 "next_instance": next_instance,
+                 "next_instance": classmethod(next_instance),
+                 "next_instance_assigned": classmethod(next_instance_assigned),
+                 "usage": classmethod(usage),
                 **dct_meta_new}
 
         new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)
@@ -524,7 +529,7 @@ class Processor(ABC):
                 "inline_block_start": self._inline_block_start_next, 
                 "inline_block_end": self._inline_block_end_next,
                 "inline_block_level": None,
-                "compiled_address": Symbol(),
+                "compiled_address": Symbol(value_type=int),
                 "compiled_instructions": None,
             })
 

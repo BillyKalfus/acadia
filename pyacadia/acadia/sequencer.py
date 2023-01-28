@@ -1,23 +1,60 @@
-__all__ = ["Sequencer", "DSPMode", "DSP_MODES"]
+__all__ = ["Sequencer", "DSPConfiguration", "DSP_MODES"]
 
 from collections import namedtuple
-from functools import reduce
 from enum import Enum
+from itertools import permutations
 from dataclasses import dataclass
 from contextlib import contextmanager
-import operator
 import re
 
-from ..assembler import ManagedResource, Symbol, Operation
-from ..processors import Processor
+from .compiler import ManagedResource, Symbol, Operation, Processor
+
+def is_numeric(obj):
+    """
+    :return: `True` if a given object is suitable as a numeric argument for assembly.
+    :rtype: `bool`
+    """
+    if isinstance(obj, int):
+        return obj.bit_length() <= 32
+    if isinstance(obj, bool):
+        return True
+    if isinstance(obj, Symbol) and obj.value_type() is int:
+        return True
+    if isinstance(obj, DSPConfiguration):
+        return True
+    if isinstance(obj, Operation):
+        for arg in obj._args:
+            if not is_numeric(arg):
+                return False
+        for key,value in obj._kwargs.items():
+            if not is_numeric(value):
+                return False
+        return True
+    return False    
+
+# The constants that represent data sources
+sources = ([f"REG{i}" for i in range(8)] 
+    + ["PC", "IMM", "TEST_VALUE", "FLAGS", "STACK", 
+       "BUS_ADDR", "BUS_DATA", "DSP_PATTERN"]
+    + [f"DSP{i}" for i in range(16)])
+
+Source = Enum("Source", sources, start=0)
+
+# The constants for data destinations
+destinations = ([f"REG{i}" for i in range(8)] 
+    + ["PC", "HOLD", "MASK", "FLAGS", "STACK", 
+       "BUS_ADDR", "BUS_DATA", "DSP_CFG"]
+    + [f"DSP{i}" for i in range(16)])
+
+Destination = Enum("Destination", destinations, start=0)
 
 # Create dataclasses for abstracting machine code
 @dataclass
 class STP:
-    src1: 'Source or int' = 0
-    src2: 'Source or int' = 0
-    dest1: 'Destination or int' = 0
-    dest2: 'Destination or int' = 0
+    src1: 'Source or int' = Source(0)
+    src2: 'Source or int' = Source(0)
+    dest1: 'Destination or int' = Destination(0)
+    dest2: 'Destination or int' = Destination(0)
     imm1: 'int or bool or Symbol or Operation or DSPMode' = 0
     imm2: 'int or bool or Symbol or Operation or DSPMode' = 0
     dsp_cep: 'int or bool or Sequencer.DSP' = 0
@@ -25,47 +62,39 @@ class STP:
 
     def __post_init__(self):
         # Check types
-        if isinstance(self.src1, int):
-            self.src1 = Source(self.src1)
+        if is_numeric(self.src1):
+            self.imm1 = self.src1
+            self.src1 = Source.IMM
         if not isinstance(self.src1, Source):
             raise TypeError(f"STP field src1 must be of type Source;"
                             f" received {self.src1}.")
         
-        if isinstance(self.src2, int):
-            self.src2 = Source(self.src2)
+        if is_numeric(self.src2):
+            self.imm2 = self.src2
+            self.src2 = Source.IMM
         if not isinstance(self.src2, Source):
             raise TypeError(f"STP field src2 must be of type Source;"
                             f" received {self.src2}.")
             
-        if isinstance(self.dest1, int):
-            self.dest1 = Destination(self.dest1)
         if not isinstance(self.dest1, Destination):
             raise TypeError(f"STP field dest1 must be of type Destination;"
                             f" received {self.dest1}.")
             
-        if isinstance(self.dest2, int):
-            self.dest2 = Destination(self.dest2)
         if not isinstance(self.dest2, Destination):
             raise TypeError(f"STP field dest2 must be of type Destination;"
                             f" received {self.dest2}.")
             
-        if not (isinstance(self.imm1, int) or isinstance(self.imm1, bool) 
-                or isinstance(self.imm1, Symbol) or isinstance(self.imm1, Operation)
-               or isinstance(self.imm1, DSPConfiguration)):
-            raise TypeError(f"STP field imm1 must be of type int, bool, Symbol,"
-                            f" Operation, or DSPConfiguration;"
+        if not is_numeric(self.imm1):
+            raise TypeError(f"STP field imm1 must be numeric or DSPConfiguration;"
                             f" received {self.imm1}.")
             
-        if not (isinstance(self.imm2, int) or isinstance(self.imm2, bool) 
-                or isinstance(self.imm2, Symbol) or isinstance(self.imm2, Operation)
-               or isinstance(self.imm2, DSPConfiguration)):
-            raise TypeError(f"STP field imm2 must be of type int, bool, Symbol,"
-                            f" Operation, or DSPConfiguration;"
+        if not is_numeric(self.imm2):
+            raise TypeError(f"STP field imm2 must be numeric or DSPConfiguration;"
                             f" received {self.imm2}.")
             
-        if not (isinstance(self.dsp_cep, int) or isinstance(self.dsp_cep, bool) 
+        if not (is_numeric(self.dsp_cep) 
                 or isinstance(self.dsp_cep, Sequencer.DSP)):
-            raise TypeError(f"STP field dsp_cep must be of type int, bool, or Sequencer.DSP;"
+            raise TypeError(f"STP field dsp_cep must be numeric or Sequencer.DSP;"
                             f" received {self.dsp_cep}.")
             
         if not (isinstance(self.push_return, int) or isinstance(self.push_return, bool)):
@@ -87,7 +116,9 @@ class STP:
 
         if isinstance(self.dsp_cep, DSP):
             tmp |= (1 << self.dsp_cep._resource_id) << 64
-        elif isinstance(self.dsp_cep, Symbol):
+        elif (isinstance(self.imm_stval, Symbol) 
+            or isinstance(self.imm_stval, Operation)
+            or isinstance(self.imm_stval, DSPConfiguration)):
             tmp |= self.dsp_cep.value() << 64
         else:
             tmp |= self.dsp_cep << 64
@@ -110,9 +141,9 @@ class STP:
 
 @dataclass
 class STC:
-    src_stval: 'Source or int' = 0
-    src_tval: 'Source or int' = 0
-    dest_stval: 'Destination or int' = 0
+    src_stval: 'Source or int' = Source(0)
+    src_tval: 'Source or int' = Source(0)
+    dest_stval: 'Destination or int' = Destination(0)
     op: 'int' = 0
     imm_stval: 'int or bool or Symbol or Operation' = 0
     imm_tval: 'int or bool or Symbol or Operation' = 0
@@ -121,45 +152,39 @@ class STC:
 
     def __post_init__(self):
         # Check types
-        if isinstance(self.src_stval, int):
-            self.src_stval = Source(self.src_stval)
+        if is_numeric(self.src_stval):
+            self.imm_stval = self.src_stval
+            self.src_stval = Source.IMM
         if not isinstance(self.src_stval, Source):
             raise TypeError(f"STP field src_stval must be of type Source;"
                             f" received {self.src_stval}.")
         
-        if isinstance(self.src_tval, int):
-            self.src_tval = Source(self.src_tval)
+        if is_numeric(self.src_tval):
+            self.imm_tval = self.src_tval
+            self.src_tval = Source.IMM
         if not isinstance(self.src_tval, Source):
             raise TypeError(f"STP field src_tval must be of type Source;"
                             f" received {self.src_tval}.")
             
-        if isinstance(self.dest_stval, int):
-            self.dest_stval = Destination(self.dest_stval)
         if not isinstance(self.dest_stval, Destination):
             raise TypeError(f"STP field dest_stval must be of type Destination;"
                             f" received {self.dest_stval}.")
             
-        if isinstance(self.op, int):
-            self.op = Destination(self.op)
-        if not isinstance(self.op, Destination):
-            raise TypeError(f"STP field op must be of type Destination;"
+        if not is_numeric(self.op):
+            raise TypeError(f"STP field op must be numeric;"
                             f" received {self.op}.")
             
-        if not (isinstance(self.imm_stval, int) or isinstance(self.imm_stval, bool) 
-                or isinstance(self.imm_stval, Symbol) or isinstance(self.imm_stval, Operation)
-                or isinstance(self.imm_stval, DSPConfiguration)):
+        if not is_numeric(self.imm_stval):
             raise TypeError(f"STP field imm_stval must be of type int, bool, Symbol,"
                             f" Operation, or DSPConfiguration;"
                             f" received {self.imm_stval}.")
             
-        if not (isinstance(self.imm_tval, int) or isinstance(self.imm_tval, bool) 
-                or isinstance(self.imm_tval, Symbol) or isinstance(self.imm_tval, Operation)
-                or isinstance(self.imm_tval, DSPConfiguration):
+        if not is_numeric(self.imm_tval):
             raise TypeError(f"STP field imm_tval must be of type int, bool, Symbol,"
                             f" Operation, or DSPConfiguration;"
                             f" received {self.imm_tval}.")
             
-        if not (isinstance(self.dsp_cep, int) or isinstance(self.dsp_cep, bool) 
+        if not (is_numeric(self.dsp_cep)
                 or isinstance(self.dsp_cep, Sequencer.DSP)):
             raise TypeError(f"STP field dsp_cep must be of type int, bool, or Sequencer.DSP;"
                             f" received {self.dsp_cep}.")
@@ -183,7 +208,9 @@ class STC:
 
         if isinstance(self.dsp_cep, DSP):
             tmp |= (1 << self.dsp_cep._resource_id) << 64
-        elif isinstance(self.dsp_cep, Symbol):
+        elif (isinstance(self.imm_stval, Symbol) 
+            or isinstance(self.imm_stval, Operation)
+            or isinstance(self.imm_stval, DSPConfiguration)):
             tmp |= self.dsp_cep.value() << 64
         else:
             tmp |= self.dsp_cep << 64
@@ -229,25 +256,24 @@ for z_name,z in [("", 0),("P", 0b010), ("C",0b011), ("I", 0b001), ("S", 0b110)]:
                         x_str = f"{sign}{x_name}" if x else "+0"
                         cin_str = f"{sign}1" if set_cin else "+0"
 
-                        # Addition is commutative, so sort the resulting expression
-                        # by its terms, and include the carry input (which we'll
-                        # choose to arbitrarily call J)
-                        str_pieces = [w_str, z_str, y_str, x_str, cin_str]
-                        str_pieces.sort(key=lambda s: s[1])
-                        key = "".join(str_pieces)
+                        # Because addition is commutative, generate all permutations
+                        # of the operands
+                        for str_pieces in permutations([w_str, z_str, y_str, x_str, cin_str]):
 
-                        # Simplify some zeros before adding to the list
-                        key = key.replace("+0", "")
-                        for k in ["C", "P"]:
-                            key = key.replace(f"-{k}+{k}", "")
-                            key = key.replace(f"+{k}-{k}", "")
-                        if key.startswith("+"):
-                            key = key[1:]
-                        key = (key.replace("A", "AB")
-                                   .replace("I", "PCIN")
-                                   .replace("S", "(P >> 17)"))
+                            key = "".join(str_pieces)
 
-                        DSP_MODES[key] = DSPMode(w, z, y, x, alumode, set_cin, key)
+                            # Simplify some zeros before adding to the list
+                            key = key.replace("+0", "")
+                            for k in ["C", "P"]:
+                                key = key.replace(f"-{k}+{k}", "")
+                                key = key.replace(f"+{k}-{k}", "")
+                            if key.startswith("+"):
+                                key = key[1:]
+                            key = (key.replace("A", "AB")
+                                       .replace("I", "PCIN")
+                                       .replace("S", "(P >> 17)"))
+
+                            DSP_MODES[key] = DSPMode(w, z, y, x, alumode, set_cin, key)
 
         # Add the two-input logic operations
         if x and z:
@@ -373,7 +399,7 @@ class DSPConfiguration:
     :type dsp_cep: str, optional
     """
     dsp: "int or Source or Destination or Sequencer.DSP" = None
-    mode: "DSPMode or str" = None
+    mode: "DSPMode or str" = "P" # By default do nothing by loading P -> P
     rst_a: "bool" = False
     rst_b: "bool" = False
     rst_c: "bool" = False
@@ -404,9 +430,9 @@ class DSPConfiguration:
         if not self.dsp_data_register_load:
             dsp_data_dest_bits = 0
         elif self.dsp_data_register_load == "C":
-            dsp_data_dest_bits = 0 | (not dsp_data_signed)
+            dsp_data_dest_bits = 0 | (not self.dsp_data_signed)
         elif self.dsp_data_register_load == "AB":
-            dsp_data_dest_bits = 2 | (not dsp_data_signed)
+            dsp_data_dest_bits = 2 | (not self.dsp_data_signed)
         else:
             raise ValueError(f"Invalid DSP data destination {self.dsp_data_register_load}.")
 
@@ -436,22 +462,6 @@ class DSPConfiguration:
         
     def value(self):
         return self.value
-
-# The constants that represent data sources
-sources = ([f"REG{i}" for i in range(8)] 
-    + ["PC", "IMM", "TEST_VALUE", "FLAGS", "STACK", 
-       "BUS_ADDR", "BUS_DATA", "DSP_PATTERN"]
-    + [f"DSP{i}" for i in range(16)])
-
-Source = Enum("Source", sources, start=0)
-
-# The constants for data destinations
-destinations = ([f"REG{i}" for i in range(8)] 
-    + ["PC", "HOLD", "MASK", "FLAGS", "STACK", 
-       "BUS_ADDR", "BUS_DATA", "DSP_CFG"]
-    + [f"DSP{i}" for i in range(16)])
-
-Destination = Enum("Destination", destinations, start=0)
     
 class Sequencer(Processor):
     """
@@ -468,21 +478,6 @@ class Sequencer(Processor):
     # Base class for ManagedResources that the sequencer will create
     DSP = type("DSP", (), {})
     Register = type("Register", (), {})
-    
-    @staticmethod
-    def is_numeric(obj):
-        """
-        :return: `True` if a given object is suitable as a numeric argument for assembly.
-        :rtype: `bool`
-        """
-        if isinstance(obj, int):
-            return obj.bit_length() <= 32
-        if isinstance(obj, Symbol) and obj.value_type() is int:
-            return True
-        if isinstance(obj, Operation):
-            return (reduce(operator.and_, map(Sequencer.is_numeric, obj._args)) 
-                    and reduce(operator.and_, map(Sequencer.is_numeric, obj._kwargs.values())))
-        return False    
     
     def __init__(self):
         super().__init__()
@@ -541,6 +536,7 @@ class Sequencer(Processor):
              "__str__": dsp_str,
              "__repr__": dsp_str,
              "load": resource_load,
+             "operator_handler": resource_load,
              "__setitem__": dsp_setitem,
              "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
@@ -553,8 +549,7 @@ class Sequencer(Processor):
         """
         Reads a value from the bus.
         """
-        self.store(src=address, dest=Destination.BUS_ADDR)
-        return Source.BUS_DATA
+        return Operation("bus_read", address)
     
     @Processor.instruction()
     def bus_write(self, instruction_resource):
@@ -596,7 +591,7 @@ class Sequencer(Processor):
         compiled_kwargs["imm1"] = kwargs["imm1"] if "imm1" in kwargs else 0
         compiled_kwargs["imm2"] = kwargs["imm2"] if "imm2" in kwargs else 0
         compiled_kwargs["dsp_cep"] = kwargs["dsp_cep"] if "dsp_cep" in kwargs else 0
-        compiled_kwargs["push_return"] = kwargs["push_return"] in kwargs else False
+        compiled_kwargs["push_return"] = kwargs["push_return"] if "push_return" in kwargs else False
         instruction_resource["compiled_instructions"] = STP(**compiled_kwargs)
         
     @Processor.instruction()
@@ -641,7 +636,7 @@ class Sequencer(Processor):
         allow_hold = kwargs["allow_hold"] if "allow_hold" in kwargs else False
         
         instructions = []
-        if when:
+        if when is not None:
             stc_kwargs,condition_instructions,condition_resources = self.compile_condition(when)
             instructions += condition_instructions
         
@@ -662,17 +657,16 @@ class Sequencer(Processor):
                 else:
                     # Otherwise, we have to simultaneously write the config port
                     # in order to load a DSP input register
-                    cfg = DSPConfiguration(dsp=dest, dsp_data_dest=dsp_port)
+                    cfg = DSPConfiguration(dsp=dest, dsp_data_register_load=dsp_port)
                     compiled_src,src_instructions,src_resources = self.compile_source(src)
                     instructions += src_instructions
                     
                     instructions.append(STP(src1=compiled_src, 
-                                                 dest1=dest.destination(),
-                                                 src2=Source.IMM, 
-                                                 dest2=Destination.DSP_CFG, 
-                                                 imm2=cfg,
-                                                 dsp_cep=dsp_cep,
-                                                 push_return=push_return))
+                                             dest1=dest.destination(),
+                                             src2=cfg, 
+                                             dest2=Destination.DSP_CFG, 
+                                             dsp_cep=dsp_cep,
+                                             push_return=push_return))
             else:
                 compiled_src,src_instructions,src_resources = self.compile_source(src)
                 instructions += src_instructions
@@ -687,25 +681,18 @@ class Sequencer(Processor):
             compiled_src,src_instructions,src_resources = self.compile_source(src)
             instructions += src_instructions
             if isinstance(dest, self.DSP):
-                if when:
+                if when is not None:
                     if dsp_port != "C":
                         raise ValueError(f"Conditional store may only use the"
                                          f" C port of a DSP slice as a"
                                          f" destination; received {kwargs['port']}.")
                         
-                    if Sequencer.is_numeric(compiled_src):
-                        instructions.append(STC(src_stval=Source.IMM, 
-                                                 dest_stval=dest.destination(), 
-                                                 imm_stval=compiled_src, 
-                                                 dsp_cep=dsp_cep,
-                                                 push_return=push_return,
-                                                 **stc_kwargs))
-                    else:
-                        instructions.append(STC(src_stval=compiled_src, 
-                                                 dest_stval=dest.destination(), 
-                                                 dsp_cep=dsp_cep,
-                                                 push_return=push_return,
-                                                 **stc_kwargs))
+
+                    instructions.append(STC(src_stval=compiled_src, 
+                                             dest_stval=dest.destination(), 
+                                             dsp_cep=dsp_cep,
+                                             push_return=push_return,
+                                             **stc_kwargs))
                 
                 else:   
                     if dsp_port:
@@ -736,7 +723,7 @@ class Sequencer(Processor):
             else:
                 dest_field = dest.destination() if hasattr(dest, "destination") else dest
                 
-                if when:
+                if when is not None:
                     instructions.append(STC(src_stval=compiled_src, 
                                              dest_stval=dest_field, 
                                              dsp_cep=dsp_cep,
@@ -747,7 +734,7 @@ class Sequencer(Processor):
                                              dest1=dest_field,
                                              dsp_cep=dsp_cep,
                                              push_return=push_return))
-        if when:
+        if when is not None:
             for res in condition_resources:
                 res._released = True
                 
@@ -766,14 +753,11 @@ class Sequencer(Processor):
         generated instructions, and a `list` of allocated resources.
         """
 
-        instructions = []
-        resources = []
-        
         if dsp and not isinstance(dsp, self.DSP):
             raise TypeError(f"Provided DSP resource must be of type DSP;"
                             f" received {dsp}.")
         
-        if Sequencer.is_numeric(obj) or isinstance(obj, Source):
+        if is_numeric(obj) or isinstance(obj, Source):
             return obj,[],[]
         
         if isinstance(obj, self.Register) or isinstance(obj, self.DSP):
@@ -781,6 +765,9 @@ class Sequencer(Processor):
         
         if isinstance(obj, self._Instruction):
             return obj["compiled_address"],[],[]
+        
+        if isinstance(obj, Symbol) and obj.value_type() is self._Instruction:
+            return obj.value()["compiled_address"],[],[]
 
         # An Operation involving a resource; compile recursively
         # The if statements above along with the "getitem" Operation form
@@ -791,16 +778,34 @@ class Sequencer(Processor):
             # exactly one argument, otherwise we need exactly two. In both 
             # cases, there should be no keyword arguments since this was 
             # created by an operator (presumably)
-            if (obj._op == "invert" 
-                    and (len(obj._kwargs) > 0 or len(obj._args) != 1)):
-                raise ValueError(f"invert Operations inside of arguments"
+            if len(obj._kwargs) > 0:
+                raise ValueError(f"Operation expects no keywords arguments;"
+                                 f" received {obj._kwargs}.")
+                
+            elif obj._op in ["invert", "bus_read"]:
+                # Using this if structure (instead of just anding the two
+                # conditions together) so that we don't execute the next elif
+                # when the op is invert or bus_read
+                if len(obj._args) != 1:
+                    raise ValueError(f"Operation expects one argument;"
+                                     f" received {obj}.")
+                
+            elif len(obj._args) != 2:
+                raise ValueError(f"Operations inside of arguments"
                                  f" should have two arguments and"
                                  f" no keywords; received {obj}.")
+            
+            # Handle bus operations
+            if obj._op == "bus_read":
+                addr,addr_instructions,addr_resources = self.compile_source(obj._args[0])
+                addr_instructions.append(STP(src1=addr, dest1=Destination.BUS_ADDR))
+                for res in addr_resources:
+                    res._released = True
+                return Source.BUS_DATA,addr_instructions,[]
                 
-            elif len(obj._kwargs) > 0 or len(obj._args) != 2:
-                raise ValueError(f"Operations inside of arguments without"
-                                 f" getitem should have two arguments and"
-                                 f" no keywords; received {obj}.")
+            
+            instructions = []
+            resources = []
             
             # At this point, we know we'll actually be performing some 
             # non-trivial mathematical operation on hardware on actual 
@@ -840,7 +845,7 @@ class Sequencer(Processor):
                 current_dsp = self.DSP()
                 resources.append(current_dsp)
                 
-            # Now, determine the arguments to the slice's and how they must
+            # Now, determine the arguments to the slices and how they must
             # physically enter. By default, they'll need to be loaded into the
             # external inputs exposed to the datapath
             # If the arguments are AB and C, we'll need separate instructions
@@ -859,7 +864,7 @@ class Sequencer(Processor):
                 elif num == current_dsp._resource_id-1:
                     arg1_input = "PCIN"
                     
-            # For addition and subtraction, we can use the carry input
+            # For addition and subtraction by 1, we can use the carry input
             elif isinstance(arg1, int) and abs(arg1) == 1 and obj._op in ["add", "sub"]:
                 arg1_input = str(arg1)
                     
@@ -874,7 +879,7 @@ class Sequencer(Processor):
                 elif num == current_dsp._resource_id-1:
                     arg2_input = "PCIN"
                     
-            # For addition and subtraction, we can use the carry input
+            # For addition and subtraction by 1, we can use the carry input
             elif isinstance(arg2, int) and abs(arg2) == 1 and obj._op in ["add", "sub"]:
                 arg2_input = str(arg2)
                 
@@ -889,23 +894,23 @@ class Sequencer(Processor):
             if obj._op == "invert":
                 dsp_mode_key = f"NOT {arg1_input}"
                 
-            elif obj._op == "mul" or obj._op == "rmul" or obj._op == "imul": 
-                # One of the arguments must be an integer with a magnitude of
-                # 2 or 3. Figure out which one this is
-                if isinstance(arg1, int) and (abs(arg1) == 2 or abs(arg1) == 3):
-                    sign = "-" if arg1 < 0 else "+"
-                    dsp_mode_key = f"{sign}{arg2_input}"*abs(arg1)
-                    if dsp_mode_key.startswith("+"):
-                        dsp_mode_key = dsp_mode_key[1:]
-                elif isinstance(arg2, int) and (abs(arg2) == 2 or abs(arg2) == 3):
-                    sign = "-" if arg2 < 0 else "+"
-                    dsp_mode_key = f"{sign}{arg1_input}"*abs(arg2)
-                    if dsp_mode_key.startswith("+"):
-                        dsp_mode_key = dsp_mode_key[1:]
-                else:
-                    raise ValueError(f"Only multiplication by integers with"
-                                     f" magnitudes of 2 or 3 are supported;"
-                                     f" received Operation {obj}.")
+            # elif obj._op == "mul" or obj._op == "rmul" or obj._op == "imul": 
+            #     # One of the arguments must be an integer with a magnitude of
+            #     # 2 or 3. Figure out which one this is
+            #     if isinstance(arg1, int) and (abs(arg1) == 2 or abs(arg1) == 3):
+            #         sign = "-" if arg1 < 0 else "+"
+            #         dsp_mode_key = f"{sign}{arg2_input}"*abs(arg1)
+            #         if dsp_mode_key.startswith("+"):
+            #             dsp_mode_key = dsp_mode_key[1:]
+            #     elif isinstance(arg2, int) and (abs(arg2) == 2 or abs(arg2) == 3):
+            #         sign = "-" if arg2 < 0 else "+"
+            #         dsp_mode_key = f"{sign}{arg1_input}"*abs(arg2)
+            #         if dsp_mode_key.startswith("+"):
+            #             dsp_mode_key = dsp_mode_key[1:]
+            #     else:
+            #         raise ValueError(f"Only multiplication by integers with"
+            #                          f" magnitudes of 2 or 3 are supported;"
+            #                          f" received Operation {obj}.")
                     
             else:
                 for base,key_format in [("add", "{}+{}"), 
@@ -913,10 +918,6 @@ class Sequencer(Processor):
                                         ("or", "{} OR {}"), 
                                         ("and", "{} AND {}"),
                                         ("xor", "{} XOR {}")]:
-                    # We should cover the augmenting operators here too, because
-                    # the handler will take care of the actual assignment part
-                    # but the name of the augmented operator will remain in the
-                    # Operation object
                     if obj._op == base or obj._op == f"i{base}":
                         dsp_mode_key = key_format.format(arg1_input, arg2_input)
                     elif obj._op == f"r{base}":
@@ -930,27 +931,46 @@ class Sequencer(Processor):
             # If we're still using AB, it means we must be using both external
             # inputs, so it's a two-cycle config
             if arg1_input == "AB":
-                cfg = DSPConfiguration(dsp=current_dsp, dsp_data_dest="AB")
-                instructions.append(STP(src1=Source.IMM, 
+                cfg = DSPConfiguration(dsp=current_dsp, 
+                                       mode=dsp_mode_key, 
+                                       dsp_data_register_load="AB")
+                instructions.append(STP(src1=cfg, 
                                         dest1=Destination.DSP_CFG,
-                                        imm1=cfg,
                                         src2=arg1, 
                                         dest2=current_dsp.destination()))
                 
             # The next STP (or the only one, if arg1_input isn't AB)
             # will load C if necessary, and in either case CEP will be pulsed
-            if arg2_input == "C":
-                cfg = DSPConfiguration(dsp=current_dsp, dsp_data_dest="C", dsp_cep="pulse")
-                instructions.append(STP(src1=Source.IMM, 
+            # If arg1 or arg2 are C, this means we're still loading some 
+            # external input. Otherwise we might just be performing an
+            # operation between registers inside the slice
+            if arg1_input == "C":
+                cfg = DSPConfiguration(dsp=current_dsp, 
+                                       mode=dsp_mode_key, 
+                                       dsp_data_register_load="C",
+                                       dsp_cep="pulse")
+                instructions.append(STP(src1=cfg, 
                                         dest1=Destination.DSP_CFG,
-                                        imm1=cfg,
+                                        src2=arg1,
+                                        dest2=current_dsp.destination()))
+            elif arg2_input == "C":
+                cfg = DSPConfiguration(dsp=current_dsp, 
+                                       mode=dsp_mode_key, 
+                                       dsp_data_register_load="C", 
+                                       dsp_cep="pulse")
+                instructions.append(STP(src1=cfg, 
+                                        dest1=Destination.DSP_CFG,
                                         src2=arg2,
                                         dest2=current_dsp.destination()))
+            
+            # No external inputs are being loaded, therefore it's a purely
+            # internal operation
             else:
-                cfg = DSPConfiguration(dsp=current_dsp, dsp_cep="pulse")
-                instructions.append(STP(src1=Source.IMM, 
-                                        dest1=Destination.DSP_CFG, 
-                                        imm1=cfg))
+                cfg = DSPConfiguration(dsp=current_dsp, 
+                                       mode=dsp_mode_key, 
+                                       dsp_cep="pulse")
+                instructions.append(STP(src1=cfg, 
+                                        dest1=Destination.DSP_CFG))
             
             # The DSP slice we used will contain the answer at the end, so 
             # return it along with any resources allocated during compilation
@@ -987,12 +1007,7 @@ class Sequencer(Processor):
         # (in the future we may want to remove this for optimization, but for
         # now this could possibly be useful for testing and providing uniformity
         # in PS loops whose index variable is stored in a Symbol)
-        if isinstance(condition, bool) or isinstance(condition, int) or isinstance(condition, Symbol):
-            stc_kwargs["src_tval"] = Source.IMM
-            stc_kwargs["imm_tval"] = condition
-            stc_kwargs["op"] = 0b11
-            return stc_kwargs,[],[]
-        elif isinstance(condition, Source):
+        if is_numeric(condition) or isinstance(condition, Source):
             stc_kwargs["src_tval"] = condition
             stc_kwargs["op"] = 0b11
             return stc_kwargs,[],[]
@@ -1044,20 +1059,18 @@ class Sequencer(Processor):
         # If one of them is a numeric, we'll prefer to put that in the mask
         # since that's not time-sensitive 
         instructions = []
-        if Sequencer.is_numeric(condition._args[0]):
-            instructions.append(Sequencer.STP(src1=Source.IMM, 
-                                              dest1=Destination.MASK, 
-                                              imm1=condition._args[0]))
+        
+        if is_numeric(condition._args[0]):
+            instructions.append(STP(src1=condition._args[0], dest1=Destination.MASK))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
-            instructions += src_instructions
-            return src,instructions,src_resources
-        if Sequencer.is_numeric(condition._args[1]):
-            instructions.append(Sequencer.STP(src1=Source.IMM, 
-                                              dest1=Destination.MASK, 
-                                              imm1=condition._args[1]))
+        else:
+            instructions.append(STP(src1=condition._args[1], dest1=Destination.MASK))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
-            instructions += src_instructions
-            return src,instructions,src_resources
+        
+        stc_kwargs["src_tval"] = compiled_src
+        instructions += src_instructions
+        return stc_kwargs,instructions,src_resources
+
     
     @contextmanager
     def test(self, condition, speculation=True):
@@ -1077,7 +1090,7 @@ class Sequencer(Processor):
             # The block to execute if the condition passes is inline
             # Jump past the block if the condition fails
             jump = self.store(dest=Destination.PC, 
-                              when=(not condition))
+                              when=~condition)
         else:
             # Jump to the block and push the return location
             # if the condition passes
@@ -1117,14 +1130,14 @@ class Sequencer(Processor):
         yield
         mask_arg = -1
         for arg in range(2):
-            if Sequencer.is_numeric(condition._args[arg]):
+            if is_numeric(condition._args[arg]):
                 mask_arg = arg
         
         # Note that it may be difficult to rearrange the "if" structure here, 
         # because if the clauses add any instructions then checking whether the
         # next_instance symbol was assigned will break
         if mask_arg > 0:
-            if self._Instruction._next_instruction_symbol:
+            if not self._Instruction.next_instance_assigned():
                 # No instructions have been added in the block and we can infer 
                 # which argument should be stored in the mask. Therefore, we can
                 # use the hold destination
@@ -1144,12 +1157,11 @@ class Sequencer(Processor):
                              f" condition {condition}.")
             
             
-            
         self.store(src=condition._args[mask_arg], 
                    dest=Destination.MASK)
         self.store(src=return_instruction, 
                    dest=dest,
-                   when=(not condition))
+                   when=~condition)
                 
     @contextmanager
     def loop(self, *args):
@@ -1183,6 +1195,7 @@ class Sequencer(Processor):
                              f" receieved {args}.")
         dsp = self.DSP()
         
+        # TODO
         # If the start value is 0, we don't need a separate instruction to load
         # P first, since we can reset it when 
                 
