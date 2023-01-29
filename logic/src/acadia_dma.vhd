@@ -122,15 +122,12 @@ architecture rtl of acadia_dma is
 begin    
 
     -- Establish some progress flags
-    -- Note that these signals are defined combinationally and depend
-    -- on the instantaneous value of a memory output,
-    -- so for reliable timing they should only be evaluated synchronously
     point_first_dec_cycle  <= '1' when to_integer(unsigned(dec_cycle)) = 0 and running_d = '1'        else '0';
     point_last_dec_cycle   <= '1' when dec_cycle = desc_dec                                           else '0';
     descriptor_first_point <= '1' when to_integer(unsigned(descriptor_point)) = 0 and running_d = '1' else '0';
     descriptor_last_point  <= '1' when descriptor_point = desc_lm1                                    else '0';
     
-    seq_load <= (not running) or (sequence_last_descriptor_in_progress and seq_continue_int and descriptor_first_point);
+    seq_load <= (not running) or (seq_continue_int and sequence_last_descriptor_in_progress and descriptor_first_point);
     before_descriptor_first_cycle <= (not running_d) or (descriptor_last_point and point_last_dec_cycle);
     sequence_last_dec_cycle  <= sequence_last_descriptor_in_progress and descriptor_last_point and point_last_dec_cycle;
 
@@ -183,7 +180,7 @@ begin
     -- Progress through the descriptor one point at a time
     descriptor_point_proc: process(clk) begin
         if rising_edge(clk) then
-            if(running = '0') then
+            if(running = '0' or running_d = '0') then
                 descriptor_point <= (others => '0');
             elsif(point_last_dec_cycle = '1') then
                 if(descriptor_last_point = '1') then
@@ -209,10 +206,8 @@ begin
     end process descriptor_addr_proc;
     
     -- Detect when we're in the last descriptor so that we can properly signal when we're done
-    -- The following elsif condition will be satisfied when in the last cycle of 
-    -- the second-to-last descriptor because the descriptor address will be loaded one cycle early.
     -- In case the sequence is one descriptor long, before_descriptor_first_cycle will be set (because running_d = 0).
-    -- Therefore sequence_last_descriptor_in_progress will go high
+    -- Therefore sequence_last_descriptor_in_progress will (correctly) go high
     -- as the first cycle of the last descriptor starts
     sequence_last_descriptor_in_progress_proc: process(clk) begin
         if rising_edge(clk) then
@@ -228,18 +223,18 @@ begin
     -- Since all descriptors must be a minimum of 2 cycles long and sequence_last_descriptor_in_progress
     -- will be high during the first cycle of the last descriptor, we can just check sequence_last_dec_cycle
     -- (which depends on sequence_last_descriptor_in_progress)
-    sequence_done_int_proc: process(clk) begin
-        if rising_edge(clk) then
-            if(running = '0') then
-                sequence_done_int <= '0';
-            elsif(sequence_last_dec_cycle = '1') then
-                sequence_done_int <= '1';
-            end if;
-        end if;
-    end process sequence_done_int_proc;  
+    --sequence_done_int_proc: process(clk) begin
+    --    if rising_edge(clk) then
+    --        if(running = '0') then
+    --            sequence_done_int <= '0';
+    --        elsif(sequence_last_dec_cycle = '1') then
+    --            sequence_done_int <= '1';
+    --        end if;
+    --    end if;
+    --end process sequence_done_int_proc;  
     
     -- Expose this signal to other modules
-    sequence_done <= sequence_done_int;  
+    sequence_done <= running and sequence_last_dec_cycle;
     
     -- Control the interface to descriptor memory
     descriptor_mem_addr <= descriptor_addr;
@@ -252,7 +247,7 @@ begin
         if rising_edge(clk) then
             -- Stream the address out of the AXI-stream port
             -- Data present on the stream is considered valid when its NOT during decimation
-            addr_tvalid <= (not sequence_done_int) and (not seq_load) and point_first_dec_cycle;
+            addr_tvalid <= (not seq_load) and point_first_dec_cycle;
             addr_tdata  <= std_logic_vector(unsigned(descriptor_point) + unsigned(desc_addr));
             addr_tlast  <= descriptor_last_point and point_first_dec_cycle;
             addr_tdest  <= desc_dest;
@@ -263,7 +258,7 @@ begin
             -- pin will be deasserted
             -- The memory interface will be reset either when de-triggered, or when the sequence is complete 
             mem_control_addr <= std_logic_vector(unsigned(descriptor_point) + unsigned(desc_addr));
-            mem_control_rst  <= seq_load or sequence_done_int;
+            mem_control_rst  <= seq_load or (not running_d);
             
             -- Expose some progress signals
             descriptor_done <= descriptor_last_point and point_last_dec_cycle and (not seq_load) and (not desc_load);

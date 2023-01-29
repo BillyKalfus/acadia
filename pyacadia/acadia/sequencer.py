@@ -576,6 +576,9 @@ class Sequencer(Processor):
             res._released = True
             
         instruction_resource["compiled_instructions"] = instructions
+        
+    def goto(self, target):
+        self.store(src=target, dest=Destination.PC)
                 
     @Processor.instruction(name="STP")
     def _STP(self, instruction_resource):

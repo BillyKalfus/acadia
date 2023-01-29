@@ -391,7 +391,7 @@ class StandardFirmware(Firmware):
             set_property(f, name="hedgehog/clk_wiz",
                              properties="CONFIG.PRIMITIVE {MMCM} "
                                         "CONFIG.USE_DYN_RECONFIG {true} "
-                                        "CONFIG.PRIM_SOURCE {Global_buffer} "
+                                        "CONFIG.PRIM_SOURCE {Differential_clock_capable_pin} "
                                         "CONFIG.PRIM_IN_FREQ {300.000} "
                                         "CONFIG.CLKOUT2_USED {true} "
                                         "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {300.000} "
@@ -433,7 +433,8 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/PS_clk_250", f"hedgehog/xpm_cdc_aresetn_PS_clk_250/dest_clk")
 
             # Connect the clock input to the tile fabric clock
-            connect_bd_net(f, f"hedgehog/rfdc/clk_dac1", f"hedgehog/clk_wiz/clk_in1")
+            connect_bd_intf_net(f, f"hedgehog/CLK104_PL_CLK", f"hedgehog/clk_wiz/CLK_IN1_D")
+            f.write("set_property -dict [list CONFIG.FREQ_HZ {300000000}] [get_bd_intf_ports CLK104_PL_CLK]\n")
 
             # Expose the locked signal to external modules
             connect_bd_net(f, f"hedgehog/clk_locked", f"hedgehog/clk_wiz/locked")
@@ -853,7 +854,7 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
-                                            f"CONFIG.Use_RSTB_Pin {{true}} "
+                                            f"CONFIG.Use_RSTB_Pin {{false}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
                                             f"CONFIG.Port_B_Write_Rate {{50}} "
                                             f"CONFIG.Port_B_Enable_Rate {{100}} "
@@ -1051,7 +1052,7 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
-                                            f"CONFIG.Use_RSTB_Pin {{true}} "
+                                            f"CONFIG.Use_RSTB_Pin {{false}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
                                             f"CONFIG.Port_B_Write_Rate {{50}} "
                                             f"CONFIG.Port_B_Enable_Rate {{100}} "
@@ -1207,7 +1208,7 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
-                                            f"CONFIG.Use_RSTB_Pin {{true}} "
+                                            f"CONFIG.Use_RSTB_Pin {{false}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
                                             f"CONFIG.Port_B_Write_Rate {{50}} "
                                             f"CONFIG.Port_B_Enable_Rate {{100}} "

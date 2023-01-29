@@ -1,6 +1,6 @@
 __all__ = ["HDLModule", "BusDevice", "BusDataport", "BusDecoder", "BusDatamoverController"]
 
-from ..assembler import Symbol
+from .compiler import Symbol
 from .utils import next_highest_power_of_2
 
 class HDLModule(object):
@@ -40,7 +40,7 @@ class BusDevice(Symbol):
         self._word_bits = word_bits
         self._bus_bits = bus_bits
         
-        Symbol.__init__(self)
+        Symbol.__init__(self, value_type=int)
         
     @property
     def name(self):
@@ -356,7 +356,7 @@ class BusDecoder(BusDevice, HDLModule):
         hdl += f'        master_bus_clk  : in  std_logic;\n\n'
         
         for i,(obj,pipeline) in enumerate(self._bus_objects):
-            hdl += f'        -- {obj.name} interface (local bus address 0x{obj.value-self.value:08X}), (global bus address 0x{obj.value:08X})\n'
+            hdl += f'        -- {obj.name} interface (local bus address 0x{obj.value()-self.value():08X}), (global bus address 0x{obj.value():08X})\n'
             hdl += f'        {obj.name}_mosi : out std_logic_vector({self.word_bits-1} downto 0);\n'
             hdl += f'        {obj.name}_miso : in  std_logic_vector({self.word_bits-1} downto 0);\n'
             hdl += f'        {obj.name}_addr : out std_logic_vector({low_address_bit-1} downto 0);\n'
@@ -411,7 +411,7 @@ class BusDecoder(BusDevice, HDLModule):
         
         # Connect all the master output ports
         for i,(obj, pipeline) in enumerate(self._bus_objects):
-            hdl += f'    -- {obj.name} interface (local bus address 0x{obj.value-self.value:08X}), (global bus address 0x{obj.value:08X})\n'         
+            hdl += f'    -- {obj.name} interface (local bus address 0x{obj.value()-self.value():08X}), (global bus address 0x{obj.value():08X})\n'         
             hdl += f'    {obj.name}_clk  <= master_bus_clk;\n\n'
             if pipeline:
                 hdl += f'    {obj.name}_proc: process(master_bus_clk) begin\n'
