@@ -580,8 +580,8 @@ class Sequencer(Processor):
     def goto(self, target):
         self.store(src=target, dest=Destination.PC)
                 
-    @Processor.instruction(name="STP")
-    def _STP(self, instruction_resource):
+    @Processor.instruction()
+    def STP(self, instruction_resource):
         """
         A direct abstraction of the STP instruction.
         """
@@ -766,11 +766,15 @@ class Sequencer(Processor):
         if isinstance(obj, self.Register) or isinstance(obj, self.DSP):
             return obj.source(),[],[]
         
-        if isinstance(obj, self._Instruction):
-            return obj["compiled_address"],[],[]
+        if hasattr(obj, "address"):
+            if callable(obj.address):
+                return obj.address(),[],[]
+            return obj.address,[],[]
         
-        if isinstance(obj, Symbol) and obj.value_type() is self._Instruction:
-            return obj.value()["compiled_address"],[],[]
+        if isinstance(obj, Symbol) and "address" in dir(obj.value_type()):
+            if callable(obj.value_type().address):
+                return obj.value().address(),[],[]
+            return obj.value().address,[],[]
 
         # An Operation involving a resource; compile recursively
         # The if statements above along with the "getitem" Operation form

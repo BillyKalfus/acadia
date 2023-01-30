@@ -20,7 +20,7 @@ class HDLModule(object):
         """
         pass
 
-class BusDevice(Symbol):
+class BusDevice():
     def __init__(self, name, size=0, word_bits=32, bus_bits=32):
         """
         A device which can be added to a memory bus.
@@ -40,7 +40,21 @@ class BusDevice(Symbol):
         self._word_bits = word_bits
         self._bus_bits = bus_bits
         
-        Symbol.__init__(self, value_type=int)
+        self._address = Symbol(value_type=int)
+        
+    def assign_address(self, value):
+        """
+        Assign the address of the device.
+        :param value: Address to assign
+        :type value: int
+        """
+        self._address.assign(value)
+        
+    def address_assigned(self):
+        return self._address.assigned()
+        
+    def address(self):
+        return self._address
         
     @property
     def name(self):
@@ -94,11 +108,14 @@ class BusDataport(BusDevice, HDLModule):
     
     def __init__(self, name, ports, word_bits=32, bus_bits=32):
         """
-        A module to split the data signals of a memory bus port. Optionally, the output signals may be gated by the memory enable signal to either be reset when not enabled, 
+        A module to split the data signals of a memory bus port. Optionally,
+        the output signals may be gated by the memory enable signal to either 
+        be reset when not enabled, or latched when not written.
         :param name: name of the module
         :type name: str
         :param ports: List of ports 
-        :type ports: `list` of `dict`, where each element specifies a port. Valid keys are: "name", "from", "to", "direction", "gate", "pipeline"
+        :type ports: `list` of `dict`, where each element specifies a port. 
+        Valid keys are: "name", "from", "to", "direction", "gate", "pipeline"
         """
         self._ports = {}
         self._max_enable_delay = 0
@@ -138,7 +155,7 @@ class BusDataport(BusDevice, HDLModule):
         return self._ports[key]
         
     def generate_hdl(self):
-        if not self.assigned:
+        if not self.address_assigned():
             raise ValueError("Device must be assigned before generating HDL.")
             
         # Finally, write the HDL for the decoder
@@ -292,7 +309,7 @@ class BusDecoder(BusDevice, HDLModule):
     def size(self):
         return self.max_slave_size()*next_highest_power_of_2(len(self._bus_objects))
         
-    def assign(self, value=None):
+    def assign_address(self, value=None):
         """
         Assign attached devices to particular addresses.
         
@@ -325,12 +342,12 @@ class BusDecoder(BusDevice, HDLModule):
         if num_ports*max_size > (2**self._bus_bits):
             raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
             
-        super().assign(value)
+        super().assign_address(value)
         for i,(obj,pipeline) in enumerate(self._bus_objects):
-            obj.assign(value + i*max_size)
+            obj.assign_address(value + i*max_size)
                 
     def generate_hdl(self):
-        if not self.assigned:
+        if not self.address_assigned():
             raise ValueError("Device must be assigned before generating HDL.")
         
         max_size = self.max_slave_size()
@@ -499,7 +516,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             raise TypeError(f"Incompatible type for key {key}")
         
     def generate_hdl(self):
-        if not self.assigned:
+        if not self.address_assigned():
             raise ValueError("Device must be assigned before generating HDL.")
             
         num_ports = next_highest_power_of_2(self.size)

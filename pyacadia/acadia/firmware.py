@@ -5,7 +5,7 @@ from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module
 
 class Firmware(object):
     
-    def __init__(self, project_dir="/tmp"):
+    def __init__(self, project_dir=None):
         """
         Initializes the object with a path to a temporary directory for
         building the firmware image.
@@ -19,7 +19,7 @@ class Firmware(object):
         self._hdl_filename = None
         self._hedgehog_tcl_filename = None
         
-        if not os.path.exists(project_dir):
+        if project_dir is not None and not os.path.exists(project_dir):
             os.mkdir(project_dir)
             
     def items(self):
@@ -135,7 +135,7 @@ class StandardFirmware(Firmware):
     """
     The standard Acadia firmware. Handcrafted, artisanal FPGA logic with notes of silicon and garnished with hedgehog quills.
     """
-    def __init__(self, project_dir="/tmp"):
+    def __init__(self, project_dir=None):
         super().__init__(project_dir)
                 
         # Create a primary decoder for the sequencer bus
@@ -144,57 +144,46 @@ class StandardFirmware(Firmware):
 
         # Create split dataport for triggering and monitoring the DMA and for setting continue signals
         bit = 0
-        dma_ctrl_status_ports = []
-        dma_continue_ports = []
+        dma_trigger_ports = []
+        dma_fifo_empty_ports = []
+        dma_fifo_almost_empty_ports = []
+        
         for label,count in [("dac", StandardFirmware.NUM_DAC), ("adc", StandardFirmware.NUM_ADC), ("cmacc", StandardFirmware.NUM_CMACC)]:
             for idx in range(count):
-                dma_ctrl_status_ports += [{"name": f"{label}_dma{idx}_trig", 
+                dma_trigger_ports += [{"name": f"{label}_dma{idx}", 
                                           "direction": hdl.BusDataport.OUTPUT, 
                                           "offset": bit,
                                           "width": 1,
                                           "gate": hdl.BusDataport.GATE_RESET}]
                 
-                dma_ctrl_status_ports += [{"name": f"{label}_dma{idx}_sequence_done", 
+                dma_fifo_empty_ports += [{"name": f"{label}_dma{idx}", 
                                           "direction": hdl.BusDataport.INPUT, 
                                           "offset": bit,
                                           "width": 1}]
                 
-                dma_continue_ports += [{"name": f"{label}_dma{idx}", 
-                                      "direction": hdl.BusDataport.OUTPUT, 
-                                      "offset": bit,
-                                      "width": 1,
-                                      "gate": hdl.BusDataport.GATE_REGCE,
-                                      "pipeline": 2}]
+                dma_fifo_almost_empty_ports += [{"name": f"{label}_dma{idx}", 
+                                                  "direction": hdl.BusDataport.INPUT, 
+                                                  "offset": bit,
+                                                  "width": 1}]
+            
                 
                 bit += 1
+                
+                fifo_port = hdl.BusDevice(name=f"{label}_dma{idx}_fifo", size=1)
+                sequencer_bus_decoder.add(fifo_port)
         
         
-        dma_ctrl_status = hdl.BusDataport(name="dma_ctrl_status", ports=dma_ctrl_status_ports)
-        sequencer_bus_decoder.add(dma_ctrl_status)
-        self.add(dma_ctrl_status)
+        dma_trigger = hdl.BusDataport(name="dma_trigger", ports=dma_trigger_ports)
+        sequencer_bus_decoder.add(dma_trigger)
+        self.add(dma_trigger)
         
-        dma_continue = hdl.BusDataport(name="dma_continue", ports=dma_continue_ports)
-        sequencer_bus_decoder.add(dma_continue)
-        self.add(dma_continue)
-
-        # Create register ports for sequence words
-        for label,count in [("dac", StandardFirmware.NUM_DAC), ("adc", StandardFirmware.NUM_ADC), ("cmacc", StandardFirmware.NUM_CMACC)]:
-            for i in range(count):
-                dataport = hdl.BusDataport(name=f"{label}_dma{i}_seq", 
-                                       ports=[{"name": f"seq_start", 
-                                              "direction": hdl.BusDataport.OUTPUT, 
-                                              "offset": 0,
-                                              "width": 16,
-                                              "gate": hdl.BusDataport.GATE_REGCE,
-                                              "pipeline": 2},
-                                             {"name": f"seq_end", 
-                                              "direction": hdl.BusDataport.OUTPUT, 
-                                              "offset": 16,
-                                              "width": 16,
-                                              "gate": hdl.BusDataport.GATE_REGCE,
-                                              "pipeline": 2}])
-                sequencer_bus_decoder.add(dataport)
-                self.add(dataport)
+        dma_fifo_empty = hdl.BusDataport(name="dma_fifo_empty", ports=dma_fifo_empty_ports)
+        sequencer_bus_decoder.add(dma_fifo_empty)
+        self.add(dma_fifo_empty)
+        
+        dma_fifo_almost_empty = hdl.BusDataport(name="dma_fifo_almost_empty", ports=dma_fifo_almost_empty_ports)
+        sequencer_bus_decoder.add(dma_fifo_almost_empty)
+        self.add(dma_fifo_almost_empty) 
             
         # Create dataports for controlling accumulator offsets and output values
         for i in range(StandardFirmware.NUM_CMACC):
@@ -333,9 +322,9 @@ class StandardFirmware(Firmware):
             dac_mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_mem", size=StandardFirmware.DAC_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
         
         # Assign decoder addresses
-        sequencer_bus_decoder.assign(0)
-        mem_decoder.assign(StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR // (128 // 8))
-        dac_mem_decoder.assign(StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR // (128 // 8))
+        sequencer_bus_decoder.assign_address(0)
+        mem_decoder.assign_address(StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR // (128 // 8))
+        dac_mem_decoder.assign_address(StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR // (128 // 8))
 
     def write_hedgehog_tcl(self, filename="hedgehog.tcl"):
         """Write a TCL script to populate the HEDGEHOG logic in the standard image. 
@@ -829,12 +818,12 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/adc_dma{d}/clk", f"hedgehog/clk_wiz/clk_300")
 
                 # Connect the ADC DMA signals to the dataports
-                connect_bd_net(f, f"hedgehog/adc_dma{d}_seq_dataport/seq_start", f"hedgehog/adc_dma{d}/seq_start")
-                connect_bd_net(f, f"hedgehog/adc_dma{d}_seq_dataport/seq_end", f"hedgehog/adc_dma{d}/seq_end")
-                connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/adc_dma{d}_sequence_done", f"hedgehog/adc_dma{d}/sequence_done")
-                connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/adc_dma{d}_trig", f"hedgehog/adc_dma{d}/trig")
-                connect_bd_net(f, f"hedgehog/dma_continue_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/seq_continue")
-
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/adc_dma{d}_fifo_mosi", f"hedgehog/adc_dma{d}/descriptor_address_fifo_in")
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/adc_dma{d}_fifo_wr", f"hedgehog/adc_dma{d}/descriptor_address_fifo_wr")
+                connect_bd_net(f, f"hedgehog/dma_trigger_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/descriptor_address_fifo_empty")
+                connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/descriptor_address_fifo_almost_empty")
+                
                 # Create and configure ADC Descriptor BRAMs 
                 create_ip(f, name=f"hedgehog/adc_dma{d}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/adc_dma{d}_descriptor_mem", 
@@ -1023,12 +1012,12 @@ class StandardFirmware(Firmware):
                 create_module(f, f"hedgehog/cmacc_dma{d}", "acadia_dma")
                 connect_bd_net(f, f"hedgehog/cmacc_dma{d}/clk", f"hedgehog/clk_wiz/clk_300")
 
-                # Connect the ADC DMA signals to the dataports
-                connect_bd_net(f, f"hedgehog/cmacc_dma{d}_seq_dataport/seq_start", f"hedgehog/cmacc_dma{d}/seq_start")
-                connect_bd_net(f, f"hedgehog/cmacc_dma{d}_seq_dataport/seq_end", f"hedgehog/cmacc_dma{d}/seq_end")
-                connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/cmacc_dma{d}_sequence_done", f"hedgehog/cmacc_dma{d}/sequence_done")
-                connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/cmacc_dma{d}_trig", f"hedgehog/cmacc_dma{d}/trig")
-                connect_bd_net(f, f"hedgehog/dma_continue_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/seq_continue")
+                # Connect the DMA signals to the dataports
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cmacc_dma{d}_fifo_mosi", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_in")
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cmacc_dma{d}_fifo_wr", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_wr")
+                connect_bd_net(f, f"hedgehog/dma_trigger_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_empty")
+                connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_almost_empty")
 
                 # Connect the CMACC DMA to the CMACC DMA port
                 connect_bd_intf_net(f, f"hedgehog/cmacc_dma{d}/addr", f"hedgehog/cmacc{d}/kernel_mem_addr")
@@ -1184,12 +1173,12 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}_mem/doutb", f"hedgehog/rfdc/s{tile}{block}_axis_tdata")
 
                 # Connect the DAC DMA to the registers
-                connect_bd_net(f, f"hedgehog/dac_dma{channel}_seq_dataport/seq_start", f"hedgehog/dac_dma{channel}/seq_start")
-                connect_bd_net(f, f"hedgehog/dac_dma{channel}_seq_dataport/seq_end", f"hedgehog/dac_dma{channel}/seq_end")
-                connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/dac_dma{channel}_sequence_done", f"hedgehog/dac_dma{channel}/sequence_done")
-                connect_bd_net(f, f"hedgehog/dma_ctrl_status_dataport/dac_dma{channel}_trig", f"hedgehog/dac_dma{channel}/trig")
-                connect_bd_net(f, f"hedgehog/dma_continue_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/seq_continue")
-
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{d}_fifo_mosi", f"hedgehog/dac_dma{d}/descriptor_address_fifo_in")
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{d}_fifo_wr", f"hedgehog/dac_dma{d}/descriptor_address_fifo_wr")
+                connect_bd_net(f, f"hedgehog/dma_trigger_dataport/dac_dma{d}", f"hedgehog/dac_dma{d}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/dac_dma{d}", f"hedgehog/dac_dma{d}/descriptor_address_fifo_empty")
+                connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/dac_dma{d}", f"hedgehog/dac_dma{d}/descriptor_address_fifo_almost_empty")
+                
                 # Create and configure DAC Descriptor BRAMs and connect them to the DMA
                 create_ip(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", 

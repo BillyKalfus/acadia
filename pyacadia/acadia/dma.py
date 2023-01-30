@@ -1,99 +1,85 @@
 __all__ = ["DMA", "Descriptor"]
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 
 from .compiler import Processor, Symbol
-from contextlib import contextmanager
 
 @dataclass
 class Descriptor:
-    length: 'int or Symbol or Operation' = 0
-    address: 'int or Symbol or Operation' = 0
+    """
+    An analog of machine instructions for direct memory access (DMA) modules,
+    descriptors define a single transfer to be carried out by a DMA.
+    """
+    trace_length: 'int or Symbol or Operation' = 0
+    trace_address: 'int or Symbol or Operation' = 0
     decimate: 'int or Symbol' = 0
     hold: 'bool' = False
     
     def assemble(self):
         tmp = 0
-        tmp |= hold << 40
+        tmp |= self.hold << 40
         
         if isinstance(self.decimate, Symbol):
-            tmp |= decimate.value() << 32
+            tmp |= self.decimate.value() << 32
         else:
-            tmp |= decimate << 32
+            tmp |= self.decimate << 32
             
-        if isinstance(self.address, Symbol) or isinstance(self.address, Operation):
-            tmp |= address.value() << 16
+        if isinstance(self.trace_address, Symbol) or isinstance(self.trace_address, Operation):
+            tmp |= self.trace_address.value() << 16
         else:
-            tmp |= address
+            tmp |= self.trace_address
             
-        if isinstance(self.length, Symbol) or isinstance(self.length, Operation):
-            tmp |= length.value()
+        if isinstance(self.trace_length, Symbol) or isinstance(self.trace_length, Operation):
+            tmp |= self.trace_length.value()
         else:
-            tmp |= length
+            tmp |= self.trace_length
             
         return tmp
     
 class DMA(Processor):
+    """
+    An abstraction of the real-time direct memory access (DMA) modules used for
+    streaming data in and out of the Acadia hardware.
+    """
     
     @Processor.instruction()
     def stream(self, instruction_resource):
         """
-        Instructs the DMA to stream a trace.
+        Instructs the DMA to stream a trace. The length of the trace is found
+        by calling :meth:`len` on the first (and only allowed) positional
+        argument. Two additional optional keyword arguments are detailed below.
+        
+        :param trace_address: The trace to be streamed from the DMA.
+        :type trace_address: Address of the trace in trace memory
+        :param trace_length:
+        :param decimate: The decimation factor to set in the DMA
+        :type decimate: `int`, :class:`Symbol`, or :class:`Operation`, optional
+        :param hold: If `True`, decimated samples are considered valid for the
+        entire length of the decimation period, rather than just in the first
+        cycle.
+        :type hold: `bool`, optional
         """
-        if (len(instruction_resource._args) != 1):
+        if (len(instruction_resource["args"]) != 1):
             raise ValueError("Stream instruction should have one positional"
                              " argument; received"
-                             f" args={instruction_resource._args}")
+                             f" args={instruction_resource['args']}")
             
+        arg = instruction_resource["args"][0]
 
-        hold = False
-        decimate = 0    
-        for key in instruction_resource._kwargs.keys():
-            if key == "decimate":
-                decimate = instruction_resource._kwargs[key]
-            elif key == "hold":
-                hold = instruction_resource._kwargs[key]
+        fields = {}
+        fields["hold"] = False
+        fields["decimate"] = 0
+        fields["trace_address"] = arg.address() if hasattr(arg, "address") else None
+        fields["trace_length"] = len(arg) if hasattr(arg, "__len__") else None
+        for key in instruction_resource["kwargs"].keys():
+            if key in ["decimate", "hold", "trace_length", "trace_address"]:
+                fields[key] = instruction_resource["kwargs"][key]
             else:
                 raise KeyError(f"Unrecognized keyword argument {key}.")
             
-        arg = instruction_resource._args[0]
-        descriptor = Descriptor(length=len(arg), decimate=decimate, hold=hold)
-        instruction_resource["compiled_instructions"] = descriptor
-        
-    @contextmanager
-    def sequence(self, symbols=False):
-        """
-        Creates a tracked sequence of streams for this DMA. The context target
-        may be provided in two forms, depending on the value of `symbols`.
-        If `True`, the target is a tuple of :class:`Symbol` objects; the first
-        :class:`Symbol` contains the instruction resource of the first stream 
-        in the sequence and the second :class:`Symbol` contains the last. If
-        `False`, the target is an :class:`Operation` on these :class:`Symbol`
-        objects that packs the compiled address of the start stream and the 
-        final stream into a single 32-bit integer, in the form expected by 
-        the Acadia sequencer.
-        
-        :param symbols: Determines whether this context will yield a tuple of
-        :class:`Symbol` objects or an :class:`Operation` packing them.
-        :type symbols: `bool`, optional
-        """
-        seq_start = self._Instruction.next_instance()
-        seq_end = Symbol(value_type=self._Instruction)
-        
-        self.block_start()
-        if symbols:
-            yield seq_start,seq_end
-        else:
-            yield (seq_end["compiled_address"] << 16) | seq_start["compiled_address"]
-        self.block_end()
-        
-        seq_end.assign(self._Instruction.instances[-1])
+        descriptor = Descriptor(*fields)
+        instruction_resource["compiled_instructions"] = [descriptor]
         
     def assemble(self):
-        descriptors = []
-        for resource in self._compiled_program:
-            # The compiled instructions should just be the Descriptor object
-            descriptor_bin = resource["compiled_instructions"].assemble()
-            descriptor_bin |= resource["compiled_address"] << 16
-            descriptors.append(descriptor_bin)
-        return descriptors
+        return [d.assemble() for d in self._compiled_program]

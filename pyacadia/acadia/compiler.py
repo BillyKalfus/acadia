@@ -610,10 +610,14 @@ class Processor(ABC):
         # of instructions. The only reason we choose to make the instruction
         # type an instance member is so that its instances created for a 
         # particular Processor object can be tracked
+        def instruction_address(instruction_self):
+            return instruction_self["compiled_address"]
+        
         self._Instruction = ManagedResource(
                                 f"Instruction", 
                                 (dict,), 
-                                {"OPERATORS": []}, 
+                                {"OPERATORS": [],
+                                 "address": instruction_address}, 
                                 instance_limit=instruction_limit)
             
     def block_start(self, inline=False, previous_instruction=False):
