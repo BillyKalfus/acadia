@@ -21,24 +21,24 @@ class HDLModule(object):
         pass
 
 class BusDevice():
-    def __init__(self, name, size=0, word_bits=32, bus_bits=32):
+    def __init__(self, name, size=0, bus_data_bits=32, bus_addr_bits=32):
         """
         A device which can be added to a memory bus.
         :param name: Name of the device to be added
         :type name: str
         :param size: Number of words needed in the address space of the bus.
         :type size: int, optional
-        :param word_bits: Number of bits in a data word, equal to the width of the data bus
-        :type word_bits: int, optional
-        :param bus_bits: The number of bits in the bus interface
-        :type bus_bits: int, optional
+        :param bus_data_bits: Number of bits in a data word, equal to the width of the data bus
+        :type bus_data_bits: int, optional
+        :param bus_addr_bits: The number of bits in the bus interface
+        :type bus_addr_bits: int, optional
         :param address: The address of the device, whose interpretation is left to be defined by child classes
         :type address: int, optional
         """
         self._name = name
         self._size = size
-        self._word_bits = word_bits
-        self._bus_bits = bus_bits
+        self._bus_data_bits = bus_data_bits
+        self._bus_addr_bits = bus_addr_bits
         
         self._address = Symbol(value_type=int)
         
@@ -76,28 +76,28 @@ class BusDevice():
             
         return self._size
     
-    def words(self, word_bits):
+    def words(self, bus_data_bits):
         """
         :return: The equivalent number of words required by this device for a given word width
         :rtype: int
         """
-        return self.size * self._word_bits / word_bits
+        return self.size * self._bus_data_bits / bus_data_bits
     
     @property
-    def word_bits(self):
+    def bus_data_bits(self):
         """
         :return: The width of the data word
         :rtype: int
         """
-        return self._word_bits
+        return self._bus_data_bits
     
     @property
-    def bus_bits(self):
+    def bus_addr_bits(self):
         """
         :return: The width of the bus address space
         :rtype: int
         """
-        return self._bus_bits
+        return self._bus_addr_bits
     
 class BusDataport(BusDevice, HDLModule):
     
@@ -106,7 +106,7 @@ class BusDataport(BusDevice, HDLModule):
     GATE_RESET = 1
     GATE_REGCE = 2
     
-    def __init__(self, name, ports, word_bits=32, bus_bits=32):
+    def __init__(self, name, ports, bus_data_bits=32, bus_addr_bits=32):
         """
         A module to split the data signals of a memory bus port. Optionally,
         the output signals may be gated by the memory enable signal to either 
@@ -120,14 +120,17 @@ class BusDataport(BusDevice, HDLModule):
         self._ports = {}
         self._max_enable_delay = 0
         
+        self._used_input_bits = 0
+        
         for idx,port in enumerate(ports):
             # Load keywords for each port and assign default values if necessary
             port_name = port.pop("name", f"{name}{idx}")
             port_offset = port.pop("offset", 0)
-            port_width = port.pop("width", word_bits)
+            port_width = port.pop("width", bus_data_bits)
             port_direction = port.pop("direction", BusDataport.INPUT)
             port_gate = port.pop("gate", None)
             port_pipeline = port.pop("pipeline", 0)
+            port_mask = (2**port_width - 1) << port_offset
             
             # There should be no keys left, throw an error if there are
             if len(port) != 0:
@@ -136,15 +139,20 @@ class BusDataport(BusDevice, HDLModule):
             # Keep track of whether we need to make a delayed enable signal for pipelined gated signals
             if (port_gate is not None) and port_pipeline > self._max_enable_delay:
                 self._max_enable_delay = port_pipeline
+             
+            # Update the mask that keeps track of used inputs, so that we can later
+            # set all unused bits to a constant
+            if port_direction == BusDataport.INPUT:
+                self._used_input_bits |= port_mask
             
             self._ports[port_name] = {"width": port_width, 
                                       "offset": port_offset, 
                                       "direction": port_direction, 
                                       "gate": port_gate, 
                                       "pipeline": port_pipeline,
-                                      "mask": (2**port_width - 1) << port_offset}
+                                      "mask": port_mask}
         
-        BusDevice.__init__(self, name, 1, word_bits, bus_bits)
+        BusDevice.__init__(self, name, 1, bus_data_bits, bus_addr_bits)
         HDLModule.__init__(self, name)
         
     @property
@@ -164,8 +172,8 @@ class BusDataport(BusDevice, HDLModule):
         hdl += f'    port (\n'
         hdl += f'        nrst            : in  std_logic;\n\n'
         hdl += f'        -- Slave interface\n'
-        hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
-        hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
+        hdl += f'        master_bus_mosi : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
+        hdl += f'        master_bus_miso : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_wr   : in  std_logic;\n'
         hdl += f'        master_bus_clk  : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n\n'
@@ -198,8 +206,8 @@ class BusDataport(BusDevice, HDLModule):
                     hdl += f'    signal master_bus_mosi_{"d"*p}_{port_name}: std_logic_vector({port["width"]-1} downto 0);\n'
                 elif port["direction"] == BusDataport.INPUT:
                     hdl += f'    signal {port_name}_{"d"*p}: std_logic_vector({port["width"]-1} downto 0);\n'
-                    
-            hdl += f'\n'
+            if port["pipeline"] > 1:        
+                hdl += f'\n'
         hdl += f'\nbegin\n'
         
         # Delay the enable signals
@@ -251,20 +259,25 @@ class BusDataport(BusDevice, HDLModule):
                 hdl += f'        end if;\n'    
                 hdl += f'    end process {port_name}_proc;\n\n'
                 
+        # Finally, assign all unused inputs to a constant
+        for bit in range(self._bus_data_bits):
+            if not (self._used_input_bits & (1 << bit)):
+                hdl += f'    master_bus_miso({bit}) <= \'0\';\n'
+                
         hdl += f'end rtl;\n'
                         
         return hdl
     
 class BusDecoder(BusDevice, HDLModule):
-    def __init__(self, name, word_bits=32, bus_bits=32, pipeline_miso=False):
+    def __init__(self, name, bus_data_bits=32, bus_addr_bits=32, pipeline_miso=False):
         """
         Generate an HDL file for a memory bus decoder.
         :param name: name of the decoder to generate
         :type name: str
-        :param word_bits: number of bits in the data word
-        :type word_bits: int, optional
-        :param bus_bits: number of bits in the address word
-        :type bus_bits: int, optional
+        :param bus_data_bits: number of bits in the data word
+        :type bus_data_bits: int, optional
+        :param bus_addr_bits: number of bits in the address word
+        :type bus_addr_bits: int, optional
         :param pipeline_miso: indicates whether to pipeline the signal driving the master data input
         :type pipeline_miso: bool, optional
         """
@@ -272,12 +285,12 @@ class BusDecoder(BusDevice, HDLModule):
         self._bus_objects = []
         self._pipeline_miso = pipeline_miso
             
-        BusDevice.__init__(self, name, 0, word_bits, bus_bits)
+        BusDevice.__init__(self, name, 0, bus_data_bits, bus_addr_bits)
         HDLModule.__init__(self, name)
         
     def add(self, obj, pipeline=False):
         if isinstance(obj, BusDevice):
-            if obj.word_bits != self.word_bits:
+            if obj.bus_data_bits != self.bus_data_bits:
                 raise ValueError("Connected BusDevices and BusDecoders must have the same number of bits in a data word.")
             self._bus_objects.append((obj, pipeline))
         else:
@@ -339,7 +352,7 @@ class BusDecoder(BusDevice, HDLModule):
         
         
         # Throw an error if a smarter strategy is needed
-        if num_ports*max_size > (2**self._bus_bits):
+        if num_ports*max_size > (2**self._bus_addr_bits):
             raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
             
         super().assign_address(value)
@@ -365,17 +378,17 @@ class BusDecoder(BusDevice, HDLModule):
         hdl += f'entity {self._name} is\n'
         hdl += f'    port (\n'
         hdl += f'        -- Slave interface\n'
-        hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
-        hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
+        hdl += f'        master_bus_mosi : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
+        hdl += f'        master_bus_miso : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_addr : in  std_logic_vector({next_highest_power_of_2(self.size, log=True)-1} downto 0);\n'
         hdl += f'        master_bus_wr   : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n'
         hdl += f'        master_bus_clk  : in  std_logic;\n\n'
         
         for i,(obj,pipeline) in enumerate(self._bus_objects):
-            hdl += f'        -- {obj.name} interface (local bus address 0x{obj.value()-self.value():08X}), (global bus address 0x{obj.value():08X})\n'
-            hdl += f'        {obj.name}_mosi : out std_logic_vector({self.word_bits-1} downto 0);\n'
-            hdl += f'        {obj.name}_miso : in  std_logic_vector({self.word_bits-1} downto 0);\n'
+            hdl += f'        -- {obj.name} interface (local bus address 0x{obj.address().value()-self.address().value():08X}), (global bus address 0x{obj.address().value():08X})\n'
+            hdl += f'        {obj.name}_mosi : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
+            hdl += f'        {obj.name}_miso : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
             hdl += f'        {obj.name}_addr : out std_logic_vector({low_address_bit-1} downto 0);\n'
             hdl += f'        {obj.name}_wr   : out std_logic;\n'
             hdl += f'        {obj.name}_en   : out std_logic;\n'
@@ -428,7 +441,7 @@ class BusDecoder(BusDevice, HDLModule):
         
         # Connect all the master output ports
         for i,(obj, pipeline) in enumerate(self._bus_objects):
-            hdl += f'    -- {obj.name} interface (local bus address 0x{obj.value()-self.value():08X}), (global bus address 0x{obj.value():08X})\n'         
+            hdl += f'    -- {obj.name} interface (local bus address 0x{obj.address().value()-self.address().value():08X}), (global bus address 0x{obj.address().value():08X})\n'         
             hdl += f'    {obj.name}_clk  <= master_bus_clk;\n\n'
             if pipeline:
                 hdl += f'    {obj.name}_proc: process(master_bus_clk) begin\n'
@@ -447,7 +460,7 @@ class BusDecoder(BusDevice, HDLModule):
             else:
                 hdl += f'    {obj.name}_mosi <= master_bus_mosi;\n'
                 hdl += f'    {obj.name}_addr <= master_bus_addr({low_address_bit-1} downto 0);\n'
-                hdl += f'    {obj.name}_wr   <= master_bus_wr;\n'
+                hdl += f'    {obj.name}_wr   <= master_bus_wr when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \'0\';\n'
                 hdl += f'    {obj.name}_en   <= master_bus_en when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \'0\';\n'
             
 
@@ -457,7 +470,7 @@ class BusDecoder(BusDevice, HDLModule):
     
 class BusDataMoverController(BusDevice, HDLModule):
         
-    def __init__(self, name, datamovers, addr_bits, word_bits=32, bus_bits=32):
+    def __init__(self, name, datamovers, addr_bits, bus_data_bits=32, bus_addr_bits=32):
         """
         A bus interface for access to the command and status ports of an array of AXI DataMovers.
         A small number of registers are also provided for interacting with a given DataMover, where the base address of the 
@@ -494,7 +507,7 @@ class BusDataMoverController(BusDevice, HDLModule):
         self._datamovers = datamovers
         self._addr_bits = addr_bits
         
-        BusDevice.__init__(self, name, self.size, word_bits, bus_bits)
+        BusDevice.__init__(self, name, self.size, bus_data_bits, bus_addr_bits)
         HDLModule.__init__(self, name)
         
     @property
@@ -523,7 +536,7 @@ class BusDataMoverController(BusDevice, HDLModule):
         bus_addr_bits = next_highest_power_of_2(num_ports, log=True)
         
         # Throw an error if a smarter strategy is needed
-        if num_ports > (2**self.bus_bits):
+        if num_ports > (2**self.bus_addr_bits):
             raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices with a max size of {max_size}).")
             
         # Finally, write the HDL for the decoder
@@ -533,8 +546,8 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'        clk  : in std_logic;\n'
         hdl += f'        nrst : in std_logic;\n\n'
         hdl += f'        -- Slave interface\n'
-        hdl += f'        master_bus_mosi : in  std_logic_vector({self.word_bits-1} downto 0);\n'
-        hdl += f'        master_bus_miso : out std_logic_vector({self.word_bits-1} downto 0);\n'
+        hdl += f'        master_bus_mosi : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
+        hdl += f'        master_bus_miso : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_addr : in  std_logic_vector({bus_addr_bits-1} downto 0);\n'
         hdl += f'        master_bus_wr   : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n\n'

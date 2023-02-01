@@ -108,17 +108,18 @@ class STP:
         :rtype: int
         """
         tmp = 0
-        tmp |= self.push_return << 94
-        tmp |= self.src1.value << 88
-        tmp |= self.src2.value << 82
-        tmp |= self.dest1.value << 77
+        # Opcode = 0 for STP
+        tmp |= self.push_return << 104
+        tmp |= self.src1.value << 96
+        tmp |= self.src2.value << 88
+        tmp |= self.dest1.value << 80
         tmp |= self.dest2.value << 72
 
-        if isinstance(self.dsp_cep, DSP):
+        if isinstance(self.dsp_cep, Sequencer.DSP):
             tmp |= (1 << self.dsp_cep._resource_id) << 64
-        elif (isinstance(self.imm_stval, Symbol) 
-            or isinstance(self.imm_stval, Operation)
-            or isinstance(self.imm_stval, DSPConfiguration)):
+        elif (isinstance(self.dsp_cep, Symbol) 
+            or isinstance(self.dsp_cep, Operation)
+            or isinstance(self.dsp_cep, DSPConfiguration)):
             tmp |= self.dsp_cep.value() << 64
         else:
             tmp |= self.dsp_cep << 64
@@ -200,17 +201,18 @@ class STC:
         :rtype: int
         """
         tmp = 0
-        tmp |= self.push_return << 94
-        tmp |= self.src_stval.value << 88
-        tmp |= self.src_tval.value << 82
-        tmp |= self.dest_stval.value << 77
+        tmp |= 1 << 112 # Opcode for STC
+        tmp |= self.push_return << 104
+        tmp |= self.src_stval.value << 96
+        tmp |= self.src_tval.value << 88
+        tmp |= self.dest_stval.value << 80
         tmp |= self.op << 72
 
-        if isinstance(self.dsp_cep, DSP):
+        if isinstance(self.dsp_cep, Sequencer.DSP):
             tmp |= (1 << self.dsp_cep._resource_id) << 64
-        elif (isinstance(self.imm_stval, Symbol) 
-            or isinstance(self.imm_stval, Operation)
-            or isinstance(self.imm_stval, DSPConfiguration)):
+        elif (isinstance(self.dsp_cep, Symbol) 
+            or isinstance(self.dsp_cep, Operation)
+            or isinstance(self.dsp_cep, DSPConfiguration)):
             tmp |= self.dsp_cep.value() << 64
         else:
             tmp |= self.dsp_cep << 64
@@ -449,7 +451,7 @@ class DSPConfiguration:
 
         # Constants below from the Acadia manual, as these are determined
         # by the logic
-        self.value = ((dsp_bits << 28) 
+        self._value = ((dsp_bits << 28) 
                     | (dsp_cep_bits << 21)
                     | (dsp_data_dest_bits << 18)
                     | (self.rst_p << 17)
@@ -461,7 +463,7 @@ class DSPConfiguration:
                     | mode.alumode)
         
     def value(self):
-        return self.value
+        return self._value
     
 class Sequencer(Processor):
     """
@@ -528,6 +530,30 @@ class Sequencer(Processor):
         def dsp_setitem(dsp_self, key, value):
             self.store(src=value, dest=dsp_self, port=key)
             
+        def dsp_start_count(dsp_self, inc=1):
+            if isinstance(inc, int) and inc == 1:
+                self.store(src=DSPConfiguration(dsp=dsp_self, 
+                                                mode="P+CIN", 
+                                                cin=True,
+                                                dsp_cep="set"), 
+                           dest=Destination.DSP_CFG)
+            elif is_numeric(inc):
+                self.STP(src1=DSPConfiguration(dsp=dsp_self, 
+                                               mode="P+AB", 
+                                               dsp_data_register_load="AB",
+                                               dsp_cep="set"), 
+                         dest1=Destination.DSP_CFG, 
+                         src2=inc, 
+                         dest2=dsp_self.destination())
+            else:
+                raise TypeError(f"Provided increment must be numeric;"
+                                f" received {inc}.")
+                
+        def dsp_stop_count(dsp_self):
+            self.store(src=DSPConfiguration(dsp=dsp_self, 
+                                            dsp_cep="reset"), 
+                       dest=Destination.DSP_CFG)
+            
         self.DSP = ManagedResource(
             "DSP", 
             (Sequencer.DSP,), 
@@ -538,6 +564,8 @@ class Sequencer(Processor):
              "load": resource_load,
              "operator_handler": resource_load,
              "__setitem__": dsp_setitem,
+             "start_count": dsp_start_count,
+             "stop_count": dsp_stop_count,
              "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
@@ -579,6 +607,9 @@ class Sequencer(Processor):
         
     def goto(self, target):
         self.store(src=target, dest=Destination.PC)
+        
+    def nop(self):
+        self.store()
                 
     @Processor.instruction()
     def STP(self, instruction_resource):
@@ -587,15 +618,15 @@ class Sequencer(Processor):
         """
         kwargs = instruction_resource["kwargs"]
         compiled_kwargs = {}
-        compiled_kwargs["src1"] = kwargs["src1"] if "src1" in kwargs else 0
-        compiled_kwargs["src2"] = kwargs["src2"] if "src2" in kwargs else 0
-        compiled_kwargs["dest1"] = kwargs["dest1"] if "dest1" in kwargs else 0
-        compiled_kwargs["dest2"] = kwargs["dest2"] if "dest2" in kwargs else 0
+        compiled_kwargs["src1"] = kwargs["src1"] if "src1" in kwargs else Source(0)
+        compiled_kwargs["src2"] = kwargs["src2"] if "src2" in kwargs else Source(0)
+        compiled_kwargs["dest1"] = kwargs["dest1"] if "dest1" in kwargs else Destination(0)
+        compiled_kwargs["dest2"] = kwargs["dest2"] if "dest2" in kwargs else Destination(0)
         compiled_kwargs["imm1"] = kwargs["imm1"] if "imm1" in kwargs else 0
         compiled_kwargs["imm2"] = kwargs["imm2"] if "imm2" in kwargs else 0
         compiled_kwargs["dsp_cep"] = kwargs["dsp_cep"] if "dsp_cep" in kwargs else 0
         compiled_kwargs["push_return"] = kwargs["push_return"] if "push_return" in kwargs else False
-        instruction_resource["compiled_instructions"] = STP(**compiled_kwargs)
+        instruction_resource["compiled_instructions"] = [STP(**compiled_kwargs)]
         
     @Processor.instruction()
     def store(self, instruction_resource):
@@ -1205,8 +1236,3 @@ class Sequencer(Processor):
         # TODO
         # If the start value is 0, we don't need a separate instruction to load
         # P first, since we can reset it when 
-                
-    
-    
-    def assemble():
-        pass

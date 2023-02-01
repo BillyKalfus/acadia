@@ -131,12 +131,7 @@ begin
             input_valid <= kernel_mem_addr_tvalid;
             input_last  <= kernel_mem_addr_tlast;
             
-            if(rst = '1') then
-                a_re <= (others => '0');
-                a_im <= (others => '0');
-                b_re <= (others => '0');
-                b_im <= (others => '0');
-            elsif(kernel_mem_addr_tvalid = '1') then
+            if(kernel_mem_addr_tvalid = '1') then
                 a_re <= signed(signal_in(15 downto 0));
                 a_im <= signed(signal_in(31 downto 16));
                 b_re <= signed(kernel_mem_dout(15 downto 0));
@@ -160,17 +155,10 @@ begin
             product_valid <= input_valid;
             product_last  <= input_last;
             
-            if(rst = '1') then
-                a_re_b_re <= (others => '0');
-                a_im_b_re <= (others => '0');
-                a_re_b_im <= (others => '0');
-                a_im_b_im <= (others => '0');
-            else
-                a_re_b_re <= a_re * b_re;
-                a_im_b_re <= a_im * b_re;
-                a_re_b_im <= a_re * b_im;
-                a_im_b_im <= a_im * b_im;
-            end if;
+            a_re_b_re <= a_re * b_re;
+            a_im_b_re <= a_im * b_re;
+            a_re_b_im <= a_re * b_im;
+            a_im_b_im <= a_im * b_im;
         end if;
     end process product_proc;
             

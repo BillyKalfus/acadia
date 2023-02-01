@@ -3,7 +3,7 @@ __all__ = ["DMA", "Descriptor"]
 from dataclasses import dataclass
 from contextlib import contextmanager
 
-from .compiler import Processor, Symbol
+from .compiler import Processor, Symbol, Operation
 
 @dataclass
 class Descriptor:
@@ -28,7 +28,7 @@ class Descriptor:
         if isinstance(self.trace_address, Symbol) or isinstance(self.trace_address, Operation):
             tmp |= self.trace_address.value() << 16
         else:
-            tmp |= self.trace_address
+            tmp |= self.trace_address << 16
             
         if isinstance(self.trace_length, Symbol) or isinstance(self.trace_length, Operation):
             tmp |= self.trace_length.value()
@@ -60,26 +60,27 @@ class DMA(Processor):
         cycle.
         :type hold: `bool`, optional
         """
-        if (len(instruction_resource["args"]) != 1):
-            raise ValueError("Stream instruction should have one positional"
-                             " argument; received"
-                             f" args={instruction_resource['args']}")
-            
-        arg = instruction_resource["args"][0]
-
         fields = {}
         fields["hold"] = False
         fields["decimate"] = 0
-        fields["trace_address"] = arg.address() if hasattr(arg, "address") else None
-        fields["trace_length"] = len(arg) if hasattr(arg, "__len__") else None
+        
+        if len(instruction_resource["args"]) == 1:
+            arg = instruction_resource["args"][0]
+            fields["trace_address"] = arg.address() if hasattr(arg, "address") else None
+            fields["trace_length"] = len(arg) if hasattr(arg, "__len__") else None
+        elif len(instruction_resource["args"]) == 0:
+            fields["trace_address"] = None
+            fields["trace_length"] = None
+        else:
+            raise ValueError("Stream instruction should have one or zero"
+                             " positional arguments; received"
+                             f" args={instruction_resource['args']}")
+            
         for key in instruction_resource["kwargs"].keys():
             if key in ["decimate", "hold", "trace_length", "trace_address"]:
                 fields[key] = instruction_resource["kwargs"][key]
             else:
                 raise KeyError(f"Unrecognized keyword argument {key}.")
             
-        descriptor = Descriptor(*fields)
+        descriptor = Descriptor(**fields)
         instruction_resource["compiled_instructions"] = [descriptor]
-        
-    def assemble(self):
-        return [d.assemble() for d in self._compiled_program]

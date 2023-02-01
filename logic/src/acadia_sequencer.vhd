@@ -45,7 +45,7 @@ entity acadia_sequencer is
         nrst                 : in  std_logic;
         
         -- Instruction memory interface(s)
-        instruction_mem_dout : in  std_logic_vector(95 downto 0);
+        instruction_mem_dout : in  std_logic_vector(127 downto 0);
         instruction_mem_addr : out std_logic_vector(15 downto 0);
         instruction_mem_rst  : out std_logic;
         instruction_mem_clk  : out std_logic;
@@ -106,6 +106,9 @@ architecture rtl of acadia_sequencer is
     constant DEST_DSP_CFG  : natural := 15;
     constant DEST_DSP_DATA : natural := 16;
 
+    constant OPCODE_STP    : std_logic_vector(0 downto 0) := "0";
+    constant OPCODE_STC    : std_logic_vector(0 downto 0) := "1";
+
     -- General type for array of words
     type word_array is array (natural range <>) of std_logic_vector(WORD_SIZE-1 downto 0);
                               
@@ -121,8 +124,7 @@ architecture rtl of acadia_sequencer is
     signal bus_wr_reg               : std_logic;
     
     -- Program counter
-    signal pc                       : std_logic_vector(WORD_SIZE-1 downto 0);
-    signal pc_jump_address          : std_logic_vector(WORD_SIZE-1 downto 0);
+    signal pc                       : std_logic_vector(15 downto 0);
     
     -- Data sources
     signal src1                     : std_logic_vector(WORD_SIZE-1 downto 0);
@@ -145,11 +147,13 @@ architecture rtl of acadia_sequencer is
     signal cond_satisfied    : std_logic;
     
     -- Instruction signals
-    signal instruction       : std_logic_vector(95 downto 0);
+    signal instruction       : std_logic_vector(127 downto 0);
+    
     signal instruction_rst   : std_logic;
     signal instruction_en    : std_logic;
     signal instruction_en_d  : std_logic;
     
+    signal instr_opcode      : std_logic_vector(0 downto 0);
     signal instr_src1        : std_logic_vector(4 downto 0);
     signal instr_src2        : std_logic_vector(4 downto 0);
     signal instr_dest1       : std_logic_vector(4 downto 0);
@@ -157,6 +161,7 @@ architecture rtl of acadia_sequencer is
     signal instr_imm1        : std_logic_vector(WORD_SIZE-1 downto 0);
     signal instr_imm2        : std_logic_vector(WORD_SIZE-1 downto 0);
     signal instr_dsp_cep     : std_logic_vector(3 downto 0);
+    signal instr_dsp_cep_en  : std_logic;
     signal instr_push_return : std_logic;
     signal instr_op_sel      : std_logic_vector(2 downto 0);
         
@@ -176,10 +181,11 @@ architecture rtl of acadia_sequencer is
     signal dsp_cep_reg       : std_logic_vector(NUM_DSP-1 downto 0);
                              
     signal dsp_p             : dsp_array(0 to NUM_DSP-1);
+    signal dsp_p_reg         : word_array(0 to NUM_DSP-1);
                              
     -- DSP pattern detector signals
-    signal dsp_patterndetect         : std_logic_vector(NUM_DSP-1 downto 0);
-    signal dsp_dsp_patterndetectpast : std_logic_vector(NUM_DSP-1 downto 0);
+    signal dsp_patterndetect     : std_logic_vector(NUM_DSP-1 downto 0);
+    signal dsp_patterndetectpast : std_logic_vector(NUM_DSP-1 downto 0);
                               
     -- DSP cascade
     signal dsp_pcout         : dsp_array(0 to NUM_DSP-1);
@@ -190,8 +196,8 @@ architecture rtl of acadia_sequencer is
     signal dsp_cfg_sel       : std_logic_vector(NUM_DSP-1 downto 0);
     signal dsp_cfg_data      : std_logic_vector(WORD_SIZE-1 downto 0);
     signal dsp_data_in       : dsp_array(NUM_DSP-1 downto 0);
-    signal dsp_rst_ab        : std_logic_vector(NUM_DSP-1 downto 0);
-    signal dsp_rst_c         : std_logic_vector(NUM_DSP-1 downto 0); 
+--    signal dsp_rst_ab        : std_logic_vector(NUM_DSP-1 downto 0);
+--    signal dsp_rst_c         : std_logic_vector(NUM_DSP-1 downto 0); 
     signal dsp_rst_p         : std_logic_vector(NUM_DSP-1 downto 0);
                               
 begin
@@ -226,19 +232,21 @@ begin
     end process instruction_proc;
                                                   
     -- Instruction decoding
-    instr_push_return  <= instruction(94);
-    instr_src1     <= instruction(92 downto 88);
-    instr_src2     <= instruction(86 downto 82);
-    instr_dest1    <= instruction(81 downto 77);
+    instr_opcode   <= instruction(112 downto 112);
+    instr_push_return  <= instruction(104);
+    instr_src1     <= instruction(100 downto 96);
+    instr_src2     <= instruction(92 downto 88);
+    instr_dest1    <= instruction(84 downto 80);
     instr_dest2    <= instruction(76 downto 72);
+    instr_dsp_cep_en <= instruction(68);
     instr_dsp_cep  <= instruction(67 downto 64);
     instr_imm1     <= instruction(63 downto 32);
     instr_imm2     <= instruction(31 downto 0);
     instr_op_sel   <= instruction(74 downto 72);
     
     -- Enable or disable the destination decoders depending on the instruction opcode and the condition satisfaction
-    dest1_dec_en <= (cond_satisfied and instruction(95)) or (not instruction(95));
-    dest2_dec_en <= not instruction(95);
+    dest1_dec_en <= cond_satisfied when instr_opcode = OPCODE_STC else '1';
+    dest2_dec_en <= '0' when instr_opcode = OPCODE_STC else '1';
     
     -- Implement the destination and source decoders
     decoder_dest1_inst: entity work.acadia_decoder 
@@ -285,7 +293,7 @@ begin
             stack(to_integer(unsigned(stack_rd_addr))) when to_integer(unsigned(instr_src1)) = SRC_STACK      else
             bus_addr_reg                               when to_integer(unsigned(instr_src1)) = SRC_BUS_ADDR   else
             mem_bus_miso                               when to_integer(unsigned(instr_src1)) = SRC_BUS_DATA   else
-            dsp_p(to_integer(unsigned(instr_src1(LOG2_NUM_DSP-1 downto 0))))(WORD_SIZE-1 downto 0);
+            dsp_p_reg(to_integer(unsigned(instr_src1(LOG2_NUM_DSP-1 downto 0))));
             
     src2 <= r(0)                                       when to_integer(unsigned(instr_src2)) = SRC_REG+0      else
             r(1)                                       when to_integer(unsigned(instr_src2)) = SRC_REG+1      else
@@ -302,7 +310,7 @@ begin
             stack(to_integer(unsigned(stack_rd_addr))) when to_integer(unsigned(instr_src2)) = SRC_STACK      else
             bus_addr_reg                               when to_integer(unsigned(instr_src2)) = SRC_BUS_ADDR   else
             mem_bus_miso                               when to_integer(unsigned(instr_src2)) = SRC_BUS_DATA   else
-            dsp_p(to_integer(unsigned(instr_src2(LOG2_NUM_DSP-1 downto 0))))(WORD_SIZE-1 downto 0);
+            dsp_p_reg(to_integer(unsigned(instr_src2(LOG2_NUM_DSP-1 downto 0))));
             
     -- Make general-purpose registers
     reg_proc: process(clk) begin
@@ -465,9 +473,19 @@ begin
          
     -- Generate the cascade signals
     -- only go up to NUM_DSP-2 because of the +1 in the loop
+    dsp_pcin(0) <= (others => '0');
     dsp_pc_gen: for i in 0 to NUM_DSP-2 generate
         dsp_pcin(i+1) <= dsp_pcout(i);
-    end generate dsp_pc_gen;                         
+    end generate dsp_pc_gen;    
+                             
+    -- Pipeline the P register
+    dsp_p_reg_proc: process(clk) begin
+        if rising_edge(clk) then
+            dsp_p_reg_loop: for i in 0 to NUM_DSP-1 loop
+                dsp_p_reg(i) <= dsp_p(i)(WORD_SIZE-1 downto 0);
+            end loop dsp_p_reg_loop;
+        end if;
+    end process dsp_p_reg_proc;
     
     -- Instantiate the DSP slices
     dsp_gen: for i in 0 to NUM_DSP-1 generate
@@ -481,8 +499,8 @@ begin
                                                   else (others => dsp_data_in(i)(WORD_SIZE-1));
         
         -- Control the input registers and P
-        dsp_rst_ab(i)  <= dsp_cfg_sel(i) and dsp_cfg_data(14);
-        dsp_rst_c(i)   <= dsp_cfg_sel(i) and dsp_cfg_data(16);
+        -- dsp_rst_ab(i)  <= dsp_cfg_sel(i) and dsp_cfg_data(14);
+        -- dsp_rst_c(i)   <= dsp_cfg_sel(i) and dsp_cfg_data(16);
         dsp_rst_p(i)   <= dsp_cfg_sel(i) and dsp_cfg_data(17);
                   
         dsp_cec(i)  <= '1' when (dsp_cfg_sel(i) = '1' 
@@ -492,7 +510,7 @@ begin
                                        or dest2_dec(DEST_DSP_DATA+i) = '1')) 
                            else '0';
         dsp_ceab(i) <= '1' when (dsp_cfg_sel(i) = '1' and dsp_cfg_data(20 downto 19) = "01") else '0';
-        dsp_cep(i) <= '1' when to_integer(unsigned(instr_dsp_cep)) = i else dsp_cep_reg(i);
+        dsp_cep(i) <= instr_dsp_cep_en when to_integer(unsigned(instr_dsp_cep)) = i else dsp_cep_reg(i);
         
         DSP_inst : DSP48E2
             generic map (
@@ -546,7 +564,7 @@ begin
                 CREG                      => 1,               -- Pipeline stages for C (0-1)
                 DREG                      => 1,               -- Pipeline stages for D (0-1)
                 INMODEREG                 => 1,               -- Pipeline stages for INMODE (0-1)
-                MREG                      => 1,               -- Multiplier pipeline stages (0-1)
+                MREG                      => 0,               -- Multiplier pipeline stages (0-1)
                 OPMODEREG                 => 1,               -- Pipeline stages for OPMODE (0-1)
                 PREG                      => 1                -- Number of pipeline stages for P (0-1)
             )
@@ -570,8 +588,8 @@ begin
                 XOROUT         => open,                    -- 8-bit output: XOR data
                 
                 -- Cascade inputs: Cascade Ports
-                ACIN           => X"00000000",             -- 30-bit input: A cascade data
-                BCIN           => X"00000",                -- 18-bit input: B cascade
+                ACIN           => "000000000000000000000000000000",             -- 30-bit input: A cascade data
+                BCIN           => "000000000000000000",                -- 18-bit input: B cascade
                 CARRYCASCIN    => '0',                     -- 1-bit input: Cascade carry
                 MULTSIGNIN     => '0',                     -- 1-bit input: Multiplier sign cascade
                 PCIN           => dsp_pcin(i),             -- 48-bit input: P cascade
@@ -588,7 +606,7 @@ begin
                 B              => dsp_data_in(i)(17 downto 0),  -- 18-bit input: B data
                 C              => dsp_data_in(i),                -- 48-bit input: C data
                 CARRYIN        => dsp_cfg_data(13),        -- 1-bit input: Carry-in
-                D              => X"0000000",              -- 27-bit input: D data 
+                D              => "000000000000000000000000000",              -- 27-bit input: D data 
                 
                 -- Reset/Clock Enable inputs: Reset/Clock Enable Inputs
                 CEA1           => dsp_ceab(i),            -- 1-bit input: Clock enable for 1st stage AREG

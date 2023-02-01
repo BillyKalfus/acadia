@@ -740,14 +740,12 @@ class Processor(ABC):
                 instruction["compiled_address"].assign(len(self._compiled_program))
                 self._compiled_program.extend(instruction["compiled_instructions"])
                                     
-    @classmethod
-    @abstractmethod
-    def assemble(cls, flattened_program):
+    def assemble(self):
         """
         Assembles a complete program into machine code appropriate for the 
         hardware executing the program.
         """
-        pass
+        return [instr.assemble() for instr in self._compiled_program]
     
 class ProcessorSubroutineMixin(ABC):
     """

@@ -113,6 +113,7 @@ class StandardFirmware(Firmware):
     BRAM_CTRL_MEM_DECODER_ADDR = 0x00_B020_0000
     BRAM_CTRL_DAC_MEM_DECODER_ADDR = 0x00_B040_0000
     BRAM_CTRL_CACHE_ADDR = 0x00_B060_0000
+    ADC_AXIS_SWITCH_ADDR = 0x00_B080_0000
 
     # The sizes of various memories
     CACHE_SIZE_BITS = 2**20
@@ -294,32 +295,32 @@ class StandardFirmware(Firmware):
         # However, we can"t use just the normal base AXI address - we need to chop off some low bits, since
         # AXI uses bytewise addressing and all the memories use wordwise addressing
         # The global AXI address is then recovered by just shifting the result back the other way
-        mem_decoder = hdl.BusDecoder("mem_decoder", word_bits=128, pipeline_miso=True)
+        mem_decoder = hdl.BusDecoder("mem_decoder", bus_data_bits=128, pipeline_miso=True)
         self.add(mem_decoder)
 
         for i in range(4):
-            mem_decoder.add(hdl.BusDevice(f"cmacc{i}_kernel_mem", size=StandardFirmware.CMACC_KERNEL_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            mem_decoder.add(hdl.BusDevice(f"cmacc{i}_kernel_mem", size=StandardFirmware.CMACC_KERNEL_MEM_SIZE_BITS // 128, bus_data_bits=128), pipeline=True)
 
         for i in range(16):
-            mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_descriptor_mem", size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_descriptor_mem", size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, bus_data_bits=128), pipeline=True)
 
         for i in range(4):
-            mem_decoder.add(hdl.BusDevice(f"adc_dma{i}_descriptor_mem", size=StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            mem_decoder.add(hdl.BusDevice(f"adc_dma{i}_descriptor_mem", size=StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, bus_data_bits=128), pipeline=True)
 
         for i in range(4):
-            mem_decoder.add(hdl.BusDevice(f"cmacc_dma{i}_descriptor_mem", size=StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            mem_decoder.add(hdl.BusDevice(f"cmacc_dma{i}_descriptor_mem", size=StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128, bus_data_bits=128), pipeline=True)
 
-        instruction_mem = hdl.BusDevice("instruction_mem", size=StandardFirmware.INSTRUCTION_MEM_SIZE_BITS // 128, word_bits=128)
+        instruction_mem = hdl.BusDevice("instruction_mem", size=StandardFirmware.INSTRUCTION_MEM_SIZE_BITS // 128, bus_data_bits=128)
         mem_decoder.add(instruction_mem, pipeline=True)
 
         # Use a separate decoder for DAC wave memory so that it can be synchronous to the sequencer when using ultraram
         # It will have a base address of the AXI BRAM controller, so that the resulting Symbols
         # will correspond to the AXI addresses of the individual DAC memories
-        dac_mem_decoder = hdl.BusDecoder("dac_mem_decoder", word_bits=128, pipeline_miso=True)
+        dac_mem_decoder = hdl.BusDecoder("dac_mem_decoder", bus_data_bits=128, pipeline_miso=True)
         self.add(dac_mem_decoder)
         
         for i in range(16):
-            dac_mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_mem", size=StandardFirmware.DAC_MEM_SIZE_BITS // 128, word_bits=128), pipeline=True)
+            dac_mem_decoder.add(hdl.BusDevice(f"dac_dma{i}_mem", size=StandardFirmware.DAC_MEM_SIZE_BITS // 128, bus_data_bits=128), pipeline=True)
         
         # Assign decoder addresses
         sequencer_bus_decoder.assign_address(0)
@@ -545,8 +546,8 @@ class StandardFirmware(Firmware):
 
             # Connect the memory decoder AXI BRAM controller to the config SmartConnect and assign address space; also configure the address slicer
             connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI", f"hedgehog/config_smartconnect/M02_AXI")
-            set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["mem_decoder"].words(word_bits=8), log=True)})
-            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(word_bits=8)))
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["mem_decoder"].words(bus_data_bits=8), log=True)})
+            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(bus_data_bits=8)))
 
             # Add the DAC memory decoder for the PS master and its AXI BRAM controller
             create_module(f, f"hedgehog/dac_mem_decoder", "dac_mem_decoder")
@@ -562,8 +563,8 @@ class StandardFirmware(Firmware):
 
             # Connect the DAC memory decoder to the config smartconnect and assign it address space
             connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI", f"hedgehog/config_smartconnect/M03_AXI")
-            set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8), log=True)})
-            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8)))
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["dac_mem_decoder"].words(bus_data_bits=8), log=True)})
+            assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(bus_data_bits=8)))
 
              # ------------------- Sequencer cache -------------------- #
 
@@ -630,7 +631,7 @@ class StandardFirmware(Firmware):
                                     f"CONFIG.Write_Width_B {{128}} "
                                     f"CONFIG.Read_Width_B {{128}} "
                                     f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
-                                    f"CONFIG.Enable_B {{Use_ENB_Pin}} "
+                                    f"CONFIG.Enable_B {{Always_Enabled}} "
                                     f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
                                     f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
                                     f"CONFIG.Register_PortB_Output_of_Memory_Core {{true}} "
@@ -707,9 +708,11 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/axis_switch_adc/aclk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/axis_switch_adc/aresetn", f"hedgehog/seq_peripheral_aresetn")
             
+            # Connect the switch to the AXI network and assign it an address in the PS address space
             connect_bd_intf_net(f, f"hedgehog/axis_switch_adc/S_AXI_CTRL", f"hedgehog/config_smartconnect/M05_AXI")
             connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aclk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aresetn", f"hedgehog/seq_peripheral_aresetn")
+            assign_bd_address(f, addr_seg="hedgehog/axis_switch_adc/S_AXI_CTRL/Reg", target_address_space="/ps/Data", offset=StandardFirmware.ADC_AXIS_SWITCH_ADDR, range="256K")
 
             # Create concatenator and constant for the switch inputs
             create_concatenator(f, "hedgehog/xlconcat_axis_switch_adc_data", [128]*16)
@@ -746,6 +749,7 @@ class StandardFirmware(Firmware):
                                         "CONFIG.c_s2mm_burst_size {256} "
                                         "CONFIG.c_include_s2mm_stsfifo {true} "
                                         "CONFIG.c_s2mm_btt_used {23} "
+                                        "CONFIG.c_s2mm_support_indet_btt {true} "
                                         "CONFIG.c_s2mm_addr_pipe_depth {3} "
                                         "CONFIG.c_mm2s_include_sf {false} "
                                         "CONFIG.c_s2mm_include_sf {false} "
@@ -753,7 +757,6 @@ class StandardFirmware(Firmware):
                                         "CONFIG.c_enable_cache_user {true} "
                                         "CONFIG.c_enable_s2mm {1} "
                                         "CONFIG.c_addr_width {40}")
-
 
             # Connect clocks and resets for the command and status port (for some reason the clock pins are different between s2mm and mm2s)
             connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_mm2s_cmdsts_aclk", "hedgehog/clk_wiz/clk_300")
@@ -802,12 +805,14 @@ class StandardFirmware(Firmware):
             for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
                 exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_DDR_HIGH", target_address_space="hedgehog/cfg_axi_dm/Data_MM2S")
                 exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_QSPI", target_address_space="hedgehog/cfg_axi_dm/Data_MM2S")
-
-            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(word_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0")
-            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(word_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0")
+            
+            # Assign all the other peripherals into the address space of the DataMover
+            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["mem_decoder"].words(bus_data_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_mem_decoder/S_AXI/Mem0")
+            assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(bus_data_bits=8)), addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0")
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.RFDC_ADDR, range="256K", addr_seg=f"hedgehog/rfdc/s_axi/Reg")
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.CLK_WIZ_ADDR, range="256K", addr_seg=f"hedgehog/clk_wiz/s_axi_lite/Reg")
             assign_bd_address(f, target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8), addr_seg=f"hedgehog/axi_bram_ctrl_cache/S_AXI/Mem0")
+            assign_bd_address(f, addr_seg="hedgehog/axis_switch_adc/S_AXI_CTRL/Reg", target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", offset=StandardFirmware.ADC_AXIS_SWITCH_ADDR, range="256K")
 
             # ------------------- ADC DMAs -------------------- #
 
@@ -816,6 +821,7 @@ class StandardFirmware(Firmware):
                 # ------------------- Real-time DMAs -------------------- #
                 create_module(f, f"hedgehog/adc_dma{d}", "acadia_dma")
                 connect_bd_net(f, f"hedgehog/adc_dma{d}/clk", f"hedgehog/clk_wiz/clk_300")
+                connect_bd_net(f, f"hedgehog/adc_dma{d}/nrst", f"hedgehog/seq_peripheral_aresetn")
 
                 # Connect the ADC DMA signals to the dataports
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/adc_dma{d}_fifo_mosi", f"hedgehog/adc_dma{d}/descriptor_address_fifo_in")
@@ -1011,6 +1017,7 @@ class StandardFirmware(Firmware):
 
                 create_module(f, f"hedgehog/cmacc_dma{d}", "acadia_dma")
                 connect_bd_net(f, f"hedgehog/cmacc_dma{d}/clk", f"hedgehog/clk_wiz/clk_300")
+                connect_bd_net(f, f"hedgehog/cmacc_dma{d}/nrst", f"hedgehog/seq_peripheral_aresetn")
 
                 # Connect the DMA signals to the dataports
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cmacc_dma{d}_fifo_mosi", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_in")
@@ -1073,7 +1080,7 @@ class StandardFirmware(Firmware):
                                  properties="CONFIG.c_include_mm2s {Omit} "
                                             "CONFIG.c_include_mm2s_stsfifo {false} "
                                             "CONFIG.c_m_axi_s2mm_data_width {128} "
-                                            "CONFIG.c_s_axis_s2mm_tdata_width {128} "
+                                            "CONFIG.c_s_axis_s2mm_tdata_width {32} "
                                             "CONFIG.c_s2mm_btt_used {23} "
                                             "CONFIG.c_s2mm_support_indet_btt {true} "
                                             "CONFIG.c_mm2s_include_sf {false} "
@@ -1159,7 +1166,7 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Port_B_Enable_Rate {{100}} "
                                             f"CONFIG.use_bram_block {{Stand_Alone}} "
                                             f"CONFIG.EN_SAFETY_CKT {{false}} "
-                                            f"CONFIG.READ_LATENCY_B {{1}}")
+                                            f"CONFIG.READ_LATENCY_B {{2}}")
 
                 # Connect the DAC BRAM to the memory decoder
                 connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}_mem/BRAM_PORTA", f"hedgehog/dac_mem_decoder/dac_dma{channel}_mem")
@@ -1168,16 +1175,17 @@ class StandardFirmware(Firmware):
                 create_module(f, f"hedgehog/dac_dma{channel}", "acadia_dma")
                 connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}/mem_control", f"hedgehog/dac_dma{channel}_mem/BRAM_PORTB")
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}/clk", f"hedgehog/clk_wiz/clk_300")
+                connect_bd_net(f, f"hedgehog/dac_dma{channel}/nrst", f"hedgehog/seq_peripheral_aresetn")
 
                 # Connect the DAC memory output to the RFDAC interface
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}_mem/doutb", f"hedgehog/rfdc/s{tile}{block}_axis_tdata")
 
                 # Connect the DAC DMA to the registers
-                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{d}_fifo_mosi", f"hedgehog/dac_dma{d}/descriptor_address_fifo_in")
-                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{d}_fifo_wr", f"hedgehog/dac_dma{d}/descriptor_address_fifo_wr")
-                connect_bd_net(f, f"hedgehog/dma_trigger_dataport/dac_dma{d}", f"hedgehog/dac_dma{d}/trigger")
-                connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/dac_dma{d}", f"hedgehog/dac_dma{d}/descriptor_address_fifo_empty")
-                connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/dac_dma{d}", f"hedgehog/dac_dma{d}/descriptor_address_fifo_almost_empty")
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{channel}_fifo_mosi", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_in")
+                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{channel}_fifo_wr", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_wr")
+                connect_bd_net(f, f"hedgehog/dma_trigger_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_empty")
+                connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_almost_empty")
                 
                 # Create and configure DAC Descriptor BRAMs and connect them to the DMA
                 create_ip(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")

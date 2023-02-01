@@ -18,22 +18,21 @@
 -- 
 ----------------------------------------------------------------------------------
 
-
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
-library UNISIM;
-use UNISIM.vcomponents.all;
+library XPM;
+use XPM.vcomponents.all;
 
 entity acadia_dma is
     generic (
         DESCRIPTOR_MEM_ADDR_WIDTH : natural := 16;
-        DESCRIPTOR_FIFO_DEPTH : natural := 16;
+        DESCRIPTOR_FIFO_DEPTH : natural := 16
     );
     port (
         clk                 : in  std_logic;
-        rst                 : in  std_logic;
+        nrst                : in  std_logic;
         trigger             : in  std_logic;
         
         -- Descriptor memory interface
@@ -85,18 +84,21 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_INFO of mem_control_clk     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL CLK";
     ATTRIBUTE X_INTERFACE_MODE of mem_control_addr    : SIGNAL is "Master";
 
+    -- Inverted reset
+    signal rst                                  : std_logic;
+
     -- Run state
-    signal running_int                              : std_logic;
+    signal running_int                          : std_logic;
 
     -- Descriptor address FIFO
     signal descriptor_address_fifo_empty_int    : std_logic;
-    signal descriptor_address_fifo_rd           : std_logic;
+    signal descriptor_address_fifo_rd_en        : std_logic;
     signal descriptor_load                      : std_logic;
                                                 
     -- Descriptor fields
-    signal desc_lm1                             : std_logic_vector(15 downto 0);
-    signal desc_addr                            : std_logic_vector(15 downto 0);
-    signal desc_dec                             : std_logic_vector(7 downto 0);
+    signal desc_lm1                             : unsigned(15 downto 0);
+    signal desc_addr                            : unsigned(15 downto 0);
+    signal desc_dec                             : unsigned(7 downto 0);
     signal desc_hold                            : std_logic;
     
     -- Progress counters
@@ -113,6 +115,9 @@ architecture rtl of acadia_dma is
     signal descriptor_last_cycle                : std_logic;
          
 begin    
+    
+    -- Create an active-high reset for the fifo
+    rst <= not nrst;
     
     -- Control the interface to descriptor memory
     descriptor_mem_clk  <= clk;
@@ -155,7 +160,7 @@ begin
             
             -- The output connects directly to the descriptor memory
             dout  => descriptor_mem_addr,
-            rd_en => descriptor_address_fifo_rd, 
+            rd_en => descriptor_address_fifo_rd_en, 
             
             -- We'll use the empty signal to determine when to stop,
             -- but we don't need the full signal because writing to 
@@ -169,7 +174,7 @@ begin
             wr_rst_busy => open,
             injectdbiterr => '0',
             injectsbiterr => '0', 
-            sleep => '0',
+            sleep => '0'
         );
         
     -- Because the FIFO is FWFT, we can pulse the FIFO read enable
@@ -179,8 +184,7 @@ begin
                                 
     running_int_proc: process(clk) begin
         if rising_edge(clk) then
-            running_int_d <= running_int;
-            if(rst = '1' or (descriptor_last_cycle and descriptor_address_fifo_empty_int) = '1') then
+            if(nrst = '0' or (descriptor_last_cycle and descriptor_address_fifo_empty_int) = '1') then
                 running_int <= '0';
             elsif(trigger = '1') then
                 running_int <= '1';
@@ -201,9 +205,9 @@ begin
     descriptor_field_load_proc: process(clk) begin
         if rising_edge(clk) then
             if((trigger or descriptor_last_cycle) = '1') then
-                desc_lm1  <= descriptor_mem_dout(15 downto 0);
-                desc_addr <= descriptor_mem_dout(31 downto 16);
-                desc_dec  <= descriptor_mem_dout(39 downto 32);
+                desc_lm1  <= unsigned(descriptor_mem_dout(15 downto 0));
+                desc_addr <= unsigned(descriptor_mem_dout(31 downto 16));
+                desc_dec  <= unsigned(descriptor_mem_dout(39 downto 32));
                 desc_hold <= descriptor_mem_dout(40);
             end if;
         end if;
@@ -239,14 +243,14 @@ begin
             -- Stream the address out of the AXI-stream port
             -- Data present on the stream is considered valid when its NOT during decimation
             addr_tvalid <= running_int and (not trigger) and point_first_dec_cycle;
-            addr_tdata  <= std_logic_vector(descriptor_point + unsigned(desc_addr));
+            addr_tdata  <= std_logic_vector(descriptor_point + desc_addr);
             addr_tlast  <= descriptor_last_point and point_first_dec_cycle;
             
             -- Control the memory master port
             -- Memory will be accessed at the beginning of decimation, after which the enable
             -- pin will be deasserted
             -- The memory interface will be reset either when de-triggered, or when the sequence is complete 
-            mem_control_addr <= std_logic_vector(descriptor_point + unsigned(desc_addr));
+            mem_control_addr <= std_logic_vector(descriptor_point + desc_addr);
             mem_control_rst  <= (not running_int) or trigger;
         end if;
     end process output_proc;
