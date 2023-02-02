@@ -608,7 +608,6 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'    wr_proc: process(clk) begin\n'
         hdl += f'        if rising_edge(clk) then\n'
         hdl += f'            if (nrst = \'0\') then\n'
-        hdl += f'                dm_cmd_ack <= (others => \'0\');\n'
         hdl += f'                dm_ack_rst <= (others => \'0\');\n'
         
         for i,datamover in enumerate(self._datamovers):    

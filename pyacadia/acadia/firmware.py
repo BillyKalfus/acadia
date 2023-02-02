@@ -140,7 +140,7 @@ class StandardFirmware(Firmware):
         super().__init__(project_dir)
                 
         # Create a primary decoder for the sequencer bus
-        sequencer_bus_decoder = hdl.BusDecoder("sequencer_bus_decoder")
+        sequencer_bus_decoder = hdl.BusDecoder("sequencer_bus_decoder", pipeline_miso=True)
         self.add(sequencer_bus_decoder)
 
         # Create split dataport for triggering and monitoring the DMA and for setting continue signals
@@ -155,17 +155,20 @@ class StandardFirmware(Firmware):
                                           "direction": hdl.BusDataport.OUTPUT, 
                                           "offset": bit,
                                           "width": 1,
-                                          "gate": hdl.BusDataport.GATE_RESET}]
+                                          "gate": hdl.BusDataport.GATE_RESET,
+                                          "pipeline": 1}]
                 
                 dma_fifo_empty_ports += [{"name": f"{label}_dma{idx}", 
                                           "direction": hdl.BusDataport.INPUT, 
                                           "offset": bit,
-                                          "width": 1}]
+                                          "width": 1,
+                                          "pipeline": 1}]
                 
                 dma_fifo_almost_empty_ports += [{"name": f"{label}_dma{idx}", 
                                                   "direction": hdl.BusDataport.INPUT, 
                                                   "offset": bit,
-                                                  "width": 1}]
+                                                  "width": 1,
+                                                  "pipeline": 1}]
             
                 
                 bit += 1
@@ -189,19 +192,52 @@ class StandardFirmware(Firmware):
         # Create dataports for controlling accumulator offsets and output values
         for i in range(StandardFirmware.NUM_CMACC):
             for quad in ["re", "im"]:
-                sequencer_bus_decoder.add(hdl.BusDevice(f"cmacc{i}_accumulator_{quad}", size=1))
+                cmacc_dataports = []
 
+                cmacc_dataports += [{"name": f"accumulator",
+                                       "direction": hdl.BusDataport.INPUT,
+                                       "offset": 0,
+                                       "width": 32,
+                                       "pipeline": 1}]
+                cmacc_dataports += [{"name": f"offset",
+                                       "direction": hdl.BusDataport.OUTPUT,
+                                       "offset": 0,
+                                       "width": 32,
+                                       "gate": hdl.BusDataport.GATE_REGCE,
+                                       "pipeline": 1}]
+
+                cmacc_port = hdl.BusDataport(name=f"cmacc{i}_{quad}", ports=cmacc_dataports)
+                sequencer_bus_decoder.add(cmacc_port)
+                self.add(cmacc_port)
+
+        # Add a reset port
+        cmacc_reset_ports = []
+        
+        for i in range(StandardFirmware.NUM_CMACC):
+            cmacc_reset_ports += [{"name": f"cmacc{i}", 
+                                      "direction": hdl.BusDataport.OUTPUT, 
+                                      "offset": i,
+                                      "width": 1,
+                                      "gate": hdl.BusDataport.GATE_RESET,
+                                      "pipeline": 2}]
+
+        cmacc_reset_port = hdl.BusDataport(name=f"cmacc_reset", ports=cmacc_reset_ports)
+        sequencer_bus_decoder.add(cmacc_reset_port)
+        self.add(cmacc_reset_port)
+        
         # Create dataports for monitoring the CMACCs for completion
         cmacc_status_dataports = []
         for i in range(StandardFirmware.NUM_CMACC):
             cmacc_status_dataports += [{"name": f"cmacc{i}_valid",
                                        "direction": hdl.BusDataport.INPUT,
                                        "offset": i,
-                                       "width": 1}]
+                                       "width": 1,
+                                       "pipeline": 1}]
             cmacc_status_dataports += [{"name": f"cmacc{i}_last",
                                        "direction": hdl.BusDataport.INPUT,
                                        "offset": StandardFirmware.NUM_CMACC + i,
-                                       "width": 1}]
+                                       "width": 1,
+                                       "pipeline": 1}]
             
         cmacc_status = hdl.BusDataport(name="cmacc_status", ports=cmacc_status_dataports)
         sequencer_bus_decoder.add(cmacc_status)
@@ -336,7 +372,10 @@ class StandardFirmware(Firmware):
 
             # ------------------- Design Initialization -------------------- #  
 
-            # Create a constant that we"ll use a few times
+            # Create a couple of constants that we"ll use a few times
+            create_ip(f, name="hedgehog/xlconst_1", vlnv="xilinx.com:ip:xlconstant:1.1")
+            set_property(f, name="hedgehog/xlconst_1", properties={"CONST_WIDTH": 1, "CONST_VAL": 1})
+            
             create_ip(f, name="hedgehog/xlconst_FFFF", vlnv="xilinx.com:ip:xlconstant:1.1")
             set_property(f, name="hedgehog/xlconst_FFFF", properties={"CONST_WIDTH": 16, "CONST_VAL": 0xFFFF})
 
@@ -714,18 +753,32 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aresetn", f"hedgehog/seq_peripheral_aresetn")
             assign_bd_address(f, addr_seg="hedgehog/axis_switch_adc/S_AXI_CTRL/Reg", target_address_space="/ps/Data", offset=StandardFirmware.ADC_AXIS_SWITCH_ADDR, range="256K")
 
-            # Create concatenator and constant for the switch inputs
-            create_concatenator(f, "hedgehog/xlconcat_axis_switch_adc_data", [128]*16)
+#             # Create concatenator and constant for the switch inputs
+#             create_concatenator(f, "hedgehog/xlconcat_axis_switch_adc_data", [128]*16)
 
-            # Connect the outputs of the concatenators to the switch
-            connect_bd_net(f, f"hedgehog/xlconcat_axis_switch_adc_data/dout", f"hedgehog/axis_switch_adc/s_axis_tdata")
-            connect_bd_net(f, f"hedgehog/xlconst_FFFF/Dout", f"hedgehog/axis_switch_adc/s_axis_tvalid")
+#             # Connect the outputs of the concatenators to the switch through a register
+#             connect_bd_net(f, f"hedgehog/xlconcat_axis_switch_adc_data/dout", f"hedgehog/axis_switch_adc/s_axis_tdata")
+#             connect_bd_net(f, f"hedgehog/xlconst_FFFF/Dout", f"hedgehog/axis_switch_adc/s_axis_tvalid")
 
             # Connect the ADC interfaces to the AXIS switch through a register
             for channel in range(16):
                 tile = channel // 4
                 block = channel % 4
-                connect_bd_net(f, f"hedgehog/rfdc/m{tile}{block}_axis_tdata", f"hedgehog/xlconcat_axis_switch_adc_data/In{channel}")
+                create_ip(f, name=f"hedgehog/adc{channel}_register", vlnv="xilinx.com:ip:axis_register_slice:1.1")
+                set_property(f, name=f"hedgehog/adc{channel}_register", 
+                                 properties={"HAS_TREADY.VALUE_SRC": "USER", 
+                                             "TDATA_NUM_BYTES.VALUE_SRC": "USER"})
+                set_property(f, name=f"hedgehog/adc{channel}_register",
+                                 properties={"TDATA_NUM_BYTES": 16, 
+                                             "HAS_TREADY": 0})
+                connect_bd_net(f, f"hedgehog/adc{channel}_register/aclk", f"hedgehog/seq_clk")
+                connect_bd_net(f, f"hedgehog/adc{channel}_register/aresetn", f"hedgehog/seq_peripheral_aresetn")
+                
+                connect_bd_net(f, f"hedgehog/adc{channel}_register/s_axis_tdata", f"hedgehog/rfdc/m{tile}{block}_axis_tdata")
+                connect_bd_net(f, f"hedgehog/adc{channel}_register/s_axis_tvalid", f"hedgehog/xlconst_1/Dout")
+                
+                connect_bd_intf_net(f, f"hedgehog/adc{channel}_register/M_AXIS", 
+                                       f"hedgehog/axis_switch_adc/S{channel:02d}_AXIS")
 
             # ------------------- Configuration DataMover -------------------- #
 
@@ -873,7 +926,7 @@ class StandardFirmware(Firmware):
                 create_slice(f, f"hedgehog/xlslice_axis_data_fifo_adc_dm{d}_data", input_width=128*8, input_to=d*128, input_from=d*128 + 127)
                 connect_bd_net(f, f"hedgehog/xlslice_axis_data_fifo_adc_dm{d}_data/Din", f"hedgehog/axis_switch_adc/m_axis_tdata")
                 connect_bd_net(f, f"hedgehog/axis_data_fifo_adc_dm{d}/s_axis_tdata", f"hedgehog/xlslice_axis_data_fifo_adc_dm{d}_data/Dout")
-
+                
                 # Connect the ADC DMA AXIS handshaking signals to the AXIS FIFO handshaking inputs
                 connect_bd_net(f, f"hedgehog/adc_dma{d}/addr_tvalid", f"hedgehog/axis_data_fifo_adc_dm{d}/s_axis_tvalid")
                 connect_bd_net(f, f"hedgehog/adc_dma{d}/addr_tlast", f"hedgehog/axis_data_fifo_adc_dm{d}/s_axis_tlast")
@@ -942,7 +995,7 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/adc_dm{d}/s_axis_s2mm_tkeep", f"hedgehog/xlconst_FFFF/Dout")
 
             # ------------------- Complex MACCs ------------------- #
-
+            
             for d in range(4):
 
                 # ------------------- The CMACC modules -------------------- #
@@ -952,7 +1005,10 @@ class StandardFirmware(Firmware):
                 # Connect the CMACC signal input to the ADC switch through a slice
                 create_slice(f, f"hedgehog/xlslice_cmacc{d}", input_width=128*8, input_to=(d+4)*128, input_from=(d+4)*128 + 127)
                 connect_bd_net(f, f"hedgehog/axis_switch_adc/m_axis_tdata", f"hedgehog/xlslice_cmacc{d}/Din")
-                connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}/Dout", f"hedgehog/cmacc{d}/signal_in")    
+                connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}/Dout", f"hedgehog/cmacc{d}/signal_in")  
+                
+                # Connect the accumulator reset signal
+                connect_bd_net(f, f"hedgehog/cmacc{d}/rst", f"hedgehog/cmacc_reset_dataport/cmacc{d}")
 
                 # ------------------- Kernel BRAMs -------------------- #        
                 create_ip(f, name=f"hedgehog/cmacc{d}_kernel_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
@@ -986,15 +1042,13 @@ class StandardFirmware(Firmware):
                 connect_bd_intf_net(f, f"hedgehog/cmacc{d}_kernel_mem/BRAM_PORTA", f"hedgehog/mem_decoder/cmacc{d}_kernel_mem")
 
                 for i,q in enumerate(["re", "im"]):
-                    # Connect the CMACC offset load ports to the bus decoder
-                    # Because the bus decoder AND's the slave port write signals with their enable signals, we can just use that 
-                    connect_bd_net(f, f"hedgehog/cmacc{d}/offset_{q}", f"hedgehog/sequencer_bus_decoder/cmacc{d}_accumulator_{q}_mosi")
-                    connect_bd_net(f, f"hedgehog/cmacc{d}/offset_{q}_wr", f"hedgehog/sequencer_bus_decoder/cmacc{d}_accumulator_{q}_wr") 
+                    # Connect to the offset dataport
+                    connect_bd_net(f, f"hedgehog/cmacc{d}/offset_{q}", f"hedgehog/cmacc{d}_{q}_dataport/offset")
                                    
-                    # Connect the accumulator data to the registers through slices
+                    # Connect the accumulator data to the dataport through slices
                     create_slice(f, f"hedgehog/xlslice_cmacc{d}_accumulator_{q}", input_width=64, input_to=i*32, input_from=i*32 + 31)
                     connect_bd_net(f, f"hedgehog/cmacc{d}/accumulator_tdata", f"hedgehog/xlslice_cmacc{d}_accumulator_{q}/Din")
-                    connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_{q}/Dout", f"hedgehog/sequencer_bus_decoder/cmacc{d}_accumulator_{q}_miso")
+                    connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_{q}/Dout", f"hedgehog/cmacc{d}_{q}_dataport/accumulator")
 
                 # Connect the accumulator valid and last signals to the dataports
                 connect_bd_net(f, f"hedgehog/cmacc_status_dataport/cmacc{d}_valid", f"hedgehog/cmacc{d}/accumulator_tvalid")

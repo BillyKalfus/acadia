@@ -30,12 +30,11 @@ use IEEE.NUMERIC_STD.ALL;
 entity acadia_fast_complex_macc is
     port (
         clk                    : in  std_logic;
-
+        rst                    : in  std_logic;
+        
         -- Accumulator offset input
         offset_re              : in  std_logic_vector(31 downto 0);
-        offset_re_wr           : in  std_logic;
         offset_im              : in  std_logic_vector(31 downto 0);   
-        offset_im_wr           : in  std_logic;
         
          -- Continuous signal input
         signal_in              : in  std_logic_vector(31 downto 0);
@@ -172,14 +171,14 @@ begin
             accumulator_tvalid <= product_valid;
             accumulator_tlast  <= product_last;
                 
-            if(offset_re_wr = '1') then
+            if(rst = '1') then
                 accumulator_re(31 downto 0)  <= offset_re_int;
                 accumulator_re(47 downto 32) <= (others => offset_re_int(31));
             else 
                 accumulator_re <= accumulator_re + a_re_b_re - a_im_b_im;
             end if;
                 
-            if(offset_im_wr = '1') then
+            if(rst = '1') then
                 accumulator_im(31 downto 0)  <= offset_im_int;
                 accumulator_im(47 downto 32) <= (others => offset_im_int(31));
             else
