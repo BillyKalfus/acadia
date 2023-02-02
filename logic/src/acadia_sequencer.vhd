@@ -175,6 +175,7 @@ architecture rtl of acadia_sequencer is
     signal stack             : word_array(0 to STACK_SIZE-1);
     signal stack_wr_addr     : std_logic_vector(LOG2_STACK_SIZE-1 downto 0);
     signal stack_rd_addr     : std_logic_vector(LOG2_STACK_SIZE-1 downto 0);
+    signal stack_rd_data     : std_logic_vector(WORD_SIZE-1 downto 0);
     signal stack_pop         : std_logic;
     signal stack_push        : std_logic;
     signal stack_overflow    : std_logic;
@@ -259,24 +260,24 @@ begin
     dest2_en <= '0' when instr_opcode = OPCODE_STC else '1';
                             
     -- Multiplex the input source according to the instruction field
-    src1 <= r(instr_src1_sub)                                when instr_src1_maj = SRC_REG      else
-            x"0000" & pc                               when instr_src1_maj = SRC_PC       else
-            instr_imm1                                 when instr_src1_maj = SRC_IMM      else
-            test_val_d                                 when instr_src1_maj = SRC_TEST     else
-            hedgehog_flags                             when instr_src1_maj = SRC_FLAGS    else
-            stack(to_integer(unsigned(stack_rd_addr))) when instr_src1_maj = SRC_STACK    else
-            mem_bus_miso                               when instr_src1_maj = SRC_BUS_DATA else
-            dsp_p_reg(instr_src1_sub)                        when instr_src1_maj = SRC_DSP_DATA else
+    src1 <= r(instr_src1_sub)         when instr_src1_maj = SRC_REG      else
+            x"0000" & pc              when instr_src1_maj = SRC_PC       else
+            instr_imm1                when instr_src1_maj = SRC_IMM      else
+            -- test_val_d                when instr_src1_maj = SRC_TEST     else
+            hedgehog_flags            when instr_src1_maj = SRC_FLAGS    else
+            stack_rd_data             when instr_src1_maj = SRC_STACK    else
+            mem_bus_miso              when instr_src1_maj = SRC_BUS_DATA else
+            dsp_p_reg(instr_src1_sub) when instr_src1_maj = SRC_DSP_DATA else
             (others => '0');
             
-    src2 <= r(instr_src2_sub)                                when instr_src2_maj = SRC_REG      else
-            x"0000" & pc                               when instr_src2_maj = SRC_PC       else
-            instr_imm2                                 when instr_src2_maj = SRC_IMM      else
-            test_val_d                                 when instr_src2_maj = SRC_TEST     else
-            hedgehog_flags                             when instr_src2_maj = SRC_FLAGS    else
-            stack(to_integer(unsigned(stack_rd_addr))) when instr_src2_maj = SRC_STACK    else
-            mem_bus_miso                               when instr_src2_maj = SRC_BUS_DATA else
-            dsp_p_reg(instr_src2_sub)                        when instr_src2_maj = SRC_DSP_DATA else
+    src2 <= r(instr_src2_sub)         when instr_src2_maj = SRC_REG      else
+            x"0000" & pc              when instr_src2_maj = SRC_PC       else
+            instr_imm2                when instr_src2_maj = SRC_IMM      else
+            -- test_val_d                when instr_src2_maj = SRC_TEST     else
+            hedgehog_flags            when instr_src2_maj = SRC_FLAGS    else
+            stack_rd_data             when instr_src2_maj = SRC_STACK    else
+            mem_bus_miso              when instr_src2_maj = SRC_BUS_DATA else
+            dsp_p_reg(instr_src2_sub) when instr_src2_maj = SRC_DSP_DATA else
             (others => '0');
             
     -- Make general-purpose registers
@@ -293,16 +294,16 @@ begin
     end process reg_proc;
     
     -- Load the test value register when we are issuing a conditional operation
-    test_val_proc: process(clk) begin
-        if rising_edge(clk) then
-            test_val_d <= test_val;
-            if(nrst = '0') then
-                test_val <= (others => '0');
-            elsif(instr_opcode = OPCODE_STC) then
-                test_val <= src2;
-            end if;
-        end if;
-    end process test_val_proc;
+--    test_val_proc: process(clk) begin
+--        if rising_edge(clk) then
+--            test_val_d <= test_val;
+--            if(nrst = '0') then
+--                test_val <= (others => '0');
+--            elsif(instr_opcode = OPCODE_STC) then
+--                test_val <= src2;
+--            end if;
+--        end if;
+--    end process test_val_proc;
     
     -- Manage the bus registers
     bus_regs_proc: process(clk) begin
@@ -427,6 +428,13 @@ begin
             end if;
         end if;
     end process stack_wr_proc;
+           
+    -- Control reading from the stack
+    stack_rd_proc: process(clk) begin
+        if rising_edge(clk) then
+            stack_rd_data <= stack(to_integer(unsigned(stack_rd_addr)));
+        end if;
+    end process stack_rd_proc;
     
     -- DSP slices
          

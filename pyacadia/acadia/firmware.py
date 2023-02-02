@@ -155,20 +155,17 @@ class StandardFirmware(Firmware):
                                           "direction": hdl.BusDataport.OUTPUT, 
                                           "offset": bit,
                                           "width": 1,
-                                          "gate": hdl.BusDataport.GATE_RESET,
-                                          "pipeline": 1}]
+                                          "gate": hdl.BusDataport.GATE_RESET}]
                 
                 dma_fifo_empty_ports += [{"name": f"{label}_dma{idx}", 
                                           "direction": hdl.BusDataport.INPUT, 
                                           "offset": bit,
-                                          "width": 1,
-                                          "pipeline": 1}]
+                                          "width": 1}]
                 
                 dma_fifo_almost_empty_ports += [{"name": f"{label}_dma{idx}", 
                                                   "direction": hdl.BusDataport.INPUT, 
                                                   "offset": bit,
-                                                  "width": 1,
-                                                  "pipeline": 1}]
+                                                  "width": 1}]
             
                 
                 bit += 1

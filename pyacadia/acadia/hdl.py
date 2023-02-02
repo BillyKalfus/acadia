@@ -118,7 +118,7 @@ class BusDataport(BusDevice, HDLModule):
         Valid keys are: "name", "from", "to", "direction", "gate", "pipeline"
         """
         self._ports = {}
-        self._max_enable_delay = 0
+        self._max_write_delay = 0
         
         self._used_input_bits = 0
         
@@ -136,9 +136,9 @@ class BusDataport(BusDevice, HDLModule):
             if len(port) != 0:
                 raise KeyError(f"Unrecognized data port keys: {port}")
                 
-            # Keep track of whether we need to make a delayed enable signal for pipelined gated signals
-            if (port_gate is not None) and port_pipeline > self._max_enable_delay:
-                self._max_enable_delay = port_pipeline
+            # Keep track of whether we need to make a delayed write signal for pipelined gated signals
+            if (port_gate is not None) and port_pipeline > self._max_write_delay:
+                self._max_write_delay = port_pipeline
              
             # Update the mask that keeps track of used inputs, so that we can later
             # set all unused bits to a constant
@@ -196,8 +196,8 @@ class BusDataport(BusDevice, HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
         
         # Make the delayed enable signals
-        for d in range(1,self._max_enable_delay):
-            hdl += f'    signal master_bus_en_{"d"*d}: std_logic;\n'
+        for d in range(1,self._max_write_delay):
+            hdl += f'    signal master_bus_wr_{"d"*d}: std_logic;\n'
         hdl += "\n"
         
         for port_name, port in self._ports.items():
@@ -211,11 +211,11 @@ class BusDataport(BusDevice, HDLModule):
         hdl += f'\nbegin\n'
         
         # Delay the enable signals
-        if self._max_enable_delay > 1:
+        if self._max_write_delay > 1:
             hdl += f"    delay_enable_proc: process(master_bus_clk) begin\n"
             hdl += f"        if rising_edge(master_bus_clk) then\n"
-            for d in range(1,self._max_enable_delay):
-                hdl += f'            master_bus_en_{"d"*d} <= master_bus_en{"" if d == 1 else ("_" + "d"*d)};\n'
+            for d in range(1,self._max_write_delay):
+                hdl += f'            master_bus_wr_{"d"*d} <= master_bus_wr{" and master_bus_en" if d == 1 else ("_" + "d"*d)};\n'
             hdl += f"        end if;\n"
             hdl += f"    end process delay_enable_proc;\n\n"
         
@@ -228,7 +228,7 @@ class BusDataport(BusDevice, HDLModule):
                 if port["direction"] == BusDataport.INPUT:
                     hdl += f'    master_bus_miso{port_slice} <= {port_name};\n\n'
                 elif port["gate"] == BusDataport.GATE_RESET:
-                    hdl += f'    {port_name} <= master_bus_mosi{port_slice} when master_bus_en = \'1\' else (others => \'0\');\n\n'
+                    hdl += f'    {port_name} <= master_bus_mosi{port_slice} when (master_bus_en and master_bus_wr) = \'1\' else (others => \'0\');\n\n'
                 else:
                     hdl += f'    {port_name} <= master_bus_mosi{port_slice};\n\n'
             else:
@@ -238,18 +238,18 @@ class BusDataport(BusDevice, HDLModule):
                 
                 if port["direction"] == BusDataport.INPUT:
                     for p in range(port["pipeline"]):
-                        hdl += f'        {"master_bus_miso"+port_slice if p == port["pipeline"]-1 else port_name + "_" + "d"*(p+1)} <= {port_name}{"" if p == 0 else "_" + "d"*p};\n'
+                        hdl += f'            {"master_bus_miso"+port_slice if p == port["pipeline"]-1 else port_name + "_" + "d"*(p+1)} <= {port_name}{"" if p == 0 else "_" + "d"*p};\n'
                 else:
                     for p in range(port["pipeline"]):
                         if port["gate"] == BusDataport.GATE_RESET:
-                            hdl += f'            if(nrst = \'0\' or master_bus_en{"" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
+                            hdl += f'            if(nrst = \'0\' or {"(" if p == 0 else ""}master_bus_wr{" and master_bus_en)" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
                         else:
                             hdl += f'            if(nrst = \'0\') then\n'
                             
                         hdl += f'                {"" if p == port["pipeline"]-1 else ("master_bus_mosi_" + "d"*(p+1) + "_")}{port_name} <= (others => \'0\');\n'  
                             
                         if port["gate"] == BusDataport.GATE_REGCE:
-                            hdl += f'            elsif(master_bus_en{"" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
+                            hdl += f'            elsif({"(" if p == 0 else ""}master_bus_wr{" and master_bus_en)" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
                         else:
                             hdl += f'            else'
                             
