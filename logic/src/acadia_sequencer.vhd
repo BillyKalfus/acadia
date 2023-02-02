@@ -560,11 +560,11 @@ begin
                 IS_RSTP_INVERTED          => '0',             -- Optional inversion for RSTP
                 
                 -- Register Control Attributes: Pipeline Register Configuration
-                ACASCREG                  => 1,               -- Number of pipeline stages between A/ACIN and ACOUT (0-2)
+                ACASCREG                  => 0,               -- Number of pipeline stages between A/ACIN and ACOUT (0-2)
                 ADREG                     => 0,               -- Pipeline stages for pre-adder (0-1)
                 ALUMODEREG                => 0,               -- Pipeline stages for ALUMODE (0-1)
                 AREG                      => 0,               -- Pipeline stages for A (0-2)
-                BCASCREG                  => 1,               -- Number of pipeline stages between B/BCIN and BCOUT (0-2)
+                BCASCREG                  => 0,               -- Number of pipeline stages between B/BCIN and BCOUT (0-2)
                 BREG                      => 0,               -- Pipeline stages for B (0-2)
                 CARRYINREG                => 0,               -- Pipeline stages for CARRYIN (0-1)
                 CARRYINSELREG             => 0,               -- Pipeline stages for CARRYINSEL (0-1)
