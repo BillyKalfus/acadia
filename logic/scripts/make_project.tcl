@@ -294,6 +294,22 @@ set_property -name "used_in" -value "synthesis implementation" -objects $file_ob
 set_property -name "used_in_implementation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
+set file "[file normalize "$proj_dir/hedgehog.xdc"]"
+set file_imported [import_files -fileset constrs_1 [list $file]]
+set file "hedgehog.xdc"
+set file_obj [get_files -of_objects [get_filesets constrs_1] [list "*$file"]]
+set_property -name "file_type" -value "XDC" -objects $file_obj
+set_property -name "is_enabled" -value "1" -objects $file_obj
+set_property -name "is_global_include" -value "0" -objects $file_obj
+set_property -name "library" -value "xil_defaultlib" -objects $file_obj
+set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
+set_property -name "processing_order" -value "NORMAL" -objects $file_obj
+set_property -name "scoped_to_cells" -value "" -objects $file_obj
+set_property -name "scoped_to_ref" -value "" -objects $file_obj
+set_property -name "used_in" -value "synthesis implementation" -objects $file_obj
+set_property -name "used_in_implementation" -value "1" -objects $file_obj
+set_property -name "used_in_synthesis" -value "1" -objects $file_obj
+
 # Set 'constrs_1' fileset properties
 set obj [get_filesets constrs_1]
 set_property -name "constrs_type" -value "XDC" -objects $obj

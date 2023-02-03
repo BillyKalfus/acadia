@@ -497,7 +497,7 @@ begin
     dsp_c_reg_proc: process(clk) begin
         if rising_edge(clk) then
             if(nrst = '0') then
-                dsp_cfg_reg <= (others => (others => '0'));
+                dsp_c_reg <= (others => (others => '0'));
             elsif(instr_dest1_maj = DEST_DSP_C and dest1_en = '1') then
                 dsp_c_reg(instr_dest1_sub)(31 downto 0)  <= src1;
                 dsp_c_reg(instr_dest1_sub)(47 downto 32) <= (others => src1(31));

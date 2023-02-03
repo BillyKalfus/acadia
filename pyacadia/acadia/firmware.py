@@ -18,6 +18,7 @@ class Firmware(object):
         self._project_dir = project_dir
         self._hdl_filename = None
         self._hedgehog_tcl_filename = None
+        self._hedgehog_constraints = []
         
         if project_dir is not None and not os.path.exists(project_dir):
             os.mkdir(project_dir)
@@ -74,7 +75,7 @@ class Firmware(object):
     
     def write_hedgehog_tcl(self, filename="hedgehog.tcl"):
         """
-        Writes a TCL script to populate the HEDGEHOG logic in the standard image.
+        Writes a TCL script to populate the HEDGEHOG logic.
         Child classes should override this function to implement unique functionality.
         :param filename: The name of the file in the project directory in which to write the file.
         :type filename: str, optional
@@ -83,6 +84,20 @@ class Firmware(object):
         with open(self._hedgehog_tcl_filename, "w") as f:
             # Read the VHDL file containing our custom modules
             f.write(f"read_vhdl {self._hdl_filename}\n")
+            
+    def write_hedgehog_constraints(self, filename="hedgehog.xdc"):
+        """
+        Writes a TCL script to populate a constraints file for the HEDGEHOG logic.
+        Child classes should override this function to implement unique functionality.
+        :param filename: The name of the file in the project directory in which to write the file.
+        :type filename: str, optional
+        """
+        self._hedgehog_tcl_filename = os.path.join(self._project_dir, filename)
+        
+        with open(self._hedgehog_tcl_filename, "w") as f:
+            # Read the VHDL file containing our custom modules
+            for constraint in self._hedgehog_constraints:
+                f.write(f"{constraint}\n")
 
 class StandardFirmware(Firmware):
     # Designate some addresses for memory slave segments
@@ -235,6 +250,11 @@ class StandardFirmware(Firmware):
                                        "offset": StandardFirmware.NUM_CMACC + i,
                                        "width": 1,
                                        "pipeline": 1}]
+            cmacc_status_dataports += [{"name": f"cmacc{i}_re_msb",
+                                       "direction": hdl.BusDataport.INPUT,
+                                       "offset": 2*StandardFirmware.NUM_CMACC + i,
+                                       "width": 1,
+                                       "pipeline": 1}]
             
         cmacc_status = hdl.BusDataport(name="cmacc_status", ports=cmacc_status_dataports)
         sequencer_bus_decoder.add(cmacc_status)
@@ -359,9 +379,10 @@ class StandardFirmware(Firmware):
         sequencer_bus_decoder.assign_address(0)
         mem_decoder.assign_address(StandardFirmware.BRAM_CTRL_MEM_DECODER_ADDR // (128 // 8))
         dac_mem_decoder.assign_address(StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR // (128 // 8))
-
+            
     def write_hedgehog_tcl(self, filename="hedgehog.tcl"):
-        """Write a TCL script to populate the HEDGEHOG logic in the standard image. 
+        """
+        Write a TCL script to populate the HEDGEHOG logic in the standard image. 
         """
         super().write_hedgehog_tcl(filename)
         
@@ -372,6 +393,9 @@ class StandardFirmware(Firmware):
             # Create a couple of constants that we"ll use a few times
             create_ip(f, name="hedgehog/xlconst_1", vlnv="xilinx.com:ip:xlconstant:1.1")
             set_property(f, name="hedgehog/xlconst_1", properties={"CONST_WIDTH": 1, "CONST_VAL": 1})
+            
+            create_ip(f, name="hedgehog/xlconst_0", vlnv="xilinx.com:ip:xlconstant:1.1")
+            set_property(f, name="hedgehog/xlconst_0", properties={"CONST_WIDTH": 32, "CONST_VAL": 0})
             
             create_ip(f, name="hedgehog/xlconst_FFFF", vlnv="xilinx.com:ip:xlconstant:1.1")
             set_property(f, name="hedgehog/xlconst_FFFF", properties={"CONST_WIDTH": 16, "CONST_VAL": 0xFFFF})
@@ -407,7 +431,22 @@ class StandardFirmware(Firmware):
             # ------------------- Clock Management -------------------- #
 
             # The RFDAC fabric clocks are at 300 MHz. 
-            # We"ll create an MMCM that will generate a 50 MHz clock 
+            # The PL clock from the CLK104 is brought in through an HDIO bank, so we need to buffer
+            # it with an IBUFDS before feeding it to the MMCM
+            # we would technically neet to put in another constraint for the CMT column 
+            # (see https://support.xilinx.com/s/question/0D52E00006lLh0DSAS/place-30716-clock-input-driving-mmcmpll-in-hdio-bank-with-bufgce?language=en_US)
+            # but we'll see if the clocking wizard does this and applies the correct constraints for us
+            # Update: it seems to not, we'll insert our own BUFG and apply the constraint
+            create_ip(f, name="hedgehog/pl_clk_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            set_property(f, name="hedgehog/pl_clk_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
+            
+            create_ip(f, name="hedgehog/pl_clk_bufg", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            set_property(f, name="hedgehog/pl_clk_bufg", properties={"C_SIZE": 1, "C_BUF_TYPE": "BUFG"})
+            
+            connect_bd_intf_net(f, "hedgehog/CLK104_PL_CLK", "hedgehog/pl_clk_ibufds/CLK_IN_D")
+            connect_bd_net(f, "hedgehog/pl_clk_ibufds/IBUF_OUT", "hedgehog/pl_clk_bufg/BUFG_I")
+            
+            # We'll create an MMCM that will generate a 30 MHz clock 
             # for the decimated ADC along with a 300 MHz signal to clock everything else
             # (this is moreso for convenience, since then it"ll have a nice phase 
             # relationship with the 50 MHz clock and the core will automatically create constraints
@@ -417,7 +456,7 @@ class StandardFirmware(Firmware):
             set_property(f, name="hedgehog/clk_wiz",
                              properties="CONFIG.PRIMITIVE {MMCM} "
                                         "CONFIG.USE_DYN_RECONFIG {true} "
-                                        "CONFIG.PRIM_SOURCE {Differential_clock_capable_pin} "
+                                        "CONFIG.PRIM_SOURCE {Global_buffer} "
                                         "CONFIG.PRIM_IN_FREQ {300.000} "
                                         "CONFIG.CLKOUT2_USED {true} "
                                         "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {300.000} "
@@ -458,8 +497,11 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/PS_resetn", f"hedgehog/xpm_cdc_aresetn_PS_clk_250/src_rst")
             connect_bd_net(f, f"hedgehog/PS_clk_250", f"hedgehog/xpm_cdc_aresetn_PS_clk_250/dest_clk")
 
-            # Connect the clock input to the tile fabric clock
-            connect_bd_intf_net(f, f"hedgehog/CLK104_PL_CLK", f"hedgehog/clk_wiz/CLK_IN1_D")
+            # Connect the buffer output to the clock wizard and apply a constraint
+            connect_bd_net(f, f"hedgehog/pl_clk_bufg/BUFG_O", f"hedgehog/clk_wiz/clk_in1")
+            self._hedgehog_constraints.append("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/pl_clk_bufg_BUFG_O]")
+            self._hedgehog_constraints.append("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/clk_wiz/inst/CLK_CORE_DRP_I/clk_inst/clk_in1_acadia_bd_clk_wiz_0]")
+            
             f.write("set_property -dict [list CONFIG.FREQ_HZ {300000000}] [get_bd_intf_ports CLK104_PL_CLK]\n")
 
             # Expose the locked signal to external modules
@@ -683,10 +725,7 @@ class StandardFirmware(Firmware):
 
             # ------------------- Sequencer flags -------------------- #
 
-            # We'll connect the lowest 4 flags to the CMACC accumulator last signal, 
-            # and the next 4 to the MSBs of the accumulator values AND'ed with the last signal
-            create_concatenator(f, "hedgehog/xlconcat_sequencer_flags", [1]*4 + [1]*4 + [32-8])
-            connect_bd_net(f, f"hedgehog/sequencer_flags", f"hedgehog/xlconcat_sequencer_flags/dout")
+            connect_bd_net(f, f"hedgehog/sequencer_flags", f"hedgehog/xlconst_0/Dout")
             
             # ------------------- PS GPIO and Interrupt Connections -------------------- #
             
@@ -749,13 +788,6 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aclk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/axis_switch_adc/s_axi_ctrl_aresetn", f"hedgehog/seq_peripheral_aresetn")
             assign_bd_address(f, addr_seg="hedgehog/axis_switch_adc/S_AXI_CTRL/Reg", target_address_space="/ps/Data", offset=StandardFirmware.ADC_AXIS_SWITCH_ADDR, range="256K")
-
-#             # Create concatenator and constant for the switch inputs
-#             create_concatenator(f, "hedgehog/xlconcat_axis_switch_adc_data", [128]*16)
-
-#             # Connect the outputs of the concatenators to the switch through a register
-#             connect_bd_net(f, f"hedgehog/xlconcat_axis_switch_adc_data/dout", f"hedgehog/axis_switch_adc/s_axis_tdata")
-#             connect_bd_net(f, f"hedgehog/xlconst_FFFF/Dout", f"hedgehog/axis_switch_adc/s_axis_tvalid")
 
             # Connect the ADC interfaces to the AXIS switch through a register
             for channel in range(16):
@@ -946,7 +978,7 @@ class StandardFirmware(Firmware):
                                             "CONFIG.c_enable_cache_user {true} "
                                             "CONFIG.c_enable_mm2s {0} "
                                             "CONFIG.c_enable_s2mm_adv_sig {0} "
-                                            f"CONFIG.c_addr_width {40}")
+                                            "CONFIG.c_addr_width {40}")
 
                 # Connect clocks and resets
                 connect_bd_net(f, f"hedgehog/adc_dm{d}/m_axi_s2mm_aclk", "hedgehog/clk_wiz/clk_300")
@@ -1047,22 +1079,13 @@ class StandardFirmware(Firmware):
                     connect_bd_net(f, f"hedgehog/cmacc{d}/accumulator_tdata", f"hedgehog/xlslice_cmacc{d}_accumulator_{q}/Din")
                     connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_{q}/Dout", f"hedgehog/cmacc{d}_{q}_dataport/accumulator")
 
-                # Connect the accumulator valid and last signals to the dataports
+                # Connect the accumulator valid and last and real MSB signals to the dataports
                 connect_bd_net(f, f"hedgehog/cmacc_status_dataport/cmacc{d}_valid", f"hedgehog/cmacc{d}/accumulator_tvalid")
                 connect_bd_net(f, f"hedgehog/cmacc_status_dataport/cmacc{d}_last", f"hedgehog/cmacc{d}/accumulator_tlast")
-
-                # Also connect the accumulator last signal to the sequencer flags
-                connect_bd_net(f, f"hedgehog/xlconcat_sequencer_flags/In{d}", f"hedgehog/cmacc{d}/accumulator_tlast")
-
-                # Also connect the accumulator real MSB to the flags through a slice, AND'ed with the accumulator_tlast signal
+                
                 create_slice(f, f"hedgehog/xlslice_cmacc{d}_accumulator_re_msb", input_width=64, input_from=31, input_to=31)
                 connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_re_msb/Din", f"hedgehog/xlslice_cmacc{d}_accumulator_re/Dout")
-
-                create_ip(f, name=f"hedgehog/cmacc{d}_accumulator_re_msb_and", vlnv="xilinx.com:ip:util_vector_logic:2.0")
-                set_property(f, name=f"hedgehog/cmacc{d}_accumulator_re_msb_and", properties=f"CONFIG.C_SIZE {{1}} CONFIG.C_OPERATION {{and}} CONFIG.LOGO_FILE {{data/sym_andgate.png}}")
-                connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}_accumulator_re_msb/Dout", f"hedgehog/cmacc{d}_accumulator_re_msb_and/Op1")
-                connect_bd_net(f, f"hedgehog/cmacc{d}/accumulator_tlast", f"hedgehog/cmacc{d}_accumulator_re_msb_and/Op2")
-                connect_bd_net(f, f"hedgehog/xlconcat_sequencer_flags/In{d+4}", f"hedgehog/cmacc{d}_accumulator_re_msb_and/Res")
+                connect_bd_net(f, f"hedgehog/cmacc_status_dataport/cmacc{d}_re_msb", f"hedgehog/xlslice_cmacc{d}_accumulator_re_msb/Dout")
 
                 # ------------------- CMACC Real-time DMAs -------------------- #
 
