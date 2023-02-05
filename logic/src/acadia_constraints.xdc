@@ -8,6 +8,12 @@ set_multicycle_path -to [get_pins -filter {REF_PIN_NAME== D} -of [get_cells -hie
 set_max_delay 3.3333 -from [get_clocks -include_generated_clocks clk_pl_0] -to [get_clocks -include_generated_clocks [get_clocks -filter {name =~ RF*_CLK}]] -datapath_only
 set_max_delay 3.3333 -from [get_clocks -include_generated_clocks [get_clocks -filter {name =~ RF*_CLK}]] -to [get_clocks -include_generated_clocks clk_pl_0] -datapath_only
 
+# Pins for SPI Mux
+set_property PACKAGE_PIN G10      [get_ports "GPIO_SPI_tri_o[0]"] ;
+set_property PACKAGE_PIN H11      [get_ports "GPIO_SPI_tri_o[1]"] ;
+set_property IOSTANDARD  LVCMOS18 [get_ports "GPIO_SPI_tri_o[0]"] ;
+set_property IOSTANDARD  LVCMOS18 [get_ports "GPIO_SPI_tri_o[1]"] ;
+
 # CLK104 connections
 set_property PACKAGE_PIN D11       [get_ports "CLK104_PL_SYSREF_N"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89
 set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_SYSREF_N"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89

@@ -242,7 +242,7 @@ class BusDataport(BusDevice, HDLModule):
                 else:
                     for p in range(port["pipeline"]):
                         if port["gate"] == BusDataport.GATE_RESET:
-                            hdl += f'            if(nrst = \'0\' or {"(" if p == 0 else ""}master_bus_wr{" and master_bus_en)" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
+                            hdl += f'            if(nrst = \'0\' or {"(" if p == 0 else ""}master_bus_wr{" and master_bus_en)" if p == 0 else ("_" + "d"*p)} = \'0\') then\n'
                         else:
                             hdl += f'            if(nrst = \'0\') then\n'
                             
@@ -251,7 +251,7 @@ class BusDataport(BusDevice, HDLModule):
                         if port["gate"] == BusDataport.GATE_REGCE:
                             hdl += f'            elsif({"(" if p == 0 else ""}master_bus_wr{" and master_bus_en)" if p == 0 else ("_" + "d"*p)} = \'1\') then\n'
                         else:
-                            hdl += f'            else'
+                            hdl += f'            else\n'
                             
                         hdl += f'                {"" if p == port["pipeline"]-1 else ("master_bus_mosi_" + "d"*(p+1) + "_")}{port_name} <= master_bus_mosi{port_slice if p == 0 else ("_" + "d"*p + "_" + port_name)};\n'
                         hdl += f'            end if;\n\n'
