@@ -1233,7 +1233,6 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Read_Width_B {{128}} "
                                             f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
                                             f"CONFIG.Enable_A {{Use_ENA_Pin}} "
-                                            f"CONFIG.Enable_B {{Always_Enabled}} "
                                             f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "

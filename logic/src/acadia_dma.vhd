@@ -48,6 +48,7 @@ entity acadia_dma is
         -- Memory control interface
         mem_control_addr    : out std_logic_vector(15 downto 0);
         mem_control_rst     : out std_logic;
+        mem_control_en      : out std_logic;
         mem_control_clk     : out std_logic;
         
         -- Descriptor FIFO interface
@@ -81,6 +82,7 @@ architecture rtl of acadia_dma is
     
     ATTRIBUTE X_INTERFACE_INFO of mem_control_addr    : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL ADDR";
     ATTRIBUTE X_INTERFACE_INFO of mem_control_rst     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL RST";
+    ATTRIBUTE X_INTERFACE_INFO of mem_control_en      : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL EN";
     ATTRIBUTE X_INTERFACE_INFO of mem_control_clk     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL CLK";
     ATTRIBUTE X_INTERFACE_MODE of mem_control_addr    : SIGNAL is "Master";
 
@@ -252,6 +254,7 @@ begin
             -- The memory interface will be reset either when de-triggered, or when the sequence is complete 
             mem_control_addr <= std_logic_vector(descriptor_point + desc_addr);
             mem_control_rst  <= (not running_int) or trigger;
+            mem_control_en   <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
         end if;
     end process output_proc;
     

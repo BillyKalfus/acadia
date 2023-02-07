@@ -72,8 +72,8 @@ Make a note of the hardware design name, which will be printed after after the l
 
    3. Create a Petalinux project from the ZCU216 BSP.
       ```
-      petalinux-create -t project -s xilinx-zcu216-2020.2-bsp.bsp
-      cd xilinx-evaltool-zcu216-2020.2-bsp
+      petalinux-create -t project -s xilinx-zcu216-v2020.2-final.bsp
+      cd xilinx-zcu216-2020.2
       ```
    4. Configure the Petalinux project with the hardware description exported from Vivado
       ```
@@ -90,48 +90,84 @@ Make a note of the hardware design name, which will be printed after after the l
      1. `petalinux-config`
      2. Go to Firmware Version Configuration
   2. Add Linux packages to the image
-     1. `petalinux-config -c rootfs`
-     2. Add the following packages:
-        ```
-        Filesystem Packages -> base -> i2ctools -> <all>
-        Filesystem Packages -> base -> init-ifupdown -> init-ifupdown
-        Filesystem Packages -> base -> opkg -> opkg
-        Filesystem Packages -> base -> tar -> tar
-        Filesystem Packages -> console -> utils -> grep -> <all>
-        Filesystem Packages -> console -> utils -> less -> <all>
-        Filesystem Packages -> console -> utils -> screen -> <all>
-        Filesystem Packages -> console -> utils -> sed -> <all>
-        Filesystem Packages -> console -> utils -> unzip -> <all>
-        Filesystem Packages -> console -> utils -> vim -> <all>
-        Filesystem Packages -> console -> utils -> zip -> <all>
-        Filesystem Packages -> devel -> autoconf -> autoconf
-        Filesystem Packages -> devel -> automake -> automake
-        Filesystem Packages -> devel -> binutils -> binutils
-        Filesystem Packages -> devel -> bison -> bison
-        Filesystem Packages -> devel -> expect -> expect
-        Filesystem Packages -> devel -> flex -> flex
-        Filesystem Packages -> devel -> make -> make
-        Filesystem Packages -> devel -> python -> python3-numpy -> <all>
-        Filesystem Packages -> libs -> libmetal -> <all>
-        Filesystem Packages -> misc -> packagegroup-core-buildessential -> <all>
-        Filesystem Packages -> misc -> python3 -> python3, python3-io, python3-pprint, python3-datetime, python3-modules, python3-numbers, python3-pyvenv, python3-netclient, python3-netserver, python3-math, python3-asyncio, python3-core, python3-threading, python3-misc, python3-mmap, python3-json, python3-distutils, python3-multiprocessing, python3-dev, libpython3, python3-logging, python3-ctypes, python3-compile, python3-pickle, python3-dbg, python3-debugger
-        Filesystem Packages -> misc -> python3-setuptools -> python3-setuptools
-        Filesystem Packages -> misc -> rpm -> rpm, rpm-build
-        ```
-     3. Press / to search for any additional desired packages
-     4. Under "PetaLinux RootFS Settings" you can change the root user and password
-     5. Exit and Save
-     6. TODO: look into automatic package configuration using build/misc/rootfs_config/Kconfig
-     7. Open `project-spec/meta-user/conf/layer.conf` in your favorite text editor
-     8. At the end add:
-        ```
-        IMAGE_INSTALL_append = " cmake python3-pip python3-pybind11 python3-cython python3-cffi python3-jupyterlab python3-matplotlib python3-pillow python3-pydot python3-psutil python3-pandas python3-ipywidgets"
-        ```
-5. Clean up default device tree config
-   1. Open `project-spec/meta-user/recipes-bsp/device-tree/files/system-user.dtsi` in your favorite text editor
-   2. Remove everything between `plmem: ` and the `CAUTION` comment near the bottom EXCEPT for the leftmost-aligned `};` (you may need to re-add it if you accidentally delete it)
-
-6. Build PetaLinux and create a bootable image
+     1. Edit `project-spec/meta-user/conf/user-rootfsconfig` and add the following:
+     ```
+     CONFIG_i2c-tools
+     CONFIG_i2c-tools-dev
+     CONFIG_i2c-tools-misc
+     CONFIG_init-ifupdown
+     CONFIG_opkg
+     CONFIG_tar
+     CONFIG_grep
+     CONFIG_less
+     CONFIG_screen
+     CONFIG_sed
+     CONFIG_unzip
+     CONFIG_vim
+     CONFIG_zip
+     CONFIG_autoconf
+     CONFIG_automake
+     CONFIG_binutils
+     CONFIG_bison
+     CONFIG_expect
+     CONFIG_flex
+     CONFIG_make
+     CONFIG_cmake
+     CONFIG_libmetal
+     CONFIG_libmetal-dev
+     CONFIG_packagegroup-core-buildessential
+     CONFIG_rpm
+     CONFIG_rpm-build
+     CONFIG_util-linux-mkfs
+     CONFIG_util-linux-fdisk
+     CONFIG_util-linux-bash-completion
+     CONFIG_util-linux-umount
+     CONFIG_util-linux-mount
+     CONFIG_util-linux-lscpu
+     CONFIG_python3
+     CONFIG_python3-numpy
+     CONFIG_python3-io
+     CONFIG_python3-pprint
+     CONFIG_python3-datetime
+     CONFIG_python3-modules
+     CONFIG_python3-numbers
+     CONFIG_python3-pyvenv
+     CONFIG_python3-netclient
+     CONFIG_python3-netserver
+     CONFIG_python3-math
+     CONFIG_python3-asyncio
+     CONFIG_python3-core
+     CONFIG_python3-threading
+     CONFIG_python3-misc
+     CONFIG_python3-mmap
+     CONFIG_python3-json
+     CONFIG_python3-distutils
+     CONFIG_python3-multiprocessing
+     CONFIG_python3-dev
+     CONFIG_libpython3
+     CONFIG_python3-logging
+     CONFIG_python3-ctypes
+     CONFIG_python3-compile
+     CONFIG_python3-pickle
+     CONFIG_python3-dbg
+     CONFIG_python3-debugger
+     CONFIG_python3-setuptools
+     CONFIG_python3-pip
+     CONFIG_python3-pybind11
+     CONFIG_python3-cython
+     CONFIG_python3-cffi
+     CONFIG_python3-jupyterlab
+     CONFIG_python3-matplotlib
+     CONFIG_python3-pillow
+     CONFIG_python3-pydot
+     CONFIG_python3-psutil
+     CONFIG_python3-pandas
+     CONFIG_python3-ipywidgets
+     ```
+     2. Run `petalinux-config -c rootfs`
+     3. Enter the `user-packages` submenu and enable the packages added in the previous step.
+     
+5. Build PetaLinux and create a bootable image
    1. Build the kernel, bootloader, and PMUFW
       ```
       petalinux-build
@@ -157,4 +193,4 @@ Make a note of the hardware design name, which will be printed after after the l
       fi
       ```
 
-7. Insert SD card into the socket on the ZCU216 and turn on the power switch.
+6. Insert SD card into the socket on the ZCU216 and turn on the power switch.

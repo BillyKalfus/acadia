@@ -610,7 +610,7 @@ class Sequencer(Processor):
         self.store(src=target, dest=Destination.PC)
         
     def nop(self):
-        self.store(src=Source(0), dest=Destination(0))
+        self.store(src=Source.REG, dest=Destination.REG)
                 
     @Processor.instruction()
     def STP(self, instruction_resource):
@@ -660,7 +660,7 @@ class Sequencer(Processor):
         kwargs = instruction_resource["kwargs"]
         src = kwargs["src"]
         dest = kwargs["dest"]
-        
+                
         # Convert dest into a Destination if necessary
         if isinstance(dest, Operation):
             if dest._op == "getitem" and isinstance(dest._args[0], self.DSP):

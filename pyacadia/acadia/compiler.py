@@ -11,7 +11,7 @@ __all__ = ["Operable",
 
 from types import MethodType
 from abc import ABC, abstractmethod
-from operator import and_
+import operator
 
 class Operable(type):
     """
@@ -141,7 +141,7 @@ class Operation(metaclass=Operable):
     def __repr__(self):
         return f"Operation({self._op}, {self._args}, {self._kwargs})"
     
-    def value(self):
+    def value(self, op_lib=operator):
         solved_args = []
         for arg in self._args:
             if isinstance(arg, Symbol) or isinstance(arg, Operation):
@@ -154,6 +154,8 @@ class Operation(metaclass=Operable):
                 solved_kwargs[key] = value.value()
             else:
                 solved_kwargs[key] = value
+                
+        return getattr(op_lib, self._op)(*solved_args, **solved_kwargs)
     
     def operator_handler(self, operation):
         """
