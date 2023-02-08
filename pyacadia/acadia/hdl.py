@@ -269,7 +269,7 @@ class BusDataport(BusDevice, HDLModule):
         return hdl
     
 class BusDecoder(BusDevice, HDLModule):
-    def __init__(self, name, bus_data_bits=32, bus_addr_bits=32, pipeline_miso=False):
+    def __init__(self, name, bus_data_bits=32, bus_addr_bits=32, pipeline_miso=False, byte_write=False):
         """
         Generate an HDL file for a memory bus decoder.
         :param name: name of the decoder to generate
@@ -280,10 +280,13 @@ class BusDecoder(BusDevice, HDLModule):
         :type bus_addr_bits: int, optional
         :param pipeline_miso: indicates whether to pipeline the signal driving the master data input
         :type pipeline_miso: bool, optional
+        :param byte_write: indicates whether the write enable signal should have one bit per byte or per word
+        :type byte_write: bool, optional
         """
         self._name = name
         self._bus_objects = []
         self._pipeline_miso = pipeline_miso
+        self._byte_write = byte_write
             
         BusDevice.__init__(self, name, 0, bus_data_bits, bus_addr_bits)
         HDLModule.__init__(self, name)
@@ -381,7 +384,10 @@ class BusDecoder(BusDevice, HDLModule):
         hdl += f'        master_bus_mosi : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_miso : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_addr : in  std_logic_vector({next_highest_power_of_2(self.size, log=True)-1} downto 0);\n'
-        hdl += f'        master_bus_wr   : in  std_logic;\n'
+        if self._byte_write:
+            hdl += f'        master_bus_wr   : in  std_logic_vector({(self.bus_data_bits // 8)-1} downto 0);\n'
+        else:
+            hdl += f'        master_bus_wr   : in  std_logic;\n'
         hdl += f'        master_bus_en   : in  std_logic;\n'
         hdl += f'        master_bus_clk  : in  std_logic;\n\n'
         
@@ -390,7 +396,10 @@ class BusDecoder(BusDevice, HDLModule):
             hdl += f'        {obj.name}_mosi : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
             hdl += f'        {obj.name}_miso : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
             hdl += f'        {obj.name}_addr : out std_logic_vector({low_address_bit-1} downto 0);\n'
-            hdl += f'        {obj.name}_wr   : out std_logic;\n'
+            if self._byte_write:
+                hdl += f'        {obj.name}_wr   : out std_logic_vector({(self.bus_data_bits // 8)-1} downto 0);\n'
+            else:
+                hdl += f'        {obj.name}_wr   : out std_logic;\n'
             hdl += f'        {obj.name}_en   : out std_logic;\n'
             hdl += f'        {obj.name}_clk  : out std_logic;\n\n'
             
@@ -453,7 +462,10 @@ class BusDecoder(BusDevice, HDLModule):
                 hdl += f'                {obj.name}_wr   <= master_bus_wr;\n'
                 hdl += f'            else\n'
                 hdl += f'                {obj.name}_en   <= \'0\';\n'
-                hdl += f'                {obj.name}_wr   <= \'0\';\n'
+                if self._byte_write:
+                    hdl += f'                {obj.name}_wr   <= (others => \'0\');\n'
+                else:
+                    hdl += f'                {obj.name}_wr   <= \'0\';\n'
                 hdl += f'            end if;\n'
                 hdl += f'        end if;\n'
                 hdl += f'    end process {obj.name}_proc;\n'

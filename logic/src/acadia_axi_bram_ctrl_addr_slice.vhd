@@ -42,7 +42,7 @@ entity acadia_axi_bram_ctrl_addr_slice is
         bram_ctrl_dout : out std_logic_vector(DATA_WIDTH-1 downto 0);
         bram_ctrl_addr : in  std_logic_vector(LOG2_SLAVE_SIZE_BYTES-1 downto 0);
         bram_ctrl_clk  : in  std_logic;
-        bram_ctrl_we   : in  std_logic;
+        bram_ctrl_we   : in  std_logic_vector((DATA_WIDTH / 8)-1 downto 0);
         bram_ctrl_en   : in  std_logic;
         bram_ctrl_rst  : in  std_logic;
         
@@ -50,7 +50,7 @@ entity acadia_axi_bram_ctrl_addr_slice is
         slave_dout     : in  std_logic_vector(DATA_WIDTH-1 downto 0);
         slave_addr     : out std_logic_vector(LOG2_SLAVE_SIZE_BYTES-LOG2_DATA_WIDTH_BYTES-1 downto 0);
         slave_clk      : out std_logic;
-        slave_we       : out std_logic;
+        slave_we       : out std_logic_vector((DATA_WIDTH / 8)-1 downto 0);
         slave_en       : out std_logic;
         slave_rst      : out std_logic
     );

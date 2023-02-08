@@ -351,7 +351,7 @@ class StandardFirmware(Firmware):
         # However, we can"t use just the normal base AXI address - we need to chop off some low bits, since
         # AXI uses bytewise addressing and all the memories use wordwise addressing
         # The global AXI address is then recovered by just shifting the result back the other way
-        mem_decoder = hdl.BusDecoder("mem_decoder", bus_data_bits=128, pipeline_miso=True)
+        mem_decoder = hdl.BusDecoder("mem_decoder", bus_data_bits=128, pipeline_miso=True, byte_write=True)
         self.add(mem_decoder)
 
         for i in range(4):
@@ -615,7 +615,8 @@ class StandardFirmware(Firmware):
             # Add the memory decoder for cache and instructions and its AXI BRAM controller
             create_module(f, f"hedgehog/mem_decoder", "mem_decoder")
             create_ip(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
-            set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0, "READ_LATENCY": 3})
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder", properties={"SUPPORTS_NARROW_BURST.VALUE_SRC": "USER"})
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_mem_decoder", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "SUPPORTS_NARROW_BURST": 1, "ECC_TYPE": 0, "READ_LATENCY": 5})
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/s_axi_aclk", f"hedgehog/clk_wiz/clk_300")
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_mem_decoder/s_axi_aresetn", f"hedgehog/seq_peripheral_aresetn")
 
@@ -634,7 +635,8 @@ class StandardFirmware(Firmware):
             create_module(f, f"hedgehog/dac_mem_decoder", "dac_mem_decoder")
             create_module(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice", "acadia_axi_bram_ctrl_addr_slice")
             create_ip(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
-            set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0})
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder", properties={"SUPPORTS_NARROW_BURST.VALUE_SRC": "USER"})
+            set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "SUPPORTS_NARROW_BURST": 1, "ECC_TYPE": 0, "READ_LATENCY": 5})
 
             # Because the DAC memory is ultraram, it needs to be synchronous to the sequencer clock
             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_dac_mem_decoder/s_axi_aclk", f"hedgehog/clk_wiz/clk_300")
@@ -663,7 +665,7 @@ class StandardFirmware(Firmware):
                                         f"CONFIG.Enable_A {{Always_Enabled}} "
                                         f"CONFIG.Write_Width_B {{32}} "
                                         f"CONFIG.Read_Width_B {{32}} "
-                                        f"CONFIG.Enable_B {{Use_ENB_Pin}} "
+                                        f"CONFIG.Enable_B {{Always_Enabled}} "
                                         f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{true}} "
                                         f"CONFIG.Register_PortA_Output_of_Memory_Core {{true}} "
                                         f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
@@ -699,22 +701,23 @@ class StandardFirmware(Firmware):
             # Create instruction memory for the sequencer and add it to the memory decoder
             create_ip(f, name="hedgehog/instruction_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
             set_property(f, name="hedgehog/instruction_mem", 
-                         properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                         properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                     f"CONFIG.Enable_32bit_Address {{false}} "
-                                    f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                    f"CONFIG.Byte_Size {{9}} "
+                                    f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                    f"CONFIG.Byte_Size {{8}} "
                                     f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                     f"CONFIG.Write_Width_A {{128}} "
                                     f"CONFIG.Write_Depth_A {{{StandardFirmware.INSTRUCTION_MEM_SIZE_BITS // 128}}} "
                                     f"CONFIG.Read_Width_A {{128}} "
-                                    f"CONFIG.Operating_Mode_A {{NO_CHANGE}} "
-                                    f"CONFIG.Enable_A {{Use_ENA_Pin}} "
+                                    f"CONFIG.Operating_Mode_A {{READ_FIRST}} "
+                                    f"CONFIG.Enable_A {{Always_Enabled}} "
                                     f"CONFIG.Write_Width_B {{128}} "
                                     f"CONFIG.Read_Width_B {{128}} "
                                     f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
                                     f"CONFIG.Enable_B {{Always_Enabled}} "
-                                    f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
+                                    f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{true}} "
                                     f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
+                                    f"CONFIG.Register_PortA_Output_of_Memory_Core {{true}} "
                                     f"CONFIG.Register_PortB_Output_of_Memory_Core {{true}} "
                                     f"CONFIG.Reset_Memory_Latch_B {{false}} "
                                     f"CONFIG.Use_RSTA_Pin {{false}} "
@@ -918,21 +921,23 @@ class StandardFirmware(Firmware):
                 # Create and configure ADC Descriptor BRAMs 
                 create_ip(f, name=f"hedgehog/adc_dma{d}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/adc_dma{d}_descriptor_mem", 
-                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
-                                            f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                            f"CONFIG.Byte_Size {{9}} "
+                                            f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                            f"CONFIG.Byte_Size {{8}} "
                                             f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                             f"CONFIG.Write_Width_A {{128}} "
                                             f"CONFIG.Write_Depth_A {{{StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128}}} "
                                             f"CONFIG.Read_Width_A {{128}} "
-                                            f"CONFIG.Enable_A {{Use_ENA_Pin}} "
+                                            f"CONFIG.Enable_A {{Always_Enabled}} "
                                             f"CONFIG.Write_Width_B {{64}} "
                                             f"CONFIG.Read_Width_B {{64}} "
                                             f"CONFIG.Enable_B {{Always_Enabled}} "
                                             f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
-                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{true}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Core {{true}} "
+                                            f"CONFIG.Register_PortB_Output_of_Memory_Core {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
                                             f"CONFIG.Use_RSTB_Pin {{false}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
@@ -1045,22 +1050,24 @@ class StandardFirmware(Firmware):
                 # ------------------- Kernel BRAMs -------------------- #        
                 create_ip(f, name=f"hedgehog/cmacc{d}_kernel_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/cmacc{d}_kernel_mem", 
-                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
-                                            f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                            f"CONFIG.Byte_Size {{9}} "
+                                            f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                            f"CONFIG.Byte_Size {{8}} "
                                             f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                             f"CONFIG.Write_Width_A {{128}} "
                                             f"CONFIG.Write_Depth_A {{{StandardFirmware.CMACC_KERNEL_MEM_SIZE_BITS // 128}}} "
                                             f"CONFIG.Read_Width_A {{128}} "
-                                            f"CONFIG.Operating_Mode_A {{NO_CHANGE}} "
-                                            f"CONFIG.Enable_A {{Use_ENA_Pin}} "
+                                            f"CONFIG.Operating_Mode_A {{READ_FIRST}} "
+                                            f"CONFIG.Enable_A {{Always_Enabled}} "
                                             f"CONFIG.Write_Width_B {{32}} "
                                             f"CONFIG.Read_Width_B {{32}} "
                                             f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
                                             f"CONFIG.Enable_B {{Always_Enabled}} "
                                             f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Core {{true}} "
+                                            f"CONFIG.Register_PortB_Output_of_Memory_Core {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
                                             f"CONFIG.Use_RSTB_Pin {{true}} "
                                             f"CONFIG.Port_B_Clock {{100}} CONFIG.Port_B_Enable_Rate {{100}} "
@@ -1109,21 +1116,23 @@ class StandardFirmware(Firmware):
                 # Create and configure CMACC Descriptor BRAMs 
                 create_ip(f, name=f"hedgehog/cmacc_dma{d}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/cmacc_dma{d}_descriptor_mem", 
-                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
-                                            f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                            f"CONFIG.Byte_Size {{9}} "
+                                            f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                            f"CONFIG.Byte_Size {{8}} "
                                             f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                             f"CONFIG.Write_Width_A {{128}} "
                                             f"CONFIG.Write_Depth_A {{{StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128}}} "
                                             f"CONFIG.Read_Width_A {{128}} "
-                                            f"CONFIG.Enable_A {{Use_ENA_Pin}} "
+                                            f"CONFIG.Enable_A {{Always_Enabled}} "
                                             f"CONFIG.Write_Width_B {{64}} "
                                             f"CONFIG.Read_Width_B {{64}} "
                                             f"CONFIG.Enable_B {{Always_Enabled}} "
                                             f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
-                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{true}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Core {{true}} "
+                                            f"CONFIG.Register_PortB_Output_of_Memory_Core {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
                                             f"CONFIG.Use_RSTB_Pin {{false}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
@@ -1218,12 +1227,12 @@ class StandardFirmware(Firmware):
                 # Create and configure DAC UltraRAM
                 create_ip(f, name=f"hedgehog/dac_dma{channel}_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/dac_dma{channel}_mem", 
-                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                             f"CONFIG.PRIM_type_to_Implement {{URAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
                                             f"CONFIG.Use_RSTB_Pin {{true}} "
-                                            f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                            f"CONFIG.Byte_Size {{9}} "
+                                            f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                            f"CONFIG.Byte_Size {{8}} "
                                             f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                             f"CONFIG.Write_Width_A {{128}} "
                                             f"CONFIG.Read_Width_A {{128}} "
@@ -1231,10 +1240,8 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Operating_Mode_A {{NO_CHANGE}} "
                                             f"CONFIG.Write_Width_B {{128}} "
                                             f"CONFIG.Read_Width_B {{128}} "
-                                            f"CONFIG.Operating_Mode_B {{READ_FIRST}} "
-                                            f"CONFIG.Enable_A {{Use_ENA_Pin}} "
-                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
-                                            f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Operating_Mode_B {{NO_CHANGE}} "
+                                            f"CONFIG.Enable_A {{Always_Enabled}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
                                             f"CONFIG.Port_A_Write_Rate {{50}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
@@ -1242,6 +1249,7 @@ class StandardFirmware(Firmware):
                                             f"CONFIG.Port_B_Enable_Rate {{100}} "
                                             f"CONFIG.use_bram_block {{Stand_Alone}} "
                                             f"CONFIG.EN_SAFETY_CKT {{false}} "
+                                            f"CONFIG.READ_LATENCY_A {{3}} "
                                             f"CONFIG.READ_LATENCY_B {{2}}")
 
                 # Connect the DAC BRAM to the memory decoder
@@ -1266,20 +1274,22 @@ class StandardFirmware(Firmware):
                 # Create and configure DAC Descriptor BRAMs and connect them to the DMA
                 create_ip(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
                 set_property(f, name=f"hedgehog/dac_dma{channel}_descriptor_mem", 
-                                 properties=f"CONFIG.Memory_Type {{Simple_Dual_Port_RAM}} "
+                                 properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                             f"CONFIG.Enable_32bit_Address {{false}} "
-                                            f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                            f"CONFIG.Byte_Size {{9}} "
+                                            f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                            f"CONFIG.Byte_Size {{8}} "
                                             f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                             f"CONFIG.Write_Width_A {{128}} "
                                             f"CONFIG.Write_Depth_A {{{StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 128}}} "
                                             f"CONFIG.Read_Width_A {{128}} "
-                                            f"CONFIG.Enable_A {{Use_ENA_Pin}} "
+                                            f"CONFIG.Enable_A {{Always_Enabled}} "
                                             f"CONFIG.Write_Width_B {{64}} "
                                             f"CONFIG.Read_Width_B {{64}} "
                                             f"CONFIG.Enable_B {{Always_Enabled}} "
-                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Primitives {{true}} "
                                             f"CONFIG.Register_PortB_Output_of_Memory_Primitives {{false}} "
+                                            f"CONFIG.Register_PortA_Output_of_Memory_Core {{true}} "
+                                            f"CONFIG.Register_PortB_Output_of_Memory_Core {{false}} "
                                             f"CONFIG.Use_RSTA_Pin {{false}} "
                                             f"CONFIG.Use_RSTB_Pin {{false}} "
                                             f"CONFIG.Port_B_Clock {{100}} "
