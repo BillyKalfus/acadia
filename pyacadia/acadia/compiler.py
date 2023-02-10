@@ -20,8 +20,8 @@ class Operable(type):
     """
     
     # A list of all operator methods that will return an Operation object
-    OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", 
-                 "neg", "abs", "invert",
+    NUMERIC_OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", 
+                 "neg", "abs", "invert", "bool",
                  "add", "radd",  
                  "sub", "rsub", 
                  "mul", "rmul", 
@@ -33,9 +33,9 @@ class Operable(type):
                  "rshift", "rrshift", 
                  "and", "rand", 
                  "or", "ror", 
-                 "xor", "rxor", 
-                 "bool", "len",  
-                 "iter", "getitem", "setitem", "call", "contains",]
+                 "xor", "rxor"]
+                         
+    MISC_OPERATORS = ["len", "iter", "getitem", "setitem", "call", "contains"]
     
     # A list of all operators that will require a handler
     HANDLED_OPERATORS = ["iadd", "isub", "imul", "ifloordiv", "itruediv",
@@ -99,11 +99,14 @@ class Operable(type):
             supported_operators = dct["OPERATORS"]
             
         elif "SUPPORT_HANDLED_OPERATORS" in dct:
-            supported_operators = Operable.OPERATORS
+            supported_operators = (Operable.NUMERIC_OPERATORS 
+                                   + Operable.MISC_OPERATORS)
             if dct["SUPPORT_HANDLED_OPERATORS"]:
                 supported_operators += Operable.HANDLED_OPERATORS
         else:
-            supported_operators = Operable.OPERATORS + Operable.HANDLED_OPERATORS
+            supported_operators = (Operable.NUMERIC_OPERATORS 
+                                   + Operable.MISC_OPERATORS 
+                                   + Operable.HANDLED_OPERATORS)
             
         for op in supported_operators:
             dct[f"__{op}__"] = Operable.make_op_func(op)

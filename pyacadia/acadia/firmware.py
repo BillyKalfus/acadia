@@ -112,15 +112,19 @@ class StandardFirmware(Firmware):
 
     # HP1_QSPI_ADDR = 0x3C_C000_0000
     HP1_LPS_OCM_ADDR = 0x03_FF00_0000
-
-    DDR4_C0_ADDR = 0x04_0000_0000
-
-    HPC0_DDR_LOW_ADDR = 0x05_0000_0000
-    HPC1_DDR_LOW_ADDR = 0x06_0000_0000
-    HP0_DDR_LOW_ADDR = 0x07_0000_0000
-    HP1_DDR_LOW_ADDR = 0x08_0000_0000
-
-    DDR4_C1_ADDR = 0x10_0000_0000
+    
+    HPC0_DDR_LOW_ADDR = 0x04_0000_0000
+    HPC1_DDR_LOW_ADDR = 0x05_0000_0000
+    HP0_DDR_LOW_ADDR = 0x06_0000_0000
+    HP1_DDR_LOW_ADDR = 0x07_0000_0000
+    
+    HPC0_DDR_HIGH_ADDR = 0x08_0000_0000
+    HPC1_DDR_HIGH_ADDR = 0x18_0000_0000
+    HP0_DDR_HIGH_ADDR = 0x28_0000_0000
+    HP1_DDR_HIGH_ADDR = 0x38_0000_0000
+    
+    DDR4_C0_ADDR = 0x40_0000_0000
+    DDR4_C1_ADDR = 0x41_0000_0000
 
     # We"ll manually choose addresses for the AXI HPM1 interface since there are particular alignment requirements
     RFDC_ADDR = 0x00_B000_0000
@@ -656,8 +660,8 @@ class StandardFirmware(Firmware):
             set_property(f, name="hedgehog/cache_mem",                  
                             properties=f"CONFIG.Memory_Type {{True_Dual_Port_RAM}} "
                                         f"CONFIG.Enable_32bit_Address {{false}} "
-                                        f"CONFIG.Use_Byte_Write_Enable {{false}} "
-                                        f"CONFIG.Byte_Size {{9}} "
+                                        f"CONFIG.Use_Byte_Write_Enable {{true}} "
+                                        f"CONFIG.Byte_Size {{8}} "
                                         f"CONFIG.Assume_Synchronous_Clk {{true}} "
                                         f"CONFIG.Write_Width_A {{128}} "
                                         f"CONFIG.Write_Depth_A {{{StandardFirmware.CACHE_SIZE_BITS // 128}}} "
@@ -678,8 +682,20 @@ class StandardFirmware(Firmware):
                                         f"CONFIG.Port_B_Enable_Rate {{100}} "
                                         f"CONFIG.use_bram_block {{Stand_Alone}} "
                                         f"CONFIG.EN_SAFETY_CKT {{true}}")
-            connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/cache", f"hedgehog/cache_mem/BRAM_PORTB")
-
+            
+            # Connect the cache to the sequencer bus decoder
+            # we need to manually connect the interface signals so that we can broadcast the
+            # write signals across all the bits of the byte write
+            connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cache_clk", f"hedgehog/cache_mem/clkb")
+            connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cache_miso", f"hedgehog/cache_mem/doutb")
+            connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cache_mosi", f"hedgehog/cache_mem/dinb")
+            connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cache_addr", f"hedgehog/cache_mem/addrb")
+            
+            create_concatenator(f, "hedgehog/xlconcat_cache_we", [1]*4)
+            connect_bd_net(f, f"hedgehog/xlconcat_cache_we/dout", f"hedgehog/cache_mem/web")
+            for i in range(4):
+                connect_bd_net(f, f"hedgehog/xlconcat_cache_we/In{i}", f"hedgehog/sequencer_bus_decoder/cache_wr")
+            
             # Create an AXI BRAM controller for the cache
             create_ip(f, name="hedgehog/axi_bram_ctrl_cache", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
             set_property(f, name=f"hedgehog/axi_bram_ctrl_cache", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0, "READ_LATENCY": 3})
@@ -878,6 +894,11 @@ class StandardFirmware(Firmware):
             assign_bd_address(f, offset=StandardFirmware.HPC1_DDR_LOW_ADDR, range="2G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP1/HPC1_DDR_LOW")
             assign_bd_address(f, offset=StandardFirmware.HP0_DDR_LOW_ADDR, range="2G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP2/HP0_DDR_LOW")
             assign_bd_address(f, offset=StandardFirmware.HP1_DDR_LOW_ADDR, range="2G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP3/HP1_DDR_LOW")
+            
+            assign_bd_address(f, offset=StandardFirmware.HPC0_DDR_HIGH_ADDR, range="32G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP0/HPC0_DDR_HIGH")
+            assign_bd_address(f, offset=StandardFirmware.HPC1_DDR_HIGH_ADDR, range="32G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP1/HPC1_DDR_HIGH")
+            assign_bd_address(f, offset=StandardFirmware.HP0_DDR_HIGH_ADDR, range="32G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP2/HP0_DDR_HIGH")
+            assign_bd_address(f, offset=StandardFirmware.HP1_DDR_HIGH_ADDR, range="32G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP3/HP1_DDR_HIGH")
 
             # Assign the PS OCM into the AXI DataMover's address space
             assign_bd_address(f, offset=StandardFirmware.HPC0_LPS_OCM_ADDR, range="256K", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="ps/SAXIGP0/HPC0_LPS_OCM")
@@ -889,9 +910,8 @@ class StandardFirmware(Firmware):
             assign_bd_address(f, offset=StandardFirmware.DDR4_C0_ADDR, range="4G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="DDR4_C0_MIG/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK")
             assign_bd_address(f, offset=StandardFirmware.DDR4_C1_ADDR, range="4G", target_address_space="/hedgehog/cfg_axi_dm/Data_MM2S", addr_seg="DDR4_C1_MIG/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK")
 
-            # Exclude the PS DDR High segments and QSPI
+            # Exclude the QSPI
             for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
-                exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_DDR_HIGH", target_address_space="hedgehog/cfg_axi_dm/Data_MM2S")
                 exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_QSPI", target_address_space="hedgehog/cfg_axi_dm/Data_MM2S")
             
             # Assign all the other peripherals into the address space of the DataMover
@@ -1012,6 +1032,11 @@ class StandardFirmware(Firmware):
                 assign_bd_address(f, offset=StandardFirmware.HPC1_DDR_LOW_ADDR, range="2G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP1/HPC1_DDR_LOW")
                 assign_bd_address(f, offset=StandardFirmware.HP0_DDR_LOW_ADDR, range="2G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP2/HP0_DDR_LOW")
                 assign_bd_address(f, offset=StandardFirmware.HP1_DDR_LOW_ADDR, range="2G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP3/HP1_DDR_LOW")
+                
+                assign_bd_address(f, offset=StandardFirmware.HPC0_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP0/HPC0_DDR_HIGH")
+                assign_bd_address(f, offset=StandardFirmware.HPC1_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP1/HPC1_DDR_HIGH")
+                assign_bd_address(f, offset=StandardFirmware.HP0_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP2/HP0_DDR_HIGH")
+                assign_bd_address(f, offset=StandardFirmware.HP1_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP3/HP1_DDR_HIGH")
 
                 # Assign the PS OCM into the AXI DataMover's address space
                 assign_bd_address(f, offset=StandardFirmware.HPC0_LPS_OCM_ADDR, range="256K", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP0/HPC0_LPS_OCM")
@@ -1023,10 +1048,9 @@ class StandardFirmware(Firmware):
                 assign_bd_address(f, offset=StandardFirmware.DDR4_C0_ADDR, range="4G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="DDR4_C0_MIG/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK")
                 assign_bd_address(f, offset=StandardFirmware.DDR4_C1_ADDR, range="4G", target_address_space=f"/hedgehog/adc_dm{d}/Data_S2MM", addr_seg="DDR4_C1_MIG/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK")
 
-                # Exclude the PS DDR High segments and QSPI
+                # Exclude the QSPI
                 for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
-                    for seg in ["DDR_HIGH", "QSPI"]:
-                        exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_{seg}", target_address_space=f"hedgehog/adc_dm{d}/Data_S2MM")
+                    exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_QSPI", target_address_space=f"hedgehog/adc_dm{d}/Data_S2MM")
 
                 # Connect the AXI DMA TKEEP input to a constant
                 connect_bd_net(f, f"hedgehog/adc_dm{d}/s_axis_s2mm_tkeep", f"hedgehog/xlconst_FFFF/Dout")
@@ -1200,6 +1224,11 @@ class StandardFirmware(Firmware):
                 assign_bd_address(f, offset=StandardFirmware.HPC1_DDR_LOW_ADDR, range="2G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP1/HPC1_DDR_LOW")
                 assign_bd_address(f, offset=StandardFirmware.HP0_DDR_LOW_ADDR, range="2G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP2/HP0_DDR_LOW")
                 assign_bd_address(f, offset=StandardFirmware.HP1_DDR_LOW_ADDR, range="2G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP3/HP1_DDR_LOW")
+                
+                assign_bd_address(f, offset=StandardFirmware.HPC0_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP0/HPC0_DDR_HIGH")
+                assign_bd_address(f, offset=StandardFirmware.HPC1_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP1/HPC1_DDR_HIGH")
+                assign_bd_address(f, offset=StandardFirmware.HP0_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP2/HP0_DDR_HIGH")
+                assign_bd_address(f, offset=StandardFirmware.HP1_DDR_HIGH_ADDR, range="32G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP3/HP1_DDR_HIGH")
 
                 # Assign the PS OCM into the AXI DataMover's address space
                 assign_bd_address(f, offset=StandardFirmware.HPC0_LPS_OCM_ADDR, range="256K", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="ps/SAXIGP0/HPC0_LPS_OCM")
@@ -1211,10 +1240,9 @@ class StandardFirmware(Firmware):
                 assign_bd_address(f, offset=StandardFirmware.DDR4_C0_ADDR, range="4G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="DDR4_C0_MIG/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK")
                 assign_bd_address(f, offset=StandardFirmware.DDR4_C1_ADDR, range="4G", target_address_space=f"/hedgehog/cmacc_dm{d}/Data_S2MM", addr_seg="DDR4_C1_MIG/C0_DDR4_MEMORY_MAP/C0_DDR4_ADDRESS_BLOCK")
 
-                # Exclude the PS DDR High segments and QSPI
+                # Exclude the QSPI
                 for idx,port in enumerate(["HPC0", "HPC1", "HP0", "HP1"]):
-                    for seg in ["DDR_HIGH", "QSPI"]:
-                        exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_{seg}", target_address_space=f"hedgehog/cmacc_dm{d}/Data_S2MM")
+                    exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_QSPI", target_address_space=f"hedgehog/cmacc_dm{d}/Data_S2MM")
 
                 # Connect the AXI DMA TKEEP input to a constant
                 connect_bd_net(f, f"hedgehog/cmacc_dm{d}/s_axis_s2mm_tkeep", f"hedgehog/xlconst_FFFF/Dout")

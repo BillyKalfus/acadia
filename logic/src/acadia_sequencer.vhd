@@ -448,13 +448,20 @@ begin
     -- Pipeline the configuration inputs
     dsp_cfg_reg_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0') then
-                dsp_cfg_reg <= (others => (others => '0'));
-            elsif(instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1') then
-                dsp_cfg_reg(instr_dest1_sub) <= src1;
-            elsif(instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1') then
-                dsp_cfg_reg(instr_dest2_sub) <= src2;
-            end if;
+            dsp_cfg_reg_loop: for i in 0 to NUM_DSP-1 loop
+                if(nrst = '0') then
+                    dsp_cfg_reg(i) <= (others => '0');
+                elsif(instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and instr_dest1_sub = i) then
+                    dsp_cfg_reg(i) <= src1;
+                elsif(instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1' and instr_dest2_sub = i) then
+                    dsp_cfg_reg(i) <= src2;
+                elsif(dsp_cfg_reg(i)(16 downto 15) = "11") then
+                    -- If we're not actively loading the configuration register and
+                    -- we pulsed CEP in the previous cycle, clear these bits so that
+                    -- we only pulse once
+                    dsp_cfg_reg(i)(16 downto 15) <= "00";
+                end if;
+            end loop dsp_cfg_reg_loop;
         end if;
     end process dsp_cfg_reg_proc;
                    
@@ -464,19 +471,21 @@ begin
                        '0';
     end generate dsp_rstp_gen;
                              
-    instr_dsp_cep_reg_proc: process(clk) begin
+    dsp_cep_reg_proc: process(clk) begin
         if rising_edge(clk) then
             dsp_cep_reg_loop: for i in 0 to NUM_DSP-1 loop
                 if(nrst = '0') then
                     dsp_cep_reg(i) <= '0';
                 elsif(instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i) then
                     dsp_cep_reg(i) <= '1';
-                elsif(dsp_cfg_reg(i)(21) = '1') then
+                elsif(dsp_cfg_reg(i)(15) = '1') then
+                    dsp_cep_reg(i) <= '1';
+                else
                     dsp_cep_reg(i) <= '0';
                 end if;
             end loop dsp_cep_reg_loop;
         end if;
-    end process instr_dsp_cep_reg_proc;
+    end process dsp_cep_reg_proc;
                              
     -- Pipeline the AB inputs
     dsp_ab_reg_proc: process(clk) begin

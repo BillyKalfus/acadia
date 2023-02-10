@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 import re
 
-from .compiler import ManagedResource, Symbol, Operation, Processor
+from .compiler import ManagedResource, Symbol, Operation, Processor, Operable
 
 def is_numeric(obj):
     """
@@ -23,6 +23,8 @@ def is_numeric(obj):
     if isinstance(obj, DSPConfiguration):
         return True
     if isinstance(obj, Operation):
+        if obj._op not in Operable.NUMERIC_OPERATORS:
+            return False
         for arg in obj._args:
             if not is_numeric(arg):
                 return False
@@ -821,6 +823,10 @@ class Sequencer(Processor):
             if obj._op == "bus_read":
                 addr,addr_instructions,addr_resources = self.compile_source(obj._args[0])
                 addr_instructions.append(STP(src1=Source.IMM, imm1=addr, dest1=Destination.BUS_ADDR))
+                addr_instructions.append(STP())
+                addr_instructions.append(STP())
+                addr_instructions.append(STP())
+                addr_instructions.append(STP())
                 for res in addr_resources:
                     res._released = True
                 return Source.BUS_DATA,addr_instructions,[]
@@ -875,15 +881,13 @@ class Sequencer(Processor):
             # this in one cycle
             arg1_input = "AB"
             arg2_input = "C"
-            if isinstance(arg1, Source) and "DSP" in arg1.name:
-                num = int(arg1.name[3:])
-                
+            if isinstance(arg1, Source) and "DSP" in arg1.major.name:                
                 # If we're operating on the current DSP, use the P register
-                if num == current_dsp._resource_id:
+                if arg1.minor == current_dsp._resource_id:
                     arg1_input = "P"
                     
                 # If we're operating on the lower neighboring DSP, use the cascade input
-                elif num == current_dsp._resource_id-1:
+                elif arg1.minor == current_dsp._resource_id-1:
                     arg1_input = "PCIN"
                     
             # For addition and subtraction by 1, we can use the carry input
@@ -996,7 +1000,7 @@ class Sequencer(Processor):
             
             # The DSP slice we used will contain the answer at the end, so 
             # return it along with any resources allocated during compilation
-            return current_dsp.source(),instructions,resources
+            return Source(Source.Major.DSP_DATA, current_dsp._resource_id),instructions,resources
 
         raise TypeError(f"Unable to compile {obj} (type {type(obj)}).")
         

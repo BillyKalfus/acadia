@@ -31,9 +31,9 @@ class Descriptor:
             tmp |= self.trace_address << 16
             
         if isinstance(self.trace_length, Symbol) or isinstance(self.trace_length, Operation):
-            tmp |= self.trace_length.value()
+            tmp |= self.trace_length.value()-1
         else:
-            tmp |= self.trace_length
+            tmp |= self.trace_length-1
             
         return tmp
     
