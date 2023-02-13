@@ -535,14 +535,11 @@ class Sequencer(Processor):
                 
         def dsp_start_count(dsp_self, inc=1):
             if isinstance(inc, int) and inc == 1:
-                self.store(src=DSPConfiguration(mode="P+CIN", 
-                                                cin=True,
-                                                dsp_cep="set"), 
+                self.store(src=DSPConfiguration(mode="P+1", dsp_cep="set"), 
                            dest=Destination(major=Destination.Major.DSP_CFG,
                                             minor=dsp_self._resource_id))
             elif is_numeric(inc):
-                self.STP(src1=DSPConfiguration(mode="P+AB", 
-                                               dsp_cep="set"), 
+                self.STP(src1=DSPConfiguration(mode="P+AB", dsp_cep="set"), 
                          dest1=Destination(major=Destination.Major.DSP_CFG,
                                            minor=dsp_self._resource_id), 
                          src2=inc, 
@@ -644,12 +641,7 @@ class Sequencer(Processor):
         :param when: The condition for the data to be stored. By default,
         `store` operations are unconditional.
         :type when: :class:`Operation`, optional
-        :param combine_previous: If `False`, the compiler will not attempt to 
-        combine this write with the previous one.
-        :type combine_previous: `bool`
-        :param combine_next: If `False`, the compiler will not attempt to 
-        combine this write with the next one.
-        :type combine_next: `bool`
+        :param mask: Specifies the value to load into the mask register.
         """
         
         if len(instruction_resource["args"]) > 0:
@@ -687,13 +679,14 @@ class Sequencer(Processor):
         # Some other optional settings; we don't want to pop these from kwargs
         # because we want to keep the Instruction dict intact
         when = kwargs["when"] if "when" in kwargs else None
+        mask = kwargs["mask"] if "mask" in kwargs else None
         dsp_cep = kwargs["dsp_cep"] if "dsp_cep" in kwargs else None
         push_return = kwargs["push_return"] if "push_return" in kwargs else False
         allow_hold = kwargs["allow_hold"] if "allow_hold" in kwargs else False
         
         instructions = []
         if when is not None:
-            stc_kwargs,condition_instructions,condition_resources = self.compile_condition(when)
+            stc_kwargs,condition_instructions,condition_resources = self.compile_condition(when, mask)
             instructions += condition_instructions
         
         if isinstance(src, Operation):    
@@ -775,6 +768,9 @@ class Sequencer(Processor):
         
         if is_numeric(obj) or isinstance(obj, Source):
             return obj,[],[]
+        
+        if isinstance(obj, self._Instruction):
+            return obj["compiled_address"],[],[]
         
         if isinstance(obj, self.Register):
             return Source(major=Source.Major.REG, minor=obj._resource_id),[],[]
@@ -1004,15 +1000,18 @@ class Sequencer(Processor):
 
         raise TypeError(f"Unable to compile {obj} (type {type(obj)}).")
         
-    def compile_condition(self, condition):
+    def compile_condition(self, condition, mask=None):
         """
         Compiles an object into a sequencer condition. In some cases, a resource 
         (or multiple) will need to be allocated to compute the appropriate 
         source value; these resources and the additional instructions needed to
         operate them will be returned along with the compiled condition.
         :param condition: condition to translate
-        :param dsp: A pre-allocated DSP slice for use in the computation.
-        :type dsp: :class:`self.DSPSlice`
+        :type condition: :class:`Operation`
+        :param mask: The value to load into the mask, as indicated by "left" or
+        "right", which correspond to the left-hand side and right-hand side of 
+        the condition equation respectively. If not provided, an attempt to 
+        infer it is made and an error is thrown if not possible.
         :return: A reference to the object ready to be assembled, a `list` of 
         generated instructions, and a `list` of allocated resources.
         """
@@ -1050,7 +1049,7 @@ class Sequencer(Processor):
         elif isinstance(condition, Operation):
             # Some operators can be recursively simplified
             if condition._op == "invert":
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0])
+                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
                 # Toggle the third bit, corresponding to the inverted condition
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
@@ -1058,26 +1057,26 @@ class Sequencer(Processor):
                 # We can only check if 0 > x
                 if condition._args[0] != 0:
                     raise ValueError("Greater-than comparisons can only check 0 > x or x >= 0.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31))
+                stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
                 return stc_kwargs,instructions,resources
             elif condition._op == "lt":
                 # We can only check if x < 0
                 if condition._args[1] != 0:
                     raise ValueError("Less-than comparisons can only check x < 0 or 0 <= x.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31))
+                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
                 return stc_kwargs,instructions,resources
             elif condition._op == "ge":
                 # We can only check if x >= 0
                 if condition._args[1] != 0:
                     raise ValueError("Greater-than comparisons can only check 0 > x or x >= 0.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31))
+                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
             elif condition._op == "le":
                 # We can only check if 0 <= x
                 if condition._args[0] != 0:
                     raise ValueError("Less-than comparisons can only check x < 0 or 0 <= x.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31))
+                stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
             
@@ -1096,8 +1095,25 @@ class Sequencer(Processor):
         # since that's not time-sensitive 
         instructions = []
         
-        if is_numeric(condition._args[0]):
-            instructions.append(STP(src1=Source.IMM, imm1=condition._args[0], dest1=Destination.MASK))
+        if mask is not None:
+            if mask == "left":
+                compiled_mask,mask_instructions,mask_resources = self.compile_source(condition._args[0])
+                instructions += mask_instructions
+                instructions.append(STP(src1=compiled_mask, dest1=Destination.MASK))
+                for res in mask_resources:
+                    res._released = True
+                compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
+            elif mask == "right":
+                compiled_mask,mask_instructions,mask_resources = self.compile_source(condition._args[1])
+                instructions += mask_instructions
+                instructions.append(STP(src1=compiled_mask, dest1=Destination.MASK))
+                for res in mask_resources:
+                    res._released = True
+                compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
+            else:
+                raise ValueError(f"Mask directive must be one of \"left\" or \"right\"; received {mask}.")
+        elif is_numeric(condition._args[0]):
+            instructions.append(STP(src1=condition._args[0], dest1=Destination.MASK))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
         else:
             instructions.append(STP(src1=condition._args[1], dest1=Destination.MASK))
@@ -1109,7 +1125,7 @@ class Sequencer(Processor):
 
     
     @contextmanager
-    def test(self, condition, speculation=True):
+    def test(self, condition, mask=None, speculation=True):
         """
         Executes a block of code when the provided condition is satisfied. For
         best performance, one may specify the most likely outcome of the 
@@ -1118,6 +1134,7 @@ class Sequencer(Processor):
         
         :param condition: Condition to test
         :type condition: :class:`Operation`
+        :param mask: The object to load into the mask register, when provided
         :param speculation: The speculated outcome of the condition (e.g.,
         `True` if the condition is expected to pass the majority of the time).
         :type speculation: `bool`
@@ -1126,12 +1143,14 @@ class Sequencer(Processor):
             # The block to execute if the condition passes is inline
             # Jump past the block if the condition fails
             jump = self.store(dest=Destination.PC, 
-                              when=~condition)
+                              when=~condition,
+                              mask=mask)
         else:
             # Jump to the block and push the return location
             # if the condition passes
             jump = self.store(dest=Destination.PC, 
-                              when=condition, 
+                              when=condition,
+                              mask=mask,
                               push_return=True)
             jump_target = self._Instruction.next_instance()
 
@@ -1153,7 +1172,7 @@ class Sequencer(Processor):
         jump["kwargs"]["src"] = jump_target
         
     @contextmanager
-    def wait_until(self, condition):
+    def wait_until(self, condition, mask=None):
         """
         Waits until a particular condition is satisfied. If possible, the value
         to be written to the branch mask register is inferred. If this is not 
@@ -1163,37 +1182,45 @@ class Sequencer(Processor):
         """
         return_instruction = self._Instruction.next_instance()
         yield
-        mask_arg = -1
+        mask_determined = (mask is not None)
         for arg in range(2):
             if is_numeric(condition._args[arg]):
-                mask_arg = arg
+                mask_determined = True
         
         # Note that it may be difficult to rearrange the "if" structure here, 
         # because if the clauses add any instructions then checking whether the
         # next_instance symbol was assigned will break
-        if mask_arg > 0:
+        if mask_determined:
             if not self._Instruction.next_instance_assigned():
                 # No instructions have been added in the block and we can infer 
                 # which argument should be stored in the mask. Therefore, we can
-                # use the hold destination
-                dest = Destination.HOLD
+                # use the hold destination                
+                hold_instruction = self.store(dest=Destination.HOLD,
+                                   when=~condition,
+                                   mask=mask)
+                
+                # Call next_instance() again because store() will mean that
+                # return_instruction will not have the value we want
+                hold_instruction["kwargs"]["src"] = self._Instruction.next_instance()
+                
             # TODO
-            # elif 
                 # Alternatively, if we added only one DSP augmenting operation
                 # and the external argument is either a constant or a register,
                 # we can configure the DSP before the loop starts and set 
                 # dsp_cep
             else:
                 # We have some instructions added in the block so we can't just 
-                # hold, but we can still determine what to store in the mask
-                dest = Destination.PC
+                # hold, but we can still determine what to store in the mask.
+                # Therefore, jump back to the beginning of the block
+                self.store(src=return_instruction, 
+                           dest=Destination.PC,
+                           when=~condition,
+                           mask=mask)
         else:
             raise ValueError(f"Unable to determine branch mask for"
                              f" condition {condition}.")
             
-        self.store(src=return_instruction, 
-                   dest=dest,
-                   when=~condition)
+        
                 
     @contextmanager
     def loop(self, *args):

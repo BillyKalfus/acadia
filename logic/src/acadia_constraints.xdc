@@ -217,178 +217,181 @@ set_property PACKAGE_PIN AV11    [get_ports {ADCIO[15]}]
 set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[15]}]
 
 # DDR signals
-set_property PACKAGE_PIN F17      [get_ports "DDR4_C0_SYS_CLK_clk_n"]   ;
-set_property PACKAGE_PIN G17      [get_ports "DDR4_C0_SYS_CLK_clk_p"]   ;
 
-set_property PACKAGE_PIN G20      [get_ports "DDR4_C0_ck_c[0]"] ;
-set_property PACKAGE_PIN H20      [get_ports "DDR4_C0_ck_t[0]"] ;
-set_property PACKAGE_PIN A18      [get_ports "DDR4_C0_cke[0]"] ;
-set_property PACKAGE_PIN B18      [get_ports "DDR4_C0_reset_n"] ;
+set_property PACKAGE_PIN AR19     [get_ports "DDR4_C0_SYS_CLK_clk_n"]   ;
+set_property PACKAGE_PIN AR20     [get_ports "DDR4_C0_SYS_CLK_clk_p"]   ;
+
+set_property PACKAGE_PIN AN20     [get_ports "DDR4_C0_ck_c[0]"] ;
+set_property PACKAGE_PIN AN21     [get_ports "DDR4_C0_ck_t[0]"] ;
+set_property PACKAGE_PIN AH19     [get_ports "DDR4_C0_cke[0]"] ;
+set_property PACKAGE_PIN AH20     [get_ports "DDR4_C0_reset_n"] ;
 set_property IOSTANDARD  LVCMOS12 [get_ports "DDR4_C0_reset_n"] ;
 
-set_property PACKAGE_PIN A20      [get_ports "DDR4_C0_cs_n[0]"] ; # CS TOP
-set_property PACKAGE_PIN P19      [get_ports "DDR4_C0_cs_n[1]"] ; # CS BOT
+set_property PACKAGE_PIN AH21     [get_ports "DDR4_C0_cs_n[0]"] ;     # CS TOP
+set_property PACKAGE_PIN AY19     [get_ports "DDR4_C0_cs_n[1]"] ;     # CS BOT
 
-#set_property PACKAGE_PIN B17      [get_ports "DDR4_C0_alert_n"] ;
-set_property PACKAGE_PIN C18      [get_ports "DDR4_C0_act_n"] ;
-set_property PACKAGE_PIN C19      [get_ports "DDR4_C0_odt"] ;
-#set_property PACKAGE_PIN C20      [get_ports "DDR4_C0_parity"] ;
+#set_property PACKAGE_PIN AH18     [get_ports "DDR4_C0_alert_n"] ;
+set_property PACKAGE_PIN AK17     [get_ports "DDR4_C0_act_n"] ;
+set_property PACKAGE_PIN AJ17     [get_ports "DDR4_C0_odt"] ;
+#set_property PACKAGE_PIN AL20     [get_ports "DDR4_C0_parity"] ;
 
-set_property PACKAGE_PIN D21      [get_ports "DDR4_C0_adr[0]"] ;
-set_property PACKAGE_PIN E19      [get_ports "DDR4_C0_adr[1]"] ;
-set_property PACKAGE_PIN D18      [get_ports "DDR4_C0_adr[2]"] ;
-set_property PACKAGE_PIN D19      [get_ports "DDR4_C0_adr[3]"] ;
-set_property PACKAGE_PIN E20      [get_ports "DDR4_C0_adr[4]"] ;
-set_property PACKAGE_PIN E21      [get_ports "DDR4_C0_adr[5]"] ;
-set_property PACKAGE_PIN D17      [get_ports "DDR4_C0_adr[6]"] ;
-set_property PACKAGE_PIN E17      [get_ports "DDR4_C0_adr[7]"] ;
-set_property PACKAGE_PIN F20      [get_ports "DDR4_C0_adr[8]"] ;
-set_property PACKAGE_PIN G21      [get_ports "DDR4_C0_adr[9]"] ;
-set_property PACKAGE_PIN F18      [get_ports "DDR4_C0_adr[10]"] ;
-set_property PACKAGE_PIN F19      [get_ports "DDR4_C0_adr[11]"] ;
-set_property PACKAGE_PIN J17      [get_ports "DDR4_C0_adr[12]"] ;
-set_property PACKAGE_PIN J18      [get_ports "DDR4_C0_adr[13]"] ;
+set_property PACKAGE_PIN AK19     [get_ports "DDR4_C0_adr[0]"] ;
+set_property PACKAGE_PIN AM17     [get_ports "DDR4_C0_adr[1]"] ;
+set_property PACKAGE_PIN AL17     [get_ports "DDR4_C0_adr[2]"] ;
+set_property PACKAGE_PIN AL18     [get_ports "DDR4_C0_adr[3]"] ;
+set_property PACKAGE_PIN AM20     [get_ports "DDR4_C0_adr[4]"] ;
+set_property PACKAGE_PIN AM21     [get_ports "DDR4_C0_adr[5]"] ;
+set_property PACKAGE_PIN AN18     [get_ports "DDR4_C0_adr[6]"] ;
+set_property PACKAGE_PIN AM18     [get_ports "DDR4_C0_adr[7]"] ;
+set_property PACKAGE_PIN AP19     [get_ports "DDR4_C0_adr[8]"] ;
+set_property PACKAGE_PIN AN19     [get_ports "DDR4_C0_adr[9]"] ;
+set_property PACKAGE_PIN AP17     [get_ports "DDR4_C0_adr[10]"] ;
+set_property PACKAGE_PIN AP18     [get_ports "DDR4_C0_adr[11]"] ;
+set_property PACKAGE_PIN AU18     [get_ports "DDR4_C0_adr[12]"] ;
+set_property PACKAGE_PIN AT18     [get_ports "DDR4_C0_adr[13]"] ;
 
-set_property PACKAGE_PIN A17      [get_ports "DDR4_C0_adr[14]"] ; #WE
-set_property PACKAGE_PIN A19      [get_ports "DDR4_C0_adr[15]"] ; #CAS
-set_property PACKAGE_PIN C21      [get_ports "DDR4_C0_adr[16]"] ; #RAS
+set_property PACKAGE_PIN AJ18     [get_ports "DDR4_C0_adr[14]"] ;    #WE
+set_property PACKAGE_PIN AJ21     [get_ports "DDR4_C0_adr[15]"] ;    #CAS
+set_property PACKAGE_PIN AL19     [get_ports "DDR4_C0_adr[16]"] ;    #RAS
 
-set_property PACKAGE_PIN G18      [get_ports "DDR4_C0_ba[0]"] ;
-set_property PACKAGE_PIN H18      [get_ports "DDR4_C0_ba[1]"] ;
-set_property PACKAGE_PIN B20      [get_ports "DDR4_C0_bg[0]"] ;
-set_property PACKAGE_PIN B21      [get_ports "DDR4_C0_bg[1]"] ;
+set_property PACKAGE_PIN AT19     [get_ports "DDR4_C0_ba[0]"] ;
+set_property PACKAGE_PIN AT20     [get_ports "DDR4_C0_ba[1]"] ;
+set_property PACKAGE_PIN AK20     [get_ports "DDR4_C0_bg[0]"] ;
+set_property PACKAGE_PIN AK21     [get_ports "DDR4_C0_bg[1]"] ;
 
-set_property PACKAGE_PIN D22      [get_ports "DDR4_C0_dqs_c[0]"] ;
-set_property PACKAGE_PIN E22      [get_ports "DDR4_C0_dqs_t[0]"] ;
-set_property PACKAGE_PIN B23      [get_ports "DDR4_C0_dqs_c[1]"] ;
-set_property PACKAGE_PIN B22      [get_ports "DDR4_C0_dqs_t[1]"] ;
-set_property PACKAGE_PIN G23      [get_ports "DDR4_C0_dqs_c[2]"] ;
-set_property PACKAGE_PIN H23      [get_ports "DDR4_C0_dqs_t[2]"] ;
-set_property PACKAGE_PIN P24      [get_ports "DDR4_C0_dqs_c[3]"] ;
-set_property PACKAGE_PIN R24      [get_ports "DDR4_C0_dqs_t[3]"] ;
+set_property PACKAGE_PIN AT14     [get_ports "DDR4_C0_dqs_c[0]"] ;
+set_property PACKAGE_PIN AR14     [get_ports "DDR4_C0_dqs_t[0]"] ;
+set_property PACKAGE_PIN AM15     [get_ports "DDR4_C0_dqs_c[1]"] ;
+set_property PACKAGE_PIN AL15     [get_ports "DDR4_C0_dqs_t[1]"] ;
+set_property PACKAGE_PIN AW14     [get_ports "DDR4_C0_dqs_c[2]"] ;
+set_property PACKAGE_PIN AV14     [get_ports "DDR4_C0_dqs_t[2]"] ;
+set_property PACKAGE_PIN BB15     [get_ports "DDR4_C0_dqs_c[3]"] ;
+set_property PACKAGE_PIN BB16     [get_ports "DDR4_C0_dqs_t[3]"] ;
 
-set_property PACKAGE_PIN C23      [get_ports "DDR4_C0_dq[0]"] ;
-set_property PACKAGE_PIN F24      [get_ports "DDR4_C0_dq[1]"] ;
-set_property PACKAGE_PIN D26      [get_ports "DDR4_C0_dq[2]"] ;
-set_property PACKAGE_PIN E26      [get_ports "DDR4_C0_dq[3]"] ;
-set_property PACKAGE_PIN D23      [get_ports "DDR4_C0_dq[4]"] ;
-set_property PACKAGE_PIN G25      [get_ports "DDR4_C0_dq[5]"] ;
-set_property PACKAGE_PIN F25      [get_ports "DDR4_C0_dq[6]"] ;
-set_property PACKAGE_PIN F23      [get_ports "DDR4_C0_dq[7]"] ;
-set_property PACKAGE_PIN B25      [get_ports "DDR4_C0_dq[8]"] ;
-set_property PACKAGE_PIN A23      [get_ports "DDR4_C0_dq[9]"] ;
-set_property PACKAGE_PIN A24      [get_ports "DDR4_C0_dq[10]"] ;
-set_property PACKAGE_PIN A22      [get_ports "DDR4_C0_dq[11]"] ;
-set_property PACKAGE_PIN D24      [get_ports "DDR4_C0_dq[12]"] ;
-set_property PACKAGE_PIN C25      [get_ports "DDR4_C0_dq[13]"] ;
-set_property PACKAGE_PIN A25      [get_ports "DDR4_C0_dq[14]"] ;
-set_property PACKAGE_PIN C24      [get_ports "DDR4_C0_dq[15]"] ;
-set_property PACKAGE_PIN J24      [get_ports "DDR4_C0_dq[16]"] ;
-set_property PACKAGE_PIN F22      [get_ports "DDR4_C0_dq[17]"] ;
-set_property PACKAGE_PIN K24      [get_ports "DDR4_C0_dq[18]"] ;
-set_property PACKAGE_PIN G22      [get_ports "DDR4_C0_dq[19]"] ;
-set_property PACKAGE_PIN J22      [get_ports "DDR4_C0_dq[20]"] ;
-set_property PACKAGE_PIN H24      [get_ports "DDR4_C0_dq[21]"] ;
-set_property PACKAGE_PIN K22      [get_ports "DDR4_C0_dq[22]"] ;
-set_property PACKAGE_PIN H25      [get_ports "DDR4_C0_dq[23]"] ;
-set_property PACKAGE_PIN P23      [get_ports "DDR4_C0_dq[24]"] ;
-set_property PACKAGE_PIN R22      [get_ports "DDR4_C0_dq[25]"] ;
-set_property PACKAGE_PIN N24      [get_ports "DDR4_C0_dq[26]"] ;
-set_property PACKAGE_PIN N21      [get_ports "DDR4_C0_dq[27]"] ;
-set_property PACKAGE_PIN M23      [get_ports "DDR4_C0_dq[28]"] ;
-set_property PACKAGE_PIN N23      [get_ports "DDR4_C0_dq[29]"] ;
-set_property PACKAGE_PIN M22      [get_ports "DDR4_C0_dq[30]"] ;
-set_property PACKAGE_PIN M21      [get_ports "DDR4_C0_dq[31]"] ;
+set_property PACKAGE_PIN AR17     [get_ports "DDR4_C0_dq[0]"] ;
+set_property PACKAGE_PIN AT15     [get_ports "DDR4_C0_dq[1]"] ;
+set_property PACKAGE_PIN AR16     [get_ports "DDR4_C0_dq[2]"] ;
+set_property PACKAGE_PIN AT17     [get_ports "DDR4_C0_dq[3]"] ;
+set_property PACKAGE_PIN AR15     [get_ports "DDR4_C0_dq[4]"] ;
+set_property PACKAGE_PIN AU15     [get_ports "DDR4_C0_dq[5]"] ;
+set_property PACKAGE_PIN AN13     [get_ports "DDR4_C0_dq[6]"] ;
+set_property PACKAGE_PIN AP13     [get_ports "DDR4_C0_dq[7]"] ;
+set_property PACKAGE_PIN AN15     [get_ports "DDR4_C0_dq[8]"] ;
+set_property PACKAGE_PIN AJ14     [get_ports "DDR4_C0_dq[9]"] ;
+set_property PACKAGE_PIN AM13     [get_ports "DDR4_C0_dq[10]"] ;
+set_property PACKAGE_PIN AK14     [get_ports "DDR4_C0_dq[11]"] ;
+set_property PACKAGE_PIN AK16     [get_ports "DDR4_C0_dq[12]"] ;
+set_property PACKAGE_PIN AK15     [get_ports "DDR4_C0_dq[13]"] ;
+set_property PACKAGE_PIN AM16     [get_ports "DDR4_C0_dq[14]"] ;
+set_property PACKAGE_PIN AL14     [get_ports "DDR4_C0_dq[15]"] ;
+set_property PACKAGE_PIN AV13     [get_ports "DDR4_C0_dq[16]"] ;
+set_property PACKAGE_PIN AV16     [get_ports "DDR4_C0_dq[17]"] ;
+set_property PACKAGE_PIN AU13     [get_ports "DDR4_C0_dq[18]"] ;
+set_property PACKAGE_PIN AW17     [get_ports "DDR4_C0_dq[19]"] ;
+set_property PACKAGE_PIN AW13     [get_ports "DDR4_C0_dq[20]"] ;
+set_property PACKAGE_PIN AW16     [get_ports "DDR4_C0_dq[21]"] ;
+set_property PACKAGE_PIN AT13     [get_ports "DDR4_C0_dq[22]"] ;
+set_property PACKAGE_PIN AV15     [get_ports "DDR4_C0_dq[23]"] ;
+set_property PACKAGE_PIN AY15     [get_ports "DDR4_C0_dq[24]"] ;
+set_property PACKAGE_PIN BA15     [get_ports "DDR4_C0_dq[25]"] ;
+set_property PACKAGE_PIN AY14     [get_ports "DDR4_C0_dq[26]"] ;
+set_property PACKAGE_PIN BA14     [get_ports "DDR4_C0_dq[27]"] ;
+set_property PACKAGE_PIN BA12     [get_ports "DDR4_C0_dq[28]"] ;
+set_property PACKAGE_PIN BB17     [get_ports "DDR4_C0_dq[29]"] ;
+set_property PACKAGE_PIN BA13     [get_ports "DDR4_C0_dq[30]"] ;
+set_property PACKAGE_PIN BA17     [get_ports "DDR4_C0_dq[31]"] ;
 
-set_property PACKAGE_PIN H26      [get_ports "DDR4_C0_dm_n[0]"] ;
-set_property PACKAGE_PIN C26      [get_ports "DDR4_C0_dm_n[1]"] ;
-set_property PACKAGE_PIN L23      [get_ports "DDR4_C0_dm_n[2]"] ;
-set_property PACKAGE_PIN R21      [get_ports "DDR4_C0_dm_n[3]"] ;
+set_property PACKAGE_PIN AU17     [get_ports "DDR4_C0_dm_n[0]"] ;
+set_property PACKAGE_PIN AN16     [get_ports "DDR4_C0_dm_n[1]"] ;
+set_property PACKAGE_PIN AY17     [get_ports "DDR4_C0_dm_n[2]"] ;
+set_property PACKAGE_PIN BB13     [get_ports "DDR4_C0_dm_n[3]"] ;
 
-set_property PACKAGE_PIN AR19     [get_ports "DDR4_C1_SYS_CLK_clk_n"]   ;
-set_property PACKAGE_PIN AR20     [get_ports "DDR4_C1_SYS_CLK_clk_p"]   ;
+set_property PACKAGE_PIN F17      [get_ports "DDR4_C1_SYS_CLK_clk_n"]   ;
+set_property PACKAGE_PIN G17      [get_ports "DDR4_C1_SYS_CLK_clk_p"]   ;
 
-set_property PACKAGE_PIN AN20     [get_ports "DDR4_C1_ck_c[0]"] ;
-set_property PACKAGE_PIN AN21     [get_ports "DDR4_C1_ck_t[0]"] ;
-set_property PACKAGE_PIN AH19     [get_ports "DDR4_C1_cke[0]"] ;
-set_property PACKAGE_PIN AH20     [get_ports "DDR4_C1_reset_n"] ;
+set_property PACKAGE_PIN G20      [get_ports "DDR4_C1_ck_c[0]"] ;
+set_property PACKAGE_PIN H20      [get_ports "DDR4_C1_ck_t[0]"] ;
+set_property PACKAGE_PIN A18      [get_ports "DDR4_C1_cke[0]"] ;
+set_property PACKAGE_PIN B18      [get_ports "DDR4_C1_reset_n"] ;
 set_property IOSTANDARD  LVCMOS12 [get_ports "DDR4_C1_reset_n"] ;
 
-set_property PACKAGE_PIN AH21     [get_ports "DDR4_C1_cs_n[0]"] ;     # CS TOP
-set_property PACKAGE_PIN AY19     [get_ports "DDR4_C1_cs_n[1]"] ;     # CS BOT
+set_property PACKAGE_PIN A20      [get_ports "DDR4_C1_cs_n[0]"] ; # CS TOP
+set_property PACKAGE_PIN P19      [get_ports "DDR4_C1_cs_n[1]"] ; # CS BOT
 
-#set_property PACKAGE_PIN AH18     [get_ports "DDR4_C1_alert_n"] ;
-set_property PACKAGE_PIN AK17     [get_ports "DDR4_C1_act_n"] ;
-set_property PACKAGE_PIN AJ17     [get_ports "DDR4_C1_odt"] ;
-#set_property PACKAGE_PIN AL20     [get_ports "DDR4_C1_parity"] ;
+#set_property PACKAGE_PIN B17      [get_ports "DDR4_C1_alert_n"] ;
+set_property PACKAGE_PIN C18      [get_ports "DDR4_C1_act_n"] ;
+set_property PACKAGE_PIN C19      [get_ports "DDR4_C1_odt"] ;
+#set_property PACKAGE_PIN C20      [get_ports "DDR4_C1_parity"] ;
 
-set_property PACKAGE_PIN AK19     [get_ports "DDR4_C1_adr[0]"] ;
-set_property PACKAGE_PIN AM17     [get_ports "DDR4_C1_adr[1]"] ;
-set_property PACKAGE_PIN AL17     [get_ports "DDR4_C1_adr[2]"] ;
-set_property PACKAGE_PIN AL18     [get_ports "DDR4_C1_adr[3]"] ;
-set_property PACKAGE_PIN AM20     [get_ports "DDR4_C1_adr[4]"] ;
-set_property PACKAGE_PIN AM21     [get_ports "DDR4_C1_adr[5]"] ;
-set_property PACKAGE_PIN AN18     [get_ports "DDR4_C1_adr[6]"] ;
-set_property PACKAGE_PIN AM18     [get_ports "DDR4_C1_adr[7]"] ;
-set_property PACKAGE_PIN AP19     [get_ports "DDR4_C1_adr[8]"] ;
-set_property PACKAGE_PIN AN19     [get_ports "DDR4_C1_adr[9]"] ;
-set_property PACKAGE_PIN AP17     [get_ports "DDR4_C1_adr[10]"] ;
-set_property PACKAGE_PIN AP18     [get_ports "DDR4_C1_adr[11]"] ;
-set_property PACKAGE_PIN AU18     [get_ports "DDR4_C1_adr[12]"] ;
-set_property PACKAGE_PIN AT18     [get_ports "DDR4_C1_adr[13]"] ;
+set_property PACKAGE_PIN D21      [get_ports "DDR4_C1_adr[0]"] ;
+set_property PACKAGE_PIN E19      [get_ports "DDR4_C1_adr[1]"] ;
+set_property PACKAGE_PIN D18      [get_ports "DDR4_C1_adr[2]"] ;
+set_property PACKAGE_PIN D19      [get_ports "DDR4_C1_adr[3]"] ;
+set_property PACKAGE_PIN E20      [get_ports "DDR4_C1_adr[4]"] ;
+set_property PACKAGE_PIN E21      [get_ports "DDR4_C1_adr[5]"] ;
+set_property PACKAGE_PIN D17      [get_ports "DDR4_C1_adr[6]"] ;
+set_property PACKAGE_PIN E17      [get_ports "DDR4_C1_adr[7]"] ;
+set_property PACKAGE_PIN F20      [get_ports "DDR4_C1_adr[8]"] ;
+set_property PACKAGE_PIN G21      [get_ports "DDR4_C1_adr[9]"] ;
+set_property PACKAGE_PIN F18      [get_ports "DDR4_C1_adr[10]"] ;
+set_property PACKAGE_PIN F19      [get_ports "DDR4_C1_adr[11]"] ;
+set_property PACKAGE_PIN J17      [get_ports "DDR4_C1_adr[12]"] ;
+set_property PACKAGE_PIN J18      [get_ports "DDR4_C1_adr[13]"] ;
 
-set_property PACKAGE_PIN AJ18     [get_ports "DDR4_C1_adr[14]"] ;    #WE
-set_property PACKAGE_PIN AJ21     [get_ports "DDR4_C1_adr[15]"] ;    #CAS
-set_property PACKAGE_PIN AL19     [get_ports "DDR4_C1_adr[16]"] ;    #RAS
+set_property PACKAGE_PIN A17      [get_ports "DDR4_C1_adr[14]"] ; #WE
+set_property PACKAGE_PIN A19      [get_ports "DDR4_C1_adr[15]"] ; #CAS
+set_property PACKAGE_PIN C21      [get_ports "DDR4_C1_adr[16]"] ; #RAS
 
-set_property PACKAGE_PIN AT19     [get_ports "DDR4_C1_ba[0]"] ;
-set_property PACKAGE_PIN AT20     [get_ports "DDR4_C1_ba[1]"] ;
-set_property PACKAGE_PIN AK20     [get_ports "DDR4_C1_bg[0]"] ;
-set_property PACKAGE_PIN AK21     [get_ports "DDR4_C1_bg[1]"] ;
+set_property PACKAGE_PIN G18      [get_ports "DDR4_C1_ba[0]"] ;
+set_property PACKAGE_PIN H18      [get_ports "DDR4_C1_ba[1]"] ;
+set_property PACKAGE_PIN B20      [get_ports "DDR4_C1_bg[0]"] ;
+set_property PACKAGE_PIN B21      [get_ports "DDR4_C1_bg[1]"] ;
 
-set_property PACKAGE_PIN AT14     [get_ports "DDR4_C1_dqs_c[0]"] ;
-set_property PACKAGE_PIN AR14     [get_ports "DDR4_C1_dqs_t[0]"] ;
-set_property PACKAGE_PIN AM15     [get_ports "DDR4_C1_dqs_c[1]"] ;
-set_property PACKAGE_PIN AL15     [get_ports "DDR4_C1_dqs_t[1]"] ;
-set_property PACKAGE_PIN AW14     [get_ports "DDR4_C1_dqs_c[2]"] ;
-set_property PACKAGE_PIN AV14     [get_ports "DDR4_C1_dqs_t[2]"] ;
-set_property PACKAGE_PIN BB15     [get_ports "DDR4_C1_dqs_c[3]"] ;
-set_property PACKAGE_PIN BB16     [get_ports "DDR4_C1_dqs_t[3]"] ;
+set_property PACKAGE_PIN D22      [get_ports "DDR4_C1_dqs_c[0]"] ;
+set_property PACKAGE_PIN E22      [get_ports "DDR4_C1_dqs_t[0]"] ;
+set_property PACKAGE_PIN B23      [get_ports "DDR4_C1_dqs_c[1]"] ;
+set_property PACKAGE_PIN B22      [get_ports "DDR4_C1_dqs_t[1]"] ;
+set_property PACKAGE_PIN G23      [get_ports "DDR4_C1_dqs_c[2]"] ;
+set_property PACKAGE_PIN H23      [get_ports "DDR4_C1_dqs_t[2]"] ;
+set_property PACKAGE_PIN P24      [get_ports "DDR4_C1_dqs_c[3]"] ;
+set_property PACKAGE_PIN R24      [get_ports "DDR4_C1_dqs_t[3]"] ;
 
-set_property PACKAGE_PIN AR17     [get_ports "DDR4_C1_dq[0]"] ;
-set_property PACKAGE_PIN AT15     [get_ports "DDR4_C1_dq[1]"] ;
-set_property PACKAGE_PIN AR16     [get_ports "DDR4_C1_dq[2]"] ;
-set_property PACKAGE_PIN AT17     [get_ports "DDR4_C1_dq[3]"] ;
-set_property PACKAGE_PIN AR15     [get_ports "DDR4_C1_dq[4]"] ;
-set_property PACKAGE_PIN AU15     [get_ports "DDR4_C1_dq[5]"] ;
-set_property PACKAGE_PIN AN13     [get_ports "DDR4_C1_dq[6]"] ;
-set_property PACKAGE_PIN AP13     [get_ports "DDR4_C1_dq[7]"] ;
-set_property PACKAGE_PIN AN15     [get_ports "DDR4_C1_dq[8]"] ;
-set_property PACKAGE_PIN AJ14     [get_ports "DDR4_C1_dq[9]"] ;
-set_property PACKAGE_PIN AM13     [get_ports "DDR4_C1_dq[10]"] ;
-set_property PACKAGE_PIN AK14     [get_ports "DDR4_C1_dq[11]"] ;
-set_property PACKAGE_PIN AK16     [get_ports "DDR4_C1_dq[12]"] ;
-set_property PACKAGE_PIN AK15     [get_ports "DDR4_C1_dq[13]"] ;
-set_property PACKAGE_PIN AM16     [get_ports "DDR4_C1_dq[14]"] ;
-set_property PACKAGE_PIN AL14     [get_ports "DDR4_C1_dq[15]"] ;
-set_property PACKAGE_PIN AV13     [get_ports "DDR4_C1_dq[16]"] ;
-set_property PACKAGE_PIN AV16     [get_ports "DDR4_C1_dq[17]"] ;
-set_property PACKAGE_PIN AU13     [get_ports "DDR4_C1_dq[18]"] ;
-set_property PACKAGE_PIN AW17     [get_ports "DDR4_C1_dq[19]"] ;
-set_property PACKAGE_PIN AW13     [get_ports "DDR4_C1_dq[20]"] ;
-set_property PACKAGE_PIN AW16     [get_ports "DDR4_C1_dq[21]"] ;
-set_property PACKAGE_PIN AT13     [get_ports "DDR4_C1_dq[22]"] ;
-set_property PACKAGE_PIN AV15     [get_ports "DDR4_C1_dq[23]"] ;
-set_property PACKAGE_PIN AY15     [get_ports "DDR4_C1_dq[24]"] ;
-set_property PACKAGE_PIN BA15     [get_ports "DDR4_C1_dq[25]"] ;
-set_property PACKAGE_PIN AY14     [get_ports "DDR4_C1_dq[26]"] ;
-set_property PACKAGE_PIN BA14     [get_ports "DDR4_C1_dq[27]"] ;
-set_property PACKAGE_PIN BA12     [get_ports "DDR4_C1_dq[28]"] ;
-set_property PACKAGE_PIN BB17     [get_ports "DDR4_C1_dq[29]"] ;
-set_property PACKAGE_PIN BA13     [get_ports "DDR4_C1_dq[30]"] ;
-set_property PACKAGE_PIN BA17     [get_ports "DDR4_C1_dq[31]"] ;
+set_property PACKAGE_PIN C23      [get_ports "DDR4_C1_dq[0]"] ;
+set_property PACKAGE_PIN F24      [get_ports "DDR4_C1_dq[1]"] ;
+set_property PACKAGE_PIN D26      [get_ports "DDR4_C1_dq[2]"] ;
+set_property PACKAGE_PIN E26      [get_ports "DDR4_C1_dq[3]"] ;
+set_property PACKAGE_PIN D23      [get_ports "DDR4_C1_dq[4]"] ;
+set_property PACKAGE_PIN G25      [get_ports "DDR4_C1_dq[5]"] ;
+set_property PACKAGE_PIN F25      [get_ports "DDR4_C1_dq[6]"] ;
+set_property PACKAGE_PIN F23      [get_ports "DDR4_C1_dq[7]"] ;
+set_property PACKAGE_PIN B25      [get_ports "DDR4_C1_dq[8]"] ;
+set_property PACKAGE_PIN A23      [get_ports "DDR4_C1_dq[9]"] ;
+set_property PACKAGE_PIN A24      [get_ports "DDR4_C1_dq[10]"] ;
+set_property PACKAGE_PIN A22      [get_ports "DDR4_C1_dq[11]"] ;
+set_property PACKAGE_PIN D24      [get_ports "DDR4_C1_dq[12]"] ;
+set_property PACKAGE_PIN C25      [get_ports "DDR4_C1_dq[13]"] ;
+set_property PACKAGE_PIN A25      [get_ports "DDR4_C1_dq[14]"] ;
+set_property PACKAGE_PIN C24      [get_ports "DDR4_C1_dq[15]"] ;
+set_property PACKAGE_PIN J24      [get_ports "DDR4_C1_dq[16]"] ;
+set_property PACKAGE_PIN F22      [get_ports "DDR4_C1_dq[17]"] ;
+set_property PACKAGE_PIN K24      [get_ports "DDR4_C1_dq[18]"] ;
+set_property PACKAGE_PIN G22      [get_ports "DDR4_C1_dq[19]"] ;
+set_property PACKAGE_PIN J22      [get_ports "DDR4_C1_dq[20]"] ;
+set_property PACKAGE_PIN H24      [get_ports "DDR4_C1_dq[21]"] ;
+set_property PACKAGE_PIN K22      [get_ports "DDR4_C1_dq[22]"] ;
+set_property PACKAGE_PIN H25      [get_ports "DDR4_C1_dq[23]"] ;
+set_property PACKAGE_PIN P23      [get_ports "DDR4_C1_dq[24]"] ;
+set_property PACKAGE_PIN R22      [get_ports "DDR4_C1_dq[25]"] ;
+set_property PACKAGE_PIN N24      [get_ports "DDR4_C1_dq[26]"] ;
+set_property PACKAGE_PIN N21      [get_ports "DDR4_C1_dq[27]"] ;
+set_property PACKAGE_PIN M23      [get_ports "DDR4_C1_dq[28]"] ;
+set_property PACKAGE_PIN N23      [get_ports "DDR4_C1_dq[29]"] ;
+set_property PACKAGE_PIN M22      [get_ports "DDR4_C1_dq[30]"] ;
+set_property PACKAGE_PIN M21      [get_ports "DDR4_C1_dq[31]"] ;
 
-set_property PACKAGE_PIN AU17     [get_ports "DDR4_C1_dm_n[0]"] ;
-set_property PACKAGE_PIN AN16     [get_ports "DDR4_C1_dm_n[1]"] ;
-set_property PACKAGE_PIN AY17     [get_ports "DDR4_C1_dm_n[2]"] ;
-set_property PACKAGE_PIN BB13     [get_ports "DDR4_C1_dm_n[3]"] ;
+set_property PACKAGE_PIN H26      [get_ports "DDR4_C1_dm_n[0]"] ;
+set_property PACKAGE_PIN C26      [get_ports "DDR4_C1_dm_n[1]"] ;
+set_property PACKAGE_PIN L23      [get_ports "DDR4_C1_dm_n[2]"] ;
+set_property PACKAGE_PIN R21      [get_ports "DDR4_C1_dm_n[3]"] ;
+
+

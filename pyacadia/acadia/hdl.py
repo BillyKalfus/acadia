@@ -534,9 +534,9 @@ class BusDataMoverController(BusDevice, HDLModule):
         :type key: int or str
         """
         if isinstance(key, int):
-            return self + 4*key
+            return self._address + 4*key
         elif isinstance(key, str):
-            return self + 4*self.datamovers.index(key)
+            return self._address + 4*self._datamovers.index(key)
         else:
             raise TypeError(f"Incompatible type for key {key}")
         
@@ -629,7 +629,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'                {datamover}_cmd_misc    <= (others => \'0\');\n'
         
         hdl += f'            elsif (master_bus_en = \'1\' and master_bus_wr = \'1\') then\n'
-        hdl += f'                case master_bus_addr is\n'
+        hdl += f'                case master_bus_addr({bus_addr_bits-1} downto 0) is\n'
         
         for i,datamover in enumerate(self._datamovers):    
             hdl += f'                    when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
@@ -696,34 +696,29 @@ class BusDataMoverController(BusDevice, HDLModule):
         
         hdl += f'    rd_proc: process(clk) begin\n'
         hdl += f'        if rising_edge(clk) then\n'
-        hdl += f'            if (master_bus_en = \'1\' and master_bus_wr = \'0\') then\n'
-        hdl += f'                case master_bus_addr is\n'
+        hdl += f'            case master_bus_addr({bus_addr_bits-1} downto 0) is\n'
         
         for i,datamover in enumerate(self._datamovers):    
-            hdl += f'                    when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        master_bus_miso <= {datamover}_sts_tdata;\n'
-            hdl += f'                        {datamover}_sts_tready <= \'1\';\n'
-            hdl += f'                    when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        master_bus_miso <= dm_sts_vld;\n'
-            hdl += f'                        {datamover}_sts_tready <= \'0\';\n'
-            hdl += f'                    when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        master_bus_miso <= dm_cmd_ack;\n'
-            hdl += f'                        {datamover}_sts_tready <= \'0\';\n'
-            hdl += f'                    when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        master_bus_miso <= dm_err;\n'
-            hdl += f'                        {datamover}_sts_tready <= \'0\';\n'
+            hdl += f'                when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
+            hdl += f'                    master_bus_miso <= {datamover}_sts_tdata;\n'
+            hdl += f'                    {datamover}_sts_tready <= master_bus_en;\n'
+            hdl += f'                when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
+            hdl += f'                    master_bus_miso <= dm_sts_vld;\n'
+            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
+            hdl += f'                when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
+            hdl += f'                    master_bus_miso <= dm_cmd_ack;\n'
+            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
+            hdl += f'                when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
+            hdl += f'                    master_bus_miso <= dm_err;\n'
+            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
             
-        hdl += f'                    when others =>\n'
+        hdl += f'                when others =>\n'
+        hdl += f'                    master_bus_miso <= (others => \'0\');\n'
         
         for i,datamover in enumerate(self._datamovers): 
-            hdl += f'                        {datamover}_sts_tready <= \'0\';\n'
+            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
             
-        hdl += f'                end case;\n'
-        hdl += f'            else\n'
-        hdl += f'                -- Clear the signals that pop status words from the status FIFOs\n'
-        for i,datamover in enumerate(self._datamovers):    
-            hdl += f'                {datamover}_sts_tready <= \'0\';\n'
-        hdl += f'            end if;\n'
+        hdl += f'            end case;\n'
         hdl += f'        end if;\n'
         hdl += f'    end process rd_proc;\n\n'
         

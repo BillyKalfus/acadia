@@ -202,6 +202,8 @@ class Symbol(metaclass=Operable):
         self._value_type = value_type if value_type is not None else type(value)
         
     def __str__(self):
+        if isinstance(self._value, int):
+            return f"Symbol(assigned={self._assigned}, value=0x{self._value:X})"
         return f"Symbol(assigned={self._assigned}, value={self._value})"
     
     def __repr__(self):
