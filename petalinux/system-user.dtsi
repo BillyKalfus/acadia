@@ -1,0 +1,20 @@
+/include/ "system-conf.dtsi"
+/include/ "pl.dtsi"
+
+/ {
+	
+	acadia-psmem: sram@800000000 {
+		compatible = "mmio-sram";
+		reg = <0x8 0x00000000 0x1 0x00000000>;
+		ranges;
+		#address-cells = <2>;
+		#size-cells = <2>;
+        
+		acadia-psmem@0 {
+			reg = <0x8 0x00000000 0x1 0x0000000>;
+		}; 
+		
+	};
+	
+};
+	

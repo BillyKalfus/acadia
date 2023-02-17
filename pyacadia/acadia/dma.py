@@ -43,6 +43,9 @@ class DMA(Processor):
     streaming data in and out of the Acadia hardware.
     """
     
+    def __init__(self, instruction_limit=None):
+        super().__init__(instruction_limit)
+    
     @Processor.instruction()
     def stream(self, instruction_resource):
         """

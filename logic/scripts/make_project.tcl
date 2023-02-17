@@ -886,6 +886,14 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.C0.DDR4_MemoryPart {MT40A1G8SA-075} \
  ] $DDR4_C1_MIG
  
+ # Create instance: axi_gpio_ddr, and set properties
+  set axi_gpio_ddr [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_ddr ]
+  set_property -dict [ list \
+   CONFIG.C_GPIO2_WIDTH {1} \
+   CONFIG.C_GPIO_WIDTH {1} \
+   CONFIG.C_IS_DUAL {1} \
+ ] $axi_gpio_ddr
+ 
   # Create instance: axi_gpio_seq, and set properties
   set axi_gpio_seq [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_seq ]
   set_property -dict [ list \
@@ -1585,7 +1593,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   # Create instance: smartconnect_lpd, and set properties
   set smartconnect_lpd [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_lpd ]
   set_property -dict [ list \
-   CONFIG.NUM_MI {2} \
+   CONFIG.NUM_MI {3} \
    CONFIG.NUM_SI {1} \
  ] $smartconnect_lpd
   
@@ -1688,14 +1696,15 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_intf_net -intf_net ps_M_AXI_HPM0_FPD [get_bd_intf_pins hedgehog/PS_M_AXI0] [get_bd_intf_pins ps/M_AXI_HPM0_FPD]
   connect_bd_intf_net -intf_net ps_M_AXI_HPM0_LPD [get_bd_intf_pins ps/M_AXI_HPM0_LPD] [get_bd_intf_pins smartconnect_lpd/S00_AXI]
   connect_bd_intf_net -intf_net ps_M_AXI_HPM1_FPD [get_bd_intf_pins hedgehog/PS_M_AXI1] [get_bd_intf_pins ps/M_AXI_HPM1_FPD]
-  connect_bd_intf_net -intf_net sequencer_0_instruction_mem [get_bd_intf_pins hedgehog/sequencer_instruction_mem] [get_bd_intf_pins sequencer/instruction_mem]
-  connect_bd_intf_net -intf_net sequencer_0_mem_bus [get_bd_intf_pins hedgehog/sequencer_bus] [get_bd_intf_pins sequencer/mem_bus]
+  connect_bd_intf_net -intf_net sequencer_instruction_mem [get_bd_intf_pins hedgehog/sequencer_instruction_mem] [get_bd_intf_pins sequencer/instruction_mem]
+  connect_bd_intf_net -intf_net sequencer_mem_bus [get_bd_intf_pins hedgehog/sequencer_bus] [get_bd_intf_pins sequencer/mem_bus]
   connect_bd_intf_net -intf_net sfp0_rx_1 [get_bd_intf_ports sfp0_rx] [get_bd_intf_pins hedgehog/sfp0_rx]
   connect_bd_intf_net -intf_net sfp1_rx_1 [get_bd_intf_ports sfp1_rx] [get_bd_intf_pins hedgehog/sfp1_rx]
   connect_bd_intf_net -intf_net sfp2_rx_1 [get_bd_intf_ports sfp2_rx] [get_bd_intf_pins hedgehog/sfp2_rx]
   connect_bd_intf_net -intf_net sfp3_rx_1 [get_bd_intf_ports sfp3_rx] [get_bd_intf_pins hedgehog/sfp3_rx]
-  connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins axi_gpio_spi/S_AXI] [get_bd_intf_pins smartconnect_lpd/M00_AXI]
-  connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins axi_gpio_seq/S_AXI] [get_bd_intf_pins smartconnect_lpd/M01_AXI]
+  connect_bd_intf_net -intf_net smartconnect_lpd_M00_AXI [get_bd_intf_pins axi_gpio_spi/S_AXI] [get_bd_intf_pins smartconnect_lpd/M00_AXI]
+  connect_bd_intf_net -intf_net smartconnect_lpd_M01_AXI [get_bd_intf_pins axi_gpio_seq/S_AXI] [get_bd_intf_pins smartconnect_lpd/M01_AXI]
+  connect_bd_intf_net -intf_net smartconnect_lpd_M02_AXI [get_bd_intf_pins axi_gpio_ddr/S_AXI] [get_bd_intf_pins smartconnect_lpd/M02_AXI]
   connect_bd_intf_net -intf_net sysref_in_1 [get_bd_intf_ports sysref_in] [get_bd_intf_pins hedgehog/sysref_in]
   connect_bd_intf_net -intf_net vin00_1 [get_bd_intf_ports vin00] [get_bd_intf_pins hedgehog/vin00]
   connect_bd_intf_net -intf_net vin01_1 [get_bd_intf_ports vin01] [get_bd_intf_pins hedgehog/vin01]
@@ -1717,7 +1726,11 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   # Create port connections
   connect_bd_net -net ADCIO_1 [get_bd_ports ADCIO] [get_bd_pins hedgehog/ADCIO]
   connect_bd_net -net DDR4_C0_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C0_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C0_ui_clk] [get_bd_pins xpm_cdc_DDR4_C0_MIG/dest_clk]
+  connect_bd_net -net DDR4_C0_MIG_c0_init_calib_complete [get_bd_pins DDR4_C0_MIG/c0_init_calib_complete] [get_bd_pins axi_gpio_ddr/gpio_io_i]
   connect_bd_net -net DDR4_C1_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C1_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C1_ui_clk] [get_bd_pins xpm_cdc_DDR4_C1_MIG/dest_clk]
+  connect_bd_net -net DDR4_C1_MIG_c0_init_calib_complete [get_bd_pins DDR4_C1_MIG/c0_init_calib_complete] [get_bd_pins axi_gpio_ddr/gpio2_io_i]
+  connect_bd_net -net axi_gpio_ddr_gpio2_io_o [get_bd_pins DDR4_C1_MIG/sys_rst] [get_bd_pins axi_gpio_ddr/gpio2_io_o]
+  connect_bd_net -net axi_gpio_ddr_gpio_io_o [get_bd_pins DDR4_C0_MIG/sys_rst] [get_bd_pins axi_gpio_ddr/gpio_io_o]
   connect_bd_net -net axi_gpio_seq_gpio_io_o [get_bd_pins axi_gpio_seq/gpio_io_o] [get_bd_pins xlslice_seq_rst/Din] [get_bd_pins xlslice_seq_run/Din]
   connect_bd_net -net hedgehog_DACIO [get_bd_ports DACIO] [get_bd_pins hedgehog/DACIO]
   connect_bd_net -net hedgehog_PS_GPIO_IN [get_bd_pins hedgehog/PS_GPIO_IN] [get_bd_pins ps/emio_gpio_i]
@@ -1736,13 +1749,13 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net hedgehog_sequencer_flags [get_bd_pins hedgehog/sequencer_flags] [get_bd_pins sequencer/hedgehog_flags]
   connect_bd_net -net interconnect_aresetn_1 [get_bd_pins hedgehog/seq_interconnect_aresetn] [get_bd_pins seq_reset/interconnect_aresetn]
   connect_bd_net -net proc_sys_reset_0_interconnect_aresetn [get_bd_pins lpd_sys_reset/interconnect_aresetn] [get_bd_pins smartconnect_lpd/aresetn]
-  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn [get_bd_pins axi_gpio_spi/s_axi_aresetn] [get_bd_pins lpd_sys_reset/peripheral_aresetn] [get_bd_pins axi_gpio_seq/s_axi_aresetn]
+  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn [get_bd_pins axi_gpio_ddr/s_axi_aresetn] [get_bd_pins axi_gpio_spi/s_axi_aresetn] [get_bd_pins lpd_sys_reset/peripheral_aresetn] [get_bd_pins axi_gpio_seq/s_axi_aresetn]
   connect_bd_net -net ps_emio_gpio_o [get_bd_pins hedgehog/PS_GPIO_OUT] [get_bd_pins ps/emio_gpio_o]
   connect_bd_net -net ps_gdma_cack_1 [get_bd_pins hedgehog/ps_gdma_cack] [get_bd_pins ps/gdma_perif_cack]
   connect_bd_net -net ps_gdma_irq_1 [get_bd_pins hedgehog/ps_gdma_irq] [get_bd_pins ps/ps_pl_irq_gdma_chan]
   connect_bd_net -net ps_gdma_tvld_1 [get_bd_pins hedgehog/ps_gdma_tvld] [get_bd_pins ps/gdma_perif_tvld]
   connect_bd_net -net ps_pl_clk0 [get_bd_pins hedgehog/PS_clk_250] [get_bd_pins ps/pl_clk0]
-  connect_bd_net -net ps_pl_clk1 [get_bd_pins axi_gpio_seq/s_axi_aclk] [get_bd_pins axi_gpio_spi/s_axi_aclk] [get_bd_pins lpd_sys_reset/slowest_sync_clk] [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins ps/pl_clk1] [get_bd_pins smartconnect_lpd/aclk]
+  connect_bd_net -net ps_pl_clk1 [get_bd_pins axi_gpio_ddr/s_axi_aclk] [get_bd_pins axi_gpio_seq/s_axi_aclk] [get_bd_pins axi_gpio_spi/s_axi_aclk] [get_bd_pins lpd_sys_reset/slowest_sync_clk] [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins ps/pl_clk1] [get_bd_pins smartconnect_lpd/aclk]
   connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins lpd_sys_reset/ext_reset_in] [get_bd_pins ps/pl_resetn0] [get_bd_pins seq_reset/ext_reset_in] [get_bd_pins xpm_cdc_DDR4_C0_MIG/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_MIG/src_rst]
   connect_bd_net -net seq_peripheral_aresetn_1 [get_bd_pins hedgehog/seq_peripheral_aresetn] [get_bd_pins seq_reset/peripheral_aresetn]
   connect_bd_net -net xlconcat_ps_gdma_clk_dout [get_bd_pins ps/perif_gdma_clk] [get_bd_pins xlconcat_ps_gdma_clk/dout]
@@ -1755,6 +1768,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net xpm_cdc_seq_run_dest_rst_out [get_bd_pins sequencer/run] [get_bd_pins xpm_cdc_seq_run/dest_rst_out]
 
   # Create address segments
+  assign_bd_address -offset 0x80020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_ddr/S_AXI/Reg] -force
   assign_bd_address -offset 0x80010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_seq/S_AXI/Reg] -force
   assign_bd_address -offset 0x80000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_spi/S_AXI/Reg] -force
   

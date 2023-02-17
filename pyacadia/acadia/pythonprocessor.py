@@ -10,7 +10,7 @@ from types import FunctionType
 from contextlib import contextmanager
 import operator
 
-from .compiler import Operation, Symbol, ManagedResource
+from .compiler import Operation, Symbol, ManagedResource, Processor, ProcessorSubroutineMixin
         
 class PythonProcessor(Processor, ProcessorSubroutineMixin):
     """
@@ -211,30 +211,33 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             if not isinstance(operation._args[1], str):
                 raise TypeError(f"Attribute must be a string; received {operation._args[1]}")
                 
-            item = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
-            return f"{item}.{operation._args[1]}"
+            obj = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
+            return f"{obj}.{operation._args[1]}"
         
         if operation._op == "setattr":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"A setattr Operation must have exactly three positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
+            obj = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
             translated_value = self.compile_arg(operation._args[2])
-            return f"setattr({operation._args[0]}, \"{operation._args[1]}\", {translated_value})"
+            return f"setattr({obj}, \"{operation._args[1]}\", {translated_value})"
         
         if operation._op == "getitem":
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"A getitem Operation must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
+            obj = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
             translated_key = self.compile_arg(operation._args[1])
-            return f"{operation._args[0]}[{translated_key}]"
+            return f"{obj}[{translated_key}]"
         
         if operation._op == "setitem":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"A setitem Operation must have exactly three positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
+            obj = self.compile_arg(operation._args[0])
             translated_key = self.compile_arg(operation._args[1])
             translated_value = self.compile_arg(operation._args[2])
-            return f"{operation._args[0]}[{translated_key}] = {translated_value}"
+            return f"{obj}[{translated_key}] = {translated_value}"
         
         if operation._op in ["neg", "abs", "invert"]:
             # Unary operators

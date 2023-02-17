@@ -290,7 +290,7 @@ class ManagedResource(Operable):
         name_meta_new,
         bases_meta_new,
         dct_meta_new,
-        instance_limit=None,
+        allocation_limit=None,
         use_instance_size=False):
         
         def cls_new(cls, *inst_args, **inst_kwargs):
@@ -304,7 +304,7 @@ class ManagedResource(Operable):
             whose interpretation is left to the owning class. If not provided,
             a new :class:`Symbol` will be instantiated.
             """
-            if instance_limit is not None and len(cls.instances) >= instance_limit:
+            if allocation_limit is not None and cls._allocation_index >= allocation_limit:
                 # Find a free instance we can use, as indicated by noting that it is released
                 for instance in cls.instances:
                     if instance._released:

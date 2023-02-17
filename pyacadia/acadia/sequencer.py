@@ -503,7 +503,7 @@ class Sequencer(Processor):
                            "and", "rand", "iand", "or", "ror", "ior", 
                            "mul", "rmul", "imul", 
                            "xor", "rxor", "ixor", "invert"]},
-            instance_limit=Sequencer.NUM_REGISTERS)
+            allocation_limit=Sequencer.NUM_REGISTERS)
         
         def dsp_str(dsp_self):
             return f"DSP{dsp_self._resource_id}"
@@ -570,7 +570,7 @@ class Sequencer(Processor):
                            "and", "rand", "iand", "or", "ror", "ior", 
                            "mul", "rmul", "imul", 
                            "xor", "rxor", "ixor", "invert"]},
-            instance_limit=Sequencer.NUM_DSP)
+            allocation_limit=Sequencer.NUM_DSP)
      
     def bus_read(self, address):
         """
@@ -769,16 +769,12 @@ class Sequencer(Processor):
         if is_numeric(obj) or isinstance(obj, Source):
             return obj,[],[]
         
-        if isinstance(obj, self._Instruction):
-            return obj["compiled_address"],[],[]
-        
         if isinstance(obj, self.Register):
             return Source(major=Source.Major.REG, minor=obj._resource_id),[],[]
         
         if isinstance(obj, self.DSP):
             return Source(major=Source.Major.DSP_DATA, minor=obj._resource_id),[],[]
         
-        # Note: not sure whether we need these
         if hasattr(obj, "address"):
             if callable(obj.address):
                 return obj.address(),[],[]
