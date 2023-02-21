@@ -3,8 +3,9 @@ __all__ = ["StandardFirmware"]
 import os
 
 from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController
-from .compiler import ManagedResource, Processor
+from .compiler import ManagedResource, ManagedMemory, Processor
 from .firmware import Firmware
+from .hardware import LinuxMemory
 from .pythonprocessor import PythonProcessor
 from .sequencer import Sequencer
 from .dma import DMA
@@ -244,9 +245,9 @@ class StandardFirmware(Firmware):
         sequencer_bus_decoder.add(ps_gdma)
         self.add(ps_gdma)    
 
-        # Create a register file for NCO real-time updates and connect it to the sequencer bus
-        nco_regs = BusDevice("nco_regs", size=97)
-        sequencer_bus_decoder.add(nco_regs, pipeline=True)
+        # Create a register file for RFDC real-time updates and connect it to the sequencer bus
+        rfdc_rts_regs = BusDevice("rfdc_rts_regs", size=256)
+        sequencer_bus_decoder.add(rfdc_rts_regs, pipeline=True)
 
         # Create cache and connect it to the sequencer bus
         cache = BusDevice("cache", size=StandardFirmware.CACHE_SIZE_BITS // 32)
@@ -323,7 +324,7 @@ class StandardFirmware(Firmware):
             create_ip(f, name="hedgehog/rfdc", vlnv="xilinx.com:ip:usp_rf_data_converter:2.4")
             
             # Auto-generated config string by Vivado
-            rfdc_config_string = "CONFIG.ADC0_Clock_Source {6} CONFIG.ADC0_Fabric_Freq {300.000} CONFIG.ADC0_Outclk_Freq {150.000} CONFIG.ADC0_PLL_Enable {true} CONFIG.ADC0_Refclk_Freq {300.000} CONFIG.ADC0_Sampling_Rate {1.2} CONFIG.ADC1_Clock_Source {6} CONFIG.ADC1_Enable {1} CONFIG.ADC1_Fabric_Freq {300.000} CONFIG.ADC1_Outclk_Freq {300.000} CONFIG.ADC1_PLL_Enable {true} CONFIG.ADC1_Refclk_Freq {300.000} CONFIG.ADC1_Sampling_Rate {2.4} CONFIG.ADC2_Clock_Dist {0} CONFIG.ADC2_Clock_Source {6} CONFIG.ADC2_Enable {1} CONFIG.ADC2_Fabric_Freq {300.000} CONFIG.ADC2_Outclk_Freq {300.000} CONFIG.ADC2_PLL_Enable {true} CONFIG.ADC2_Refclk_Freq {300.000} CONFIG.ADC2_Sampling_Rate {2.4} CONFIG.ADC3_Clock_Source {6} CONFIG.ADC3_Enable {1} CONFIG.ADC3_Fabric_Freq {30.000} CONFIG.ADC3_Outclk_Freq {300.000} CONFIG.ADC3_PLL_Enable {true} CONFIG.ADC3_Refclk_Freq {300.000} CONFIG.ADC3_Sampling_Rate {2.4} CONFIG.ADC_Coarse_Mixer_Freq00 {0} CONFIG.ADC_Coarse_Mixer_Freq01 {0} CONFIG.ADC_Coarse_Mixer_Freq02 {0} CONFIG.ADC_Coarse_Mixer_Freq03 {0} CONFIG.ADC_Coarse_Mixer_Freq10 {0} CONFIG.ADC_Coarse_Mixer_Freq11 {0} CONFIG.ADC_Coarse_Mixer_Freq12 {0} CONFIG.ADC_Coarse_Mixer_Freq13 {0} CONFIG.ADC_Coarse_Mixer_Freq20 {0} CONFIG.ADC_Coarse_Mixer_Freq21 {0} CONFIG.ADC_Coarse_Mixer_Freq22 {0} CONFIG.ADC_Coarse_Mixer_Freq23 {0} CONFIG.ADC_Coarse_Mixer_Freq30 {0} CONFIG.ADC_Coarse_Mixer_Freq31 {0} CONFIG.ADC_Coarse_Mixer_Freq32 {0} CONFIG.ADC_Coarse_Mixer_Freq33 {0} CONFIG.ADC_DSA_RTS {false} CONFIG.ADC_Data_Type00 {1} CONFIG.ADC_Data_Type01 {1} CONFIG.ADC_Data_Type02 {1} CONFIG.ADC_Data_Type03 {1} CONFIG.ADC_Data_Type10 {1} CONFIG.ADC_Data_Type11 {1} CONFIG.ADC_Data_Type12 {1} CONFIG.ADC_Data_Type13 {1} CONFIG.ADC_Data_Type20 {1} CONFIG.ADC_Data_Type21 {1} CONFIG.ADC_Data_Type22 {1} CONFIG.ADC_Data_Type23 {1} CONFIG.ADC_Data_Type30 {1} CONFIG.ADC_Data_Type31 {1} CONFIG.ADC_Data_Type32 {1} CONFIG.ADC_Data_Type33 {1} CONFIG.ADC_Data_Width00 {8} CONFIG.ADC_Decimation_Mode01 {1} CONFIG.ADC_Decimation_Mode02 {1} CONFIG.ADC_Decimation_Mode03 {1} CONFIG.ADC_Decimation_Mode10 {2} CONFIG.ADC_Decimation_Mode11 {2} CONFIG.ADC_Decimation_Mode12 {2} CONFIG.ADC_Decimation_Mode13 {2} CONFIG.ADC_Decimation_Mode20 {2} CONFIG.ADC_Decimation_Mode21 {2} CONFIG.ADC_Decimation_Mode22 {2} CONFIG.ADC_Decimation_Mode23 {2} CONFIG.ADC_Decimation_Mode30 {20} CONFIG.ADC_Decimation_Mode31 {20} CONFIG.ADC_Decimation_Mode32 {20} CONFIG.ADC_Decimation_Mode33 {20} CONFIG.ADC_Dither00 {false} CONFIG.ADC_Dither01 {false} CONFIG.ADC_Dither02 {false} CONFIG.ADC_Dither03 {false} CONFIG.ADC_Dither10 {false} CONFIG.ADC_Dither11 {false} CONFIG.ADC_Dither12 {false} CONFIG.ADC_Dither13 {false} CONFIG.ADC_Dither20 {false} CONFIG.ADC_Dither21 {false} CONFIG.ADC_Dither22 {false} CONFIG.ADC_Dither23 {false} CONFIG.ADC_Dither30 {false} CONFIG.ADC_Dither31 {false} CONFIG.ADC_Dither32 {false} CONFIG.ADC_Dither33 {false} CONFIG.ADC_Mixer_Mode00 {0} CONFIG.ADC_Mixer_Mode01 {0} CONFIG.ADC_Mixer_Mode02 {0} CONFIG.ADC_Mixer_Mode03 {0} CONFIG.ADC_Mixer_Mode10 {0} CONFIG.ADC_Mixer_Mode11 {0} CONFIG.ADC_Mixer_Mode12 {0} CONFIG.ADC_Mixer_Mode13 {0} CONFIG.ADC_Mixer_Mode20 {0} CONFIG.ADC_Mixer_Mode21 {0} CONFIG.ADC_Mixer_Mode22 {0} CONFIG.ADC_Mixer_Mode23 {0} CONFIG.ADC_Mixer_Mode30 {0} CONFIG.ADC_Mixer_Mode31 {0} CONFIG.ADC_Mixer_Mode32 {0} CONFIG.ADC_Mixer_Mode33 {0} CONFIG.ADC_Mixer_Type00 {2} CONFIG.ADC_Mixer_Type01 {2} CONFIG.ADC_Mixer_Type02 {2} CONFIG.ADC_Mixer_Type03 {2} CONFIG.ADC_Mixer_Type10 {2} CONFIG.ADC_Mixer_Type11 {2} CONFIG.ADC_Mixer_Type12 {2} CONFIG.ADC_Mixer_Type13 {2} CONFIG.ADC_Mixer_Type20 {2} CONFIG.ADC_Mixer_Type21 {2} CONFIG.ADC_Mixer_Type22 {2} CONFIG.ADC_Mixer_Type23 {2} CONFIG.ADC_Mixer_Type30 {2} CONFIG.ADC_Mixer_Type31 {2} CONFIG.ADC_Mixer_Type32 {2} CONFIG.ADC_Mixer_Type33 {2} CONFIG.ADC_NCO_RTS {true} CONFIG.ADC_OBS03 {false} CONFIG.ADC_OBS11 {false} CONFIG.ADC_OBS12 {false} CONFIG.ADC_OBS13 {false} CONFIG.ADC_OBS21 {false} CONFIG.ADC_OBS22 {false} CONFIG.ADC_OBS23 {false} CONFIG.ADC_OBS31 {false} CONFIG.ADC_OBS32 {false} CONFIG.ADC_OBS33 {false} CONFIG.ADC_RESERVED_1_00 {false} CONFIG.ADC_RESERVED_1_01 {false} CONFIG.ADC_RESERVED_1_02 {false} CONFIG.ADC_RESERVED_1_03 {false} CONFIG.ADC_RESERVED_1_10 {false} CONFIG.ADC_RESERVED_1_11 {false} CONFIG.ADC_RESERVED_1_12 {false} CONFIG.ADC_RESERVED_1_13 {false} CONFIG.ADC_RESERVED_1_20 {false} CONFIG.ADC_RESERVED_1_21 {false} CONFIG.ADC_RESERVED_1_22 {false} CONFIG.ADC_RESERVED_1_23 {false} CONFIG.ADC_RESERVED_1_30 {false} CONFIG.ADC_RESERVED_1_31 {false} CONFIG.ADC_RESERVED_1_32 {false} CONFIG.ADC_RESERVED_1_33 {false} CONFIG.ADC_RTS {false} CONFIG.ADC_Slice01_Enable {true} CONFIG.ADC_Slice02_Enable {true} CONFIG.ADC_Slice03_Enable {true} CONFIG.ADC_Slice10_Enable {true} CONFIG.ADC_Slice11_Enable {true} CONFIG.ADC_Slice12_Enable {true} CONFIG.ADC_Slice13_Enable {true} CONFIG.ADC_Slice20_Enable {true} CONFIG.ADC_Slice21_Enable {true} CONFIG.ADC_Slice22_Enable {true} CONFIG.ADC_Slice23_Enable {true} CONFIG.ADC_Slice30_Enable {true} CONFIG.ADC_Slice31_Enable {true} CONFIG.ADC_Slice32_Enable {true} CONFIG.ADC_Slice33_Enable {true} CONFIG.Axiclk_Freq {250} CONFIG.DAC0_Clock_Source {6} CONFIG.DAC0_Enable {1} CONFIG.DAC0_Fabric_Freq {300.000} CONFIG.DAC0_Outclk_Freq {300.000} CONFIG.DAC0_PLL_Enable {true} CONFIG.DAC0_Refclk_Freq {300.000} CONFIG.DAC0_Sampling_Rate {4.8} CONFIG.DAC1_Clock_Source {6} CONFIG.DAC1_Enable {1} CONFIG.DAC1_Fabric_Freq {300.000} CONFIG.DAC1_Outclk_Freq {300.000} CONFIG.DAC1_PLL_Enable {true} CONFIG.DAC1_Refclk_Freq {300.000} CONFIG.DAC1_Sampling_Rate {4.8} CONFIG.DAC2_Clock_Dist {1} CONFIG.DAC2_Enable {1} CONFIG.DAC2_Fabric_Freq {300.000} CONFIG.DAC2_Outclk_Freq {300.000} CONFIG.DAC2_PLL_Enable {true} CONFIG.DAC2_Refclk_Freq {300.000} CONFIG.DAC2_Sampling_Rate {9.6} CONFIG.DAC2_VOP {40.0} CONFIG.DAC3_Clock_Source {6} CONFIG.DAC3_Enable {1} CONFIG.DAC3_Fabric_Freq {300.000} CONFIG.DAC3_Outclk_Freq {300.000} CONFIG.DAC3_PLL_Enable {true} CONFIG.DAC3_Refclk_Freq {300.000} CONFIG.DAC3_Sampling_Rate {9.6} CONFIG.DAC3_VOP {40.0} CONFIG.DAC_Coarse_Mixer_Freq00 {3} CONFIG.DAC_Coarse_Mixer_Freq01 {3} CONFIG.DAC_Coarse_Mixer_Freq02 {3} CONFIG.DAC_Coarse_Mixer_Freq03 {3} CONFIG.DAC_Coarse_Mixer_Freq10 {3} CONFIG.DAC_Coarse_Mixer_Freq11 {3} CONFIG.DAC_Coarse_Mixer_Freq12 {3} CONFIG.DAC_Coarse_Mixer_Freq13 {3} CONFIG.DAC_Coarse_Mixer_Freq20 {3} CONFIG.DAC_Coarse_Mixer_Freq21 {3} CONFIG.DAC_Coarse_Mixer_Freq22 {3} CONFIG.DAC_Coarse_Mixer_Freq23 {3} CONFIG.DAC_Coarse_Mixer_Freq30 {3} CONFIG.DAC_Coarse_Mixer_Freq31 {3} CONFIG.DAC_Coarse_Mixer_Freq32 {3} CONFIG.DAC_Coarse_Mixer_Freq33 {3} CONFIG.DAC_Data_Width00 {8} CONFIG.DAC_Data_Width01 {8} CONFIG.DAC_Data_Width02 {8} CONFIG.DAC_Data_Width03 {8} CONFIG.DAC_Data_Width10 {8} CONFIG.DAC_Data_Width11 {8} CONFIG.DAC_Data_Width12 {8} CONFIG.DAC_Data_Width13 {8} CONFIG.DAC_Data_Width20 {8} CONFIG.DAC_Data_Width21 {8} CONFIG.DAC_Data_Width22 {8} CONFIG.DAC_Data_Width23 {8} CONFIG.DAC_Data_Width30 {8} CONFIG.DAC_Data_Width31 {8} CONFIG.DAC_Data_Width32 {8} CONFIG.DAC_Data_Width33 {8} CONFIG.DAC_Interpolation_Mode00 {4} CONFIG.DAC_Interpolation_Mode01 {4} CONFIG.DAC_Interpolation_Mode02 {4} CONFIG.DAC_Interpolation_Mode03 {4} CONFIG.DAC_Interpolation_Mode10 {4} CONFIG.DAC_Interpolation_Mode11 {4} CONFIG.DAC_Interpolation_Mode12 {4} CONFIG.DAC_Interpolation_Mode13 {4} CONFIG.DAC_Interpolation_Mode20 {4} CONFIG.DAC_Interpolation_Mode21 {4} CONFIG.DAC_Interpolation_Mode22 {4} CONFIG.DAC_Interpolation_Mode23 {4} CONFIG.DAC_Interpolation_Mode30 {4} CONFIG.DAC_Interpolation_Mode31 {4} CONFIG.DAC_Interpolation_Mode32 {4} CONFIG.DAC_Interpolation_Mode33 {4} CONFIG.DAC_Mixer_Mode00 {0} CONFIG.DAC_Mixer_Mode01 {0} CONFIG.DAC_Mixer_Mode02 {0} CONFIG.DAC_Mixer_Mode03 {0} CONFIG.DAC_Mixer_Mode10 {0} CONFIG.DAC_Mixer_Mode11 {0} CONFIG.DAC_Mixer_Mode12 {0} CONFIG.DAC_Mixer_Mode13 {0} CONFIG.DAC_Mixer_Mode20 {0} CONFIG.DAC_Mixer_Mode21 {0} CONFIG.DAC_Mixer_Mode22 {0} CONFIG.DAC_Mixer_Mode23 {0} CONFIG.DAC_Mixer_Mode30 {0} CONFIG.DAC_Mixer_Mode31 {0} CONFIG.DAC_Mixer_Mode32 {0} CONFIG.DAC_Mixer_Mode33 {0} CONFIG.DAC_Mixer_Type00 {2} CONFIG.DAC_Mixer_Type01 {2} CONFIG.DAC_Mixer_Type02 {2} CONFIG.DAC_Mixer_Type03 {2} CONFIG.DAC_Mixer_Type10 {2} CONFIG.DAC_Mixer_Type11 {2} CONFIG.DAC_Mixer_Type12 {2} CONFIG.DAC_Mixer_Type13 {2} CONFIG.DAC_Mixer_Type20 {2} CONFIG.DAC_Mixer_Type21 {2} CONFIG.DAC_Mixer_Type22 {2} CONFIG.DAC_Mixer_Type23 {2} CONFIG.DAC_Mixer_Type30 {2} CONFIG.DAC_Mixer_Type31 {2} CONFIG.DAC_Mixer_Type32 {2} CONFIG.DAC_Mixer_Type33 {2} CONFIG.DAC_Mode00 {0} CONFIG.DAC_Mode01 {0} CONFIG.DAC_Mode02 {0} CONFIG.DAC_Mode03 {0} CONFIG.DAC_Mode10 {0} CONFIG.DAC_Mode11 {0} CONFIG.DAC_Mode12 {0} CONFIG.DAC_Mode13 {0} CONFIG.DAC_Mode20 {1} CONFIG.DAC_Mode21 {1} CONFIG.DAC_Mode22 {1} CONFIG.DAC_Mode23 {1} CONFIG.DAC_Mode30 {1} CONFIG.DAC_Mode31 {1} CONFIG.DAC_Mode32 {1} CONFIG.DAC_Mode33 {1} CONFIG.DAC_NCO_RTS {true} CONFIG.DAC_Nyquist20 {1} CONFIG.DAC_Nyquist21 {1} CONFIG.DAC_Nyquist22 {1} CONFIG.DAC_Nyquist23 {1} CONFIG.DAC_Nyquist30 {1} CONFIG.DAC_Nyquist31 {1} CONFIG.DAC_Nyquist32 {1} CONFIG.DAC_Nyquist33 {1} CONFIG.DAC_RESERVED_1_00 {false} CONFIG.DAC_RESERVED_1_01 {false} CONFIG.DAC_RESERVED_1_02 {false} CONFIG.DAC_RESERVED_1_03 {false} CONFIG.DAC_RESERVED_1_10 {false} CONFIG.DAC_RESERVED_1_11 {false} CONFIG.DAC_RESERVED_1_12 {false} CONFIG.DAC_RESERVED_1_13 {false} CONFIG.DAC_RESERVED_1_20 {false} CONFIG.DAC_RESERVED_1_21 {false} CONFIG.DAC_RESERVED_1_22 {false} CONFIG.DAC_RESERVED_1_23 {false} CONFIG.DAC_RESERVED_1_30 {false} CONFIG.DAC_RESERVED_1_31 {false} CONFIG.DAC_RESERVED_1_32 {false} CONFIG.DAC_RESERVED_1_33 {false} CONFIG.DAC_RTS {false} CONFIG.DAC_Slice00_Enable {true} CONFIG.DAC_Slice01_Enable {true} CONFIG.DAC_Slice02_Enable {true} CONFIG.DAC_Slice03_Enable {true} CONFIG.DAC_Slice10_Enable {true} CONFIG.DAC_Slice11_Enable {true} CONFIG.DAC_Slice12_Enable {true} CONFIG.DAC_Slice13_Enable {true} CONFIG.DAC_Slice20_Enable {true} CONFIG.DAC_Slice21_Enable {true} CONFIG.DAC_Slice22_Enable {true} CONFIG.DAC_Slice23_Enable {true} CONFIG.DAC_Slice30_Enable {true} CONFIG.DAC_Slice31_Enable {true} CONFIG.DAC_Slice32_Enable {true} CONFIG.DAC_Slice33_Enable {true} CONFIG.DAC_VOP_RTS {false}"
+            rfdc_config_string = "CONFIG.ADC0_Clock_Source {6} CONFIG.ADC0_Fabric_Freq {300.000} CONFIG.ADC0_Outclk_Freq {150.000} CONFIG.ADC0_PLL_Enable {true} CONFIG.ADC0_Refclk_Freq {300.000} CONFIG.ADC0_Sampling_Rate {1.2} CONFIG.ADC1_Clock_Source {6} CONFIG.ADC1_Enable {1} CONFIG.ADC1_Fabric_Freq {300.000} CONFIG.ADC1_Outclk_Freq {300.000} CONFIG.ADC1_PLL_Enable {true} CONFIG.ADC1_Refclk_Freq {300.000} CONFIG.ADC1_Sampling_Rate {2.4} CONFIG.ADC2_Clock_Dist {0} CONFIG.ADC2_Clock_Source {6} CONFIG.ADC2_Enable {1} CONFIG.ADC2_Fabric_Freq {300.000} CONFIG.ADC2_Outclk_Freq {300.000} CONFIG.ADC2_PLL_Enable {true} CONFIG.ADC2_Refclk_Freq {300.000} CONFIG.ADC2_Sampling_Rate {2.4} CONFIG.ADC3_Clock_Source {6} CONFIG.ADC3_Enable {1} CONFIG.ADC3_Fabric_Freq {30.000} CONFIG.ADC3_Outclk_Freq {300.000} CONFIG.ADC3_PLL_Enable {true} CONFIG.ADC3_Refclk_Freq {300.000} CONFIG.ADC3_Sampling_Rate {2.4} CONFIG.ADC_Coarse_Mixer_Freq00 {0} CONFIG.ADC_Coarse_Mixer_Freq01 {0} CONFIG.ADC_Coarse_Mixer_Freq02 {0} CONFIG.ADC_Coarse_Mixer_Freq03 {0} CONFIG.ADC_Coarse_Mixer_Freq10 {0} CONFIG.ADC_Coarse_Mixer_Freq11 {0} CONFIG.ADC_Coarse_Mixer_Freq12 {0} CONFIG.ADC_Coarse_Mixer_Freq13 {0} CONFIG.ADC_Coarse_Mixer_Freq20 {0} CONFIG.ADC_Coarse_Mixer_Freq21 {0} CONFIG.ADC_Coarse_Mixer_Freq22 {0} CONFIG.ADC_Coarse_Mixer_Freq23 {0} CONFIG.ADC_Coarse_Mixer_Freq30 {0} CONFIG.ADC_Coarse_Mixer_Freq31 {0} CONFIG.ADC_Coarse_Mixer_Freq32 {0} CONFIG.ADC_Coarse_Mixer_Freq33 {0} CONFIG.ADC_DSA_RTS {false} CONFIG.ADC_Data_Type00 {1} CONFIG.ADC_Data_Type01 {1} CONFIG.ADC_Data_Type02 {1} CONFIG.ADC_Data_Type03 {1} CONFIG.ADC_Data_Type10 {1} CONFIG.ADC_Data_Type11 {1} CONFIG.ADC_Data_Type12 {1} CONFIG.ADC_Data_Type13 {1} CONFIG.ADC_Data_Type20 {1} CONFIG.ADC_Data_Type21 {1} CONFIG.ADC_Data_Type22 {1} CONFIG.ADC_Data_Type23 {1} CONFIG.ADC_Data_Type30 {1} CONFIG.ADC_Data_Type31 {1} CONFIG.ADC_Data_Type32 {1} CONFIG.ADC_Data_Type33 {1} CONFIG.ADC_Data_Width00 {8} CONFIG.ADC_Decimation_Mode01 {1} CONFIG.ADC_Decimation_Mode02 {1} CONFIG.ADC_Decimation_Mode03 {1} CONFIG.ADC_Decimation_Mode10 {2} CONFIG.ADC_Decimation_Mode11 {2} CONFIG.ADC_Decimation_Mode12 {2} CONFIG.ADC_Decimation_Mode13 {2} CONFIG.ADC_Decimation_Mode20 {2} CONFIG.ADC_Decimation_Mode21 {2} CONFIG.ADC_Decimation_Mode22 {2} CONFIG.ADC_Decimation_Mode23 {2} CONFIG.ADC_Decimation_Mode30 {20} CONFIG.ADC_Decimation_Mode31 {20} CONFIG.ADC_Decimation_Mode32 {20} CONFIG.ADC_Decimation_Mode33 {20} CONFIG.ADC_Dither00 {false} CONFIG.ADC_Dither01 {false} CONFIG.ADC_Dither02 {false} CONFIG.ADC_Dither03 {false} CONFIG.ADC_Dither10 {false} CONFIG.ADC_Dither11 {false} CONFIG.ADC_Dither12 {false} CONFIG.ADC_Dither13 {false} CONFIG.ADC_Dither20 {false} CONFIG.ADC_Dither21 {false} CONFIG.ADC_Dither22 {false} CONFIG.ADC_Dither23 {false} CONFIG.ADC_Dither30 {false} CONFIG.ADC_Dither31 {false} CONFIG.ADC_Dither32 {false} CONFIG.ADC_Dither33 {false} CONFIG.ADC_Mixer_Mode00 {0} CONFIG.ADC_Mixer_Mode01 {0} CONFIG.ADC_Mixer_Mode02 {0} CONFIG.ADC_Mixer_Mode03 {0} CONFIG.ADC_Mixer_Mode10 {0} CONFIG.ADC_Mixer_Mode11 {0} CONFIG.ADC_Mixer_Mode12 {0} CONFIG.ADC_Mixer_Mode13 {0} CONFIG.ADC_Mixer_Mode20 {0} CONFIG.ADC_Mixer_Mode21 {0} CONFIG.ADC_Mixer_Mode22 {0} CONFIG.ADC_Mixer_Mode23 {0} CONFIG.ADC_Mixer_Mode30 {0} CONFIG.ADC_Mixer_Mode31 {0} CONFIG.ADC_Mixer_Mode32 {0} CONFIG.ADC_Mixer_Mode33 {0} CONFIG.ADC_Mixer_Type00 {2} CONFIG.ADC_Mixer_Type01 {2} CONFIG.ADC_Mixer_Type02 {2} CONFIG.ADC_Mixer_Type03 {2} CONFIG.ADC_Mixer_Type10 {2} CONFIG.ADC_Mixer_Type11 {2} CONFIG.ADC_Mixer_Type12 {2} CONFIG.ADC_Mixer_Type13 {2} CONFIG.ADC_Mixer_Type20 {2} CONFIG.ADC_Mixer_Type21 {2} CONFIG.ADC_Mixer_Type22 {2} CONFIG.ADC_Mixer_Type23 {2} CONFIG.ADC_Mixer_Type30 {2} CONFIG.ADC_Mixer_Type31 {2} CONFIG.ADC_Mixer_Type32 {2} CONFIG.ADC_Mixer_Type33 {2} CONFIG.ADC_NCO_RTS {true} CONFIG.ADC_OBS03 {false} CONFIG.ADC_OBS11 {false} CONFIG.ADC_OBS12 {false} CONFIG.ADC_OBS13 {false} CONFIG.ADC_OBS21 {false} CONFIG.ADC_OBS22 {false} CONFIG.ADC_OBS23 {false} CONFIG.ADC_OBS31 {false} CONFIG.ADC_OBS32 {false} CONFIG.ADC_OBS33 {false} CONFIG.ADC_RESERVED_1_00 {false} CONFIG.ADC_RESERVED_1_01 {false} CONFIG.ADC_RESERVED_1_02 {false} CONFIG.ADC_RESERVED_1_03 {false} CONFIG.ADC_RESERVED_1_10 {false} CONFIG.ADC_RESERVED_1_11 {false} CONFIG.ADC_RESERVED_1_12 {false} CONFIG.ADC_RESERVED_1_13 {false} CONFIG.ADC_RESERVED_1_20 {false} CONFIG.ADC_RESERVED_1_21 {false} CONFIG.ADC_RESERVED_1_22 {false} CONFIG.ADC_RESERVED_1_23 {false} CONFIG.ADC_RESERVED_1_30 {false} CONFIG.ADC_RESERVED_1_31 {false} CONFIG.ADC_RESERVED_1_32 {false} CONFIG.ADC_RESERVED_1_33 {false} CONFIG.ADC_RTS {false} CONFIG.ADC_Slice01_Enable {true} CONFIG.ADC_Slice02_Enable {true} CONFIG.ADC_Slice03_Enable {true} CONFIG.ADC_Slice10_Enable {true} CONFIG.ADC_Slice11_Enable {true} CONFIG.ADC_Slice12_Enable {true} CONFIG.ADC_Slice13_Enable {true} CONFIG.ADC_Slice20_Enable {true} CONFIG.ADC_Slice21_Enable {true} CONFIG.ADC_Slice22_Enable {true} CONFIG.ADC_Slice23_Enable {true} CONFIG.ADC_Slice30_Enable {true} CONFIG.ADC_Slice31_Enable {true} CONFIG.ADC_Slice32_Enable {true} CONFIG.ADC_Slice33_Enable {true} CONFIG.Axiclk_Freq {250} CONFIG.DAC0_Clock_Source {6} CONFIG.DAC0_Enable {1} CONFIG.DAC0_Fabric_Freq {300.000} CONFIG.DAC0_Outclk_Freq {300.000} CONFIG.DAC0_PLL_Enable {true} CONFIG.DAC0_Refclk_Freq {300.000} CONFIG.DAC0_Sampling_Rate {4.8} CONFIG.DAC1_Clock_Source {6} CONFIG.DAC1_Enable {1} CONFIG.DAC1_Fabric_Freq {300.000} CONFIG.DAC1_Outclk_Freq {300.000} CONFIG.DAC1_PLL_Enable {true} CONFIG.DAC1_Refclk_Freq {300.000} CONFIG.DAC1_Sampling_Rate {4.8} CONFIG.DAC2_Clock_Dist {1} CONFIG.DAC2_Enable {1} CONFIG.DAC2_Fabric_Freq {300.000} CONFIG.DAC2_Outclk_Freq {300.000} CONFIG.DAC2_PLL_Enable {true} CONFIG.DAC2_Refclk_Freq {300.000} CONFIG.DAC2_Sampling_Rate {9.6} CONFIG.DAC2_VOP {40.0} CONFIG.DAC3_Clock_Source {6} CONFIG.DAC3_Enable {1} CONFIG.DAC3_Fabric_Freq {300.000} CONFIG.DAC3_Outclk_Freq {300.000} CONFIG.DAC3_PLL_Enable {true} CONFIG.DAC3_Refclk_Freq {300.000} CONFIG.DAC3_Sampling_Rate {9.6} CONFIG.DAC3_VOP {40.0} CONFIG.DAC_Coarse_Mixer_Freq00 {3} CONFIG.DAC_Coarse_Mixer_Freq01 {3} CONFIG.DAC_Coarse_Mixer_Freq02 {3} CONFIG.DAC_Coarse_Mixer_Freq03 {3} CONFIG.DAC_Coarse_Mixer_Freq10 {3} CONFIG.DAC_Coarse_Mixer_Freq11 {3} CONFIG.DAC_Coarse_Mixer_Freq12 {3} CONFIG.DAC_Coarse_Mixer_Freq13 {3} CONFIG.DAC_Coarse_Mixer_Freq20 {3} CONFIG.DAC_Coarse_Mixer_Freq21 {3} CONFIG.DAC_Coarse_Mixer_Freq22 {3} CONFIG.DAC_Coarse_Mixer_Freq23 {3} CONFIG.DAC_Coarse_Mixer_Freq30 {3} CONFIG.DAC_Coarse_Mixer_Freq31 {3} CONFIG.DAC_Coarse_Mixer_Freq32 {3} CONFIG.DAC_Coarse_Mixer_Freq33 {3} CONFIG.DAC_Data_Width00 {8} CONFIG.DAC_Data_Width01 {8} CONFIG.DAC_Data_Width02 {8} CONFIG.DAC_Data_Width03 {8} CONFIG.DAC_Data_Width10 {8} CONFIG.DAC_Data_Width11 {8} CONFIG.DAC_Data_Width12 {8} CONFIG.DAC_Data_Width13 {8} CONFIG.DAC_Data_Width20 {8} CONFIG.DAC_Data_Width21 {8} CONFIG.DAC_Data_Width22 {8} CONFIG.DAC_Data_Width23 {8} CONFIG.DAC_Data_Width30 {8} CONFIG.DAC_Data_Width31 {8} CONFIG.DAC_Data_Width32 {8} CONFIG.DAC_Data_Width33 {8} CONFIG.DAC_Interpolation_Mode00 {4} CONFIG.DAC_Interpolation_Mode01 {4} CONFIG.DAC_Interpolation_Mode02 {4} CONFIG.DAC_Interpolation_Mode03 {4} CONFIG.DAC_Interpolation_Mode10 {4} CONFIG.DAC_Interpolation_Mode11 {4} CONFIG.DAC_Interpolation_Mode12 {4} CONFIG.DAC_Interpolation_Mode13 {4} CONFIG.DAC_Interpolation_Mode20 {4} CONFIG.DAC_Interpolation_Mode21 {4} CONFIG.DAC_Interpolation_Mode22 {4} CONFIG.DAC_Interpolation_Mode23 {4} CONFIG.DAC_Interpolation_Mode30 {4} CONFIG.DAC_Interpolation_Mode31 {4} CONFIG.DAC_Interpolation_Mode32 {4} CONFIG.DAC_Interpolation_Mode33 {4} CONFIG.DAC_Mixer_Mode00 {0} CONFIG.DAC_Mixer_Mode01 {0} CONFIG.DAC_Mixer_Mode02 {0} CONFIG.DAC_Mixer_Mode03 {0} CONFIG.DAC_Mixer_Mode10 {0} CONFIG.DAC_Mixer_Mode11 {0} CONFIG.DAC_Mixer_Mode12 {0} CONFIG.DAC_Mixer_Mode13 {0} CONFIG.DAC_Mixer_Mode20 {0} CONFIG.DAC_Mixer_Mode21 {0} CONFIG.DAC_Mixer_Mode22 {0} CONFIG.DAC_Mixer_Mode23 {0} CONFIG.DAC_Mixer_Mode30 {0} CONFIG.DAC_Mixer_Mode31 {0} CONFIG.DAC_Mixer_Mode32 {0} CONFIG.DAC_Mixer_Mode33 {0} CONFIG.DAC_Mixer_Type00 {2} CONFIG.DAC_Mixer_Type01 {2} CONFIG.DAC_Mixer_Type02 {2} CONFIG.DAC_Mixer_Type03 {2} CONFIG.DAC_Mixer_Type10 {2} CONFIG.DAC_Mixer_Type11 {2} CONFIG.DAC_Mixer_Type12 {2} CONFIG.DAC_Mixer_Type13 {2} CONFIG.DAC_Mixer_Type20 {2} CONFIG.DAC_Mixer_Type21 {2} CONFIG.DAC_Mixer_Type22 {2} CONFIG.DAC_Mixer_Type23 {2} CONFIG.DAC_Mixer_Type30 {2} CONFIG.DAC_Mixer_Type31 {2} CONFIG.DAC_Mixer_Type32 {2} CONFIG.DAC_Mixer_Type33 {2} CONFIG.DAC_Mode00 {0} CONFIG.DAC_Mode01 {0} CONFIG.DAC_Mode02 {0} CONFIG.DAC_Mode03 {0} CONFIG.DAC_Mode10 {0} CONFIG.DAC_Mode11 {0} CONFIG.DAC_Mode12 {0} CONFIG.DAC_Mode13 {0} CONFIG.DAC_Mode20 {1} CONFIG.DAC_Mode21 {1} CONFIG.DAC_Mode22 {1} CONFIG.DAC_Mode23 {1} CONFIG.DAC_Mode30 {1} CONFIG.DAC_Mode31 {1} CONFIG.DAC_Mode32 {1} CONFIG.DAC_Mode33 {1} CONFIG.DAC_NCO_RTS {true} CONFIG.DAC_Nyquist20 {1} CONFIG.DAC_Nyquist21 {1} CONFIG.DAC_Nyquist22 {1} CONFIG.DAC_Nyquist23 {1} CONFIG.DAC_Nyquist30 {1} CONFIG.DAC_Nyquist31 {1} CONFIG.DAC_Nyquist32 {1} CONFIG.DAC_Nyquist33 {1} CONFIG.DAC_RESERVED_1_00 {false} CONFIG.DAC_RESERVED_1_01 {false} CONFIG.DAC_RESERVED_1_02 {false} CONFIG.DAC_RESERVED_1_03 {false} CONFIG.DAC_RESERVED_1_10 {false} CONFIG.DAC_RESERVED_1_11 {false} CONFIG.DAC_RESERVED_1_12 {false} CONFIG.DAC_RESERVED_1_13 {false} CONFIG.DAC_RESERVED_1_20 {false} CONFIG.DAC_RESERVED_1_21 {false} CONFIG.DAC_RESERVED_1_22 {false} CONFIG.DAC_RESERVED_1_23 {false} CONFIG.DAC_RESERVED_1_30 {false} CONFIG.DAC_RESERVED_1_31 {false} CONFIG.DAC_RESERVED_1_32 {false} CONFIG.DAC_RESERVED_1_33 {false} CONFIG.DAC_RTS {false} CONFIG.DAC_Slice00_Enable {true} CONFIG.DAC_Slice01_Enable {true} CONFIG.DAC_Slice02_Enable {true} CONFIG.DAC_Slice03_Enable {true} CONFIG.DAC_Slice10_Enable {true} CONFIG.DAC_Slice11_Enable {true} CONFIG.DAC_Slice12_Enable {true} CONFIG.DAC_Slice13_Enable {true} CONFIG.DAC_Slice20_Enable {true} CONFIG.DAC_Slice21_Enable {true} CONFIG.DAC_Slice22_Enable {true} CONFIG.DAC_Slice23_Enable {true} CONFIG.DAC_Slice30_Enable {true} CONFIG.DAC_Slice31_Enable {true} CONFIG.DAC_Slice32_Enable {true} CONFIG.DAC_Slice33_Enable {true} CONFIG.DAC_VOP_RTS {false} CONFIG.ADC0_Multi_Tile_Sync {true} CONFIG.DAC0_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS00 {1} CONFIG.DAC_TDD_RTS01 {1} CONFIG.DAC_TDD_RTS02 {1} CONFIG.DAC_TDD_RTS03 {1} CONFIG.DAC1_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS10 {1} CONFIG.DAC_TDD_RTS11 {1} CONFIG.DAC_TDD_RTS12 {1} CONFIG.DAC_TDD_RTS13 {1} CONFIG.DAC2_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS20 {1} CONFIG.DAC_TDD_RTS21 {1} CONFIG.DAC_TDD_RTS22 {1} CONFIG.DAC_TDD_RTS23 {1} CONFIG.DAC3_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS30 {1} CONFIG.DAC_TDD_RTS31 {1} CONFIG.DAC_TDD_RTS32 {1} CONFIG.DAC_TDD_RTS33 {1} CONFIG.ADC_RTS {true} CONFIG.DAC_RTS {true} CONFIG.DAC_VOP_RTS {true} CONFIG.ADC_DSA_RTS {true}"
             
             set_property(f, name="hedgehog/rfdc", properties=rfdc_config_string)
 
@@ -434,7 +435,24 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")        
                 connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/clk_{30 if i == 3 else 300}")
                 connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")
-
+                
+            # Synchronize the SYSREF signal from the CLK104
+            create_ip(f, name="hedgehog/pl_sysref_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            set_property(f, name="hedgehog/pl_sysref_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
+            connect_bd_intf_net(f, "hedgehog/CLK104_PL_SYSREF", "hedgehog/pl_sysref_ibufds/CLK_IN_D")
+            
+            # Synchronize the SYSREF IBUFDS output first against the PL_CLK IBUFDS 
+            # and then against the MMCM output
+            create_ip(f, name="hedgehog/xpm_cdc_pl_sysref", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
+            set_property(f, name="hedgehog/xpm_cdc_pl_sysref", properties={"CDC_TYPE": "xpm_cdc_single", "DEST_SYNC_FF": 2})
+            
+            connect_bd_net(f, "hedgehog/pl_clk_ibufds/IBUF_OUT", "hedgehog/xpm_cdc_pl_sysref/src_clk")
+            connect_bd_net(f, "hedgehog/clk_wiz/clk_300", "hedgehog/xpm_cdc_pl_sysref/dest_clk")
+            
+            connect_bd_net(f, "hedgehog/pl_sysref_ibufds/IBUF_OUT", "hedgehog/xpm_cdc_pl_sysref/src_in")
+            connect_bd_net(f, "hedgehog/xpm_cdc_pl_sysref/dest_out", "hedgehog/rfdc/user_sysref_dac")
+            connect_bd_net(f, "hedgehog/xpm_cdc_pl_sysref/dest_out", "hedgehog/rfdc/user_sysref_adc")
+            
             # ------------------- SmartConnects -------------------- #
 
             # Create a SmartConnect for non-critical transfers
@@ -494,7 +512,6 @@ class StandardFirmware(Firmware):
                 for seg in ["DDR_HIGH", "DDR_LOW", "LPS_OCM", "QSPI"]:
                     exclude_bd_addr_seg(f, addr_seg=f"ps/SAXIGP{idx}/{port}_{seg}", target_address_space="ps/Data")
                     
-
             # ------------------- DDR4 Connections -------------------- #
 
             connect_bd_intf_net(f, f"hedgehog/DDR4_C0_S_AXI", f"hedgehog/memory_smartconnect/M04_AXI")
@@ -509,16 +526,24 @@ class StandardFirmware(Firmware):
             create_module(f, f"hedgehog/sequencer_bus_decoder", "sequencer_bus_decoder")
             connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/master_bus", f"hedgehog/sequencer_bus")
 
-            # Create an NCO real-time port register interface
-            create_module(f, f"hedgehog/nco_regs", "acadia_nco_port_regs")
-            connect_bd_net(f, f"hedgehog/nco_regs/clk", f"hedgehog/clk_wiz/clk_300")
-            connect_bd_net(f, f"hedgehog/nco_regs/nco_dest_clk", f"hedgehog/PS_clk_250")
-            connect_bd_net(f, f"hedgehog/nco_regs/nrst", f"hedgehog/seq_peripheral_aresetn")
-            connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/nco_regs", f"hedgehog/nco_regs/master_bus")
+            # Create an RFDCreal-time port register interface
+            create_module(f, f"hedgehog/rfdc_rts_regs", "acadia_rfdc_rts_regs")
+            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nco_dest_clk", f"hedgehog/PS_clk_250")
+            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nrst", f"hedgehog/seq_peripheral_aresetn")
+            connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/rfdc_rts_regs", f"hedgehog/rfdc_rts_regs/master_bus")
                              
-            for i in range(4):
-                connect_bd_intf_net(f, f"hedgehog/rfdc/dac{i}_nco", f"hedgehog/nco_regs/dac{i}")
-                connect_bd_intf_net(f, f"hedgehog/rfdc/adc{i}_nco", f"hedgehog/nco_regs/adc{i}")
+            for tile in range(4):
+                connect_bd_intf_net(f, f"hedgehog/rfdc/dac{tile}_nco", f"hedgehog/rfdc_rts_regs/dac{tile}_nco")
+                connect_bd_intf_net(f, f"hedgehog/rfdc/dac{tile}_rts", f"hedgehog/rfdc_rts_regs/dac{tile}_rts")
+                connect_bd_intf_net(f, f"hedgehog/rfdc/dac{tile}_vop_rts", f"hedgehog/rfdc_rts_regs/dac{tile}_vop_rts")
+                
+                connect_bd_intf_net(f, f"hedgehog/rfdc/adc{tile}_nco", f"hedgehog/rfdc_rts_regs/adc{tile}_nco")
+                connect_bd_intf_net(f, f"hedgehog/rfdc/adc{tile}_rts", f"hedgehog/rfdc_rts_regs/adc{tile}_rts")
+                connect_bd_intf_net(f, f"hedgehog/rfdc/adc{tile}_dsa_rts", f"hedgehog/rfdc_rts_regs/adc{tile}_dsa_rts")
+                
+                for block in range(4):
+                    # We'll only connect the DAC TDD signals here
+                    connect_bd_net(f, f"hedgehog/rfdc/dac{tile}{block}_tdd_mode", f"hedgehog/rfdc_rts_regs/dac{tile}{block}_tdd_mode")
 
             # Add all the dataports
             for module in self._modules:
@@ -1239,8 +1264,8 @@ class StandardFirmware(Firmware):
                 connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}_descriptor_mem/BRAM_PORTB", f"hedgehog/dac_dma{channel}/DESCRIPTOR_MEM")
 
                 # Connect the DAC Descriptor BRAMs to the memory controller through a pipeline
-                connect_bd_intf_net(f, f"hedgehog/mem_decoder/dac_dma{channel}_descriptor_mem", f"hedgehog/dac_dma{channel}_descriptor_mem/BRAM_PORTA")    
-    
+                connect_bd_intf_net(f, f"hedgehog/mem_decoder/dac_dma{channel}_descriptor_mem", f"hedgehog/dac_dma{channel}_descriptor_mem/BRAM_PORTA")           
+        
 class Acadia:
     """
     A class that implements system-wide commands for the Acadia hardware.
@@ -1249,239 +1274,14 @@ class Acadia:
     performed by the sequencer or the PS) must be carried out in processor
     contexts.
     """
-    
-    @staticmethod
-    def _cache_getitem(cache_self, key):
-        """
-        Retrieves an item from the cache.
-        """
-        if not cache_self._processor_context:
-            raise TypeError("Calling `cache_getitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = cache_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            address_base = cache_self._sequncer_address_base + cache_self._resource_id
-            return proc.bus_read(address_base + key)
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? in what situations
-            # will doing it this way hurt performance? should we use DMA?
-            return Operation("getitem", cache_self.memory, key)
-
-        raise TypeError(f"Cache read not defined for processor {proc}.")
-
-    @staticmethod
-    def _cache_setitem(cache_self, key, value):
-        """
-        Writes an item into the cache.
-        """
-        if not self._processor_context:
-            raise TypeError("Calling `cache_setitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = cache_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            address_base = cache_self._sequencer_address_base + cache_self._resource_id
-            return proc.bus_write(address=address_base + key,
-                                            data=value)
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? should we use DMA? 
-            return proc(Operation("setitem", cache_self.memory, key, value))
-
-        raise TypeError(f"Cache write not defined for processor {proc}.")
-        
-    @staticmethod    
-    def _dac_mem_getitem(dac_mem_self, key):
-        """
-        Retrieves an item from DAC memory.
-        """
-        if not dac_mem_self._processor_context:
-            raise TypeError("Calling `dac_mem_getitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = dac_mem_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("The sequencer cannot directly access"
-                            " DAC memory.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? in what situations
-            # will doing it this way hurt performance? should we use DMA?
-            return Operation("getitem", dac_mem_self.memory, key)
-
-        raise TypeError(f"DAC memory read not defined for processor {proc}.")
-
-    @staticmethod
-    def _dac_mem_setitem(dac_mem_self, key, value):
-        """
-        Writes an item into the DAC memory.
-        """
-        if not dac_mem_self._processor_context:
-            raise TypeError("Calling `dac_mem_setitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = dac_mem_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("The sequencer cannot directly write"
-                            " DAC memory.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? should we use DMA? 
-            return proc(Operation("setitem", dac_mem_self.memory, key, value))
-
-        raise TypeError(f"DAC memory write not defined for processor {proc}.")
-        
-    @staticmethod
-    def _cmacc_kernel_mem_getitem(cmacc_kernel_mem_self, key):
-        """
-        Retrieves an item from CMACC kernel memory.
-        """
-        if not cmacc_kernel_mem_self._processor_context:
-            raise TypeError("Calling `cmacc_kernel_mem_getitem` is"
-                            " ambiguous outside of a ProcessorContext.")
-        proc = cmacc_kernel_mem_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("The sequencer cannot directly access"
-                            " CMACC kernel memory.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? in what situations
-            # will doing it this way hurt performance? should we use DMA?
-            return Operation("getitem", cmacc_kernel_mem_self.memory, key)
-
-        raise TypeError(f"CMACC kernel memory read not defined for"
-                        f" processor {proc}.")
-
-    @staticmethod
-    def _cmacc_kernel_mem_setitem(cmacc_kernel_mem_self, key, value):
-        """
-        Writes an item into the CMACC kernel memory.
-        """
-        if not cmacc_kernel_mem_self._processor_context:
-            raise TypeError("Calling `cmacc_kernel_mem_setitem` is"
-                            " ambiguous outside of a ProcessorContext.")
-        proc = cmacc_kernel_mem_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("The sequencer cannot directly write"
-                            " CMACC kernel memory.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? should we use DMA? 
-            return proc(Operation("setitem", cmacc_kernel_mem_self.memory, key, value))
-
-        raise TypeError(f"CMACC kernel memory write not defined for processor {proc}.")
-    
-    @staticmethod
-    def _plddr_getitem(plddr_self, key):
-        """
-        Reads data from PL DDR memory.
-        """
-        if not plddr_self._processor_context:
-            raise TypeError("Calling `plddr_getitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = plddr_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("PL DDR memory must be explicitly copied into"
-                            " the cache in order to be accessed by the"
-                            " sequencer.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? in what situations
-            # will doing it this way hurt performance? should we use DMA?
-            return Operation("getitem", plddr_self.memory, key)
-
-        raise TypeError(f"PL DDR read not defined for processor {proc}.")
-
-    @staticmethod
-    def _plddr_setitem(plddr_self, key, value):
-        """
-        Write data into PL DDR memory.
-        """
-        if not plddr_self._processor_context:
-            raise TypeError("Calling `plddr_setitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = plddr_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("PL DDR memory must be explicitly copied from"
-                            " the cache in order to be written by the"
-                            " sequencer.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: Add DMA support
-            return proc(Operation("setitem", plddr_self.memory, key, value))
-
-        raise TypeError(f"PL DDR write not defined for processor {proc}.")
-        
-    @staticmethod
-    def _psddr_getitem(psddr_self, key):
-        """
-        Reads data from PS DDR memory.
-        """
-        if not psddr_self._processor_context:
-            raise TypeError("Calling `psddr_getitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = psddr_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("PS DDR memory must be explicitly copied into"
-                            " the cache in order to be accessed by the"
-                            " sequencer.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: is there a better way to do this? in what situations
-            # will doing it this way hurt performance? should we use DMA?
-            return Operation("getitem", psddr_self.memory, key)
-
-        raise TypeError(f"PS DDR read not defined for processor {proc}.")
-
-    @staticmethod
-    def _psddr_setitem(psddr_self, key, value):
-        """
-        Write data into PS DDR memory.
-        """
-        if not psddr_self._processor_context:
-            raise TypeError("Calling `psddr_setitem` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = psddr_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            raise TypeError("PS DDR memory must be explicitly copied from"
-                            " the cache in order to be written by the"
-                            " sequencer.")
-        if isinstance(proc, PythonProcessor):
-            # TODO: Add DMA support
-            return proc(Operation("setitem", psddr_self.memory, key, value))
-
-        raise TypeError(f"PS DDR write not defined for processor {proc}.")
-    
-    @staticmethod
-    def _PSIO_word_read(psio_word_self, data):
-        """
-        Reads data from a PS GPIO port.
-        """
-        if not psio_word_self._processor_context:
-            raise TypeError("Calling `PSIO_word_read` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = psio_word_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            # The sequencer reads from the PS GPIO out port
-            return proc.bus_read(psio_word_self._sequencer_bus_decoder[f"ps_gpio{3+psio_word_self._resource_id}"])
-        if isinstance(proc, PythonProcessor):
-            # The PS reads from the PS GPIO in port
-            return Operation("getitem", psio_word_self.memory_in, 0)
-
-        raise TypeError(f"PS GPIO word read not defined for processor {proc}.")
-
-    @staticmethod
-    def _PSIO_word_write(psio_word_self, data):
-        """
-        Writes data to a PS GPIO port.
-        """
-        if not psio_word_self._processor_context:
-            raise TypeError("Calling `PSIO_word_write` is ambiguous outside"
-                            " of a ProcessorContext.")
-        proc = psio_word_self._processor_context[-1]
-        if isinstance(proc, Sequencer):
-            # The sequencer writes to the PS GPIO in port
-            return proc.bus_write(address=psio_word_self._sequencer_bus_decoder[f"ps_gpio{3+psio_word_self._resource_id}"], 
-                                  data=data)
-        if isinstance(proc, PythonProcessor):
-            # The PS writes to the PS GPIO out port
-            return proc(Operation("setitem", psio_word_self.memory_out, 0, data))
-
-        raise TypeError(f"PS GPIO word write not defined for processor {proc}.")
 
     def __init__(self):
         # A stack for keeping track of the processor contexts
         # The elements are the processor objects
         self._processor_context = []
+        
+        # An object for carrying out the synchronization of events
+        self._synchronizer = None
         
         class ProcessorContext:
             def __enter__(proc_self):
@@ -1493,208 +1293,353 @@ class Acadia:
         self.firmware = StandardFirmware()
         self.PS = type("AcadiaPS", (PythonProcessor,ProcessorContext), {})()
         self.sequencer = type("AcadiaSequencer", (Sequencer,ProcessorContext), {})()
+                
+        def make_memory_handler(supported_processor_types):
+            def _memory_handler(op):
+                if not self._processor_context:
+                    raise ValueError("Interacting with managed memory outside of"
+                                     " a processor context is ambiguous.")
+                    
+                # For all processors, we'll simply call the processor on the 
+                # operation   
+                active_processor = self._processor_context[-1]
+                for t in supported_processor_types:
+                    if isinstance(active_processor, t):
+                        return active_processor(op)
+                    
+                raise TypeError(f"No supported processor found for operation {op}.")
+            return _memory_handler
+        
+        # instruction memory
+        self.SequencerInstructionArray = ManagedMemory("SequencerInstructionArray", (), {},
+            required_parameters=["assembled_program"],
+            word_address_base=0,
+            byte_address_base=self.firmware["mem_decoder"]["instruction_mem"].address().value()*16,
+            word_width=128,
+            pool_size=StandardFirmware.INSTRUCTION_MEM_SIZE_BITS // 128,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor]))
         
         # Cache
-        # The resource id is the cache address in units of 32-bit words
-        # Because the sequencer compiler will use any object's `address` 
-        # attribute when compiling it as a source, we can make it compatible by
-        # defining that method for it
-        self.CacheArray = ManagedResource("CacheArray", 
-            (), 
-            {"OPERATORS": [],
-            "__getitem__": Acadia._cache_getitem,
-            "__setitem__": Acadia._cache_setitem,
-            "_sequencer_address_base": self.firmware["sequencer_bus_decoder"]["cache"].address().value(),
-            "_processor_context": self._processor_context},
-            use_instance_size=True,
-            allocation_limit=StandardFirmware.CACHE_SIZE_BITS // 32)
+        self.CacheArray = ManagedMemory("CacheArray", (), {},
+            word_address_base=self.firmware["sequencer_bus_decoder"]["cache"].address().value(),
+            byte_address_base=StandardFirmware.BRAM_CTRL_CACHE_ADDR,
+            word_width=32,
+            pool_size=StandardFirmware.CACHE_SIZE_BITS // 32,
+            getitem_handler=make_memory_handler([PythonProcessor, Sequencer]),
+            setitem_handler=make_memory_handler([PythonProcessor, Sequencer]))
         
         # DAC interfaces
-        self._dac_dmas = [DMA(StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 64) 
-                          for i in range(16)]
-            
-        # The resource id is the offset from the start of the memory in units 
-        # of 32-bit words 
-        self.DACArray = [ManagedResource(f"DAC{i}Array", 
-            (), 
-            {"OPERATORS": [],
-             "__getitem__": Acadia._dac_mem_getitem,
-             "__setitem__": Acadia._dac_mem_setitem,
-             "_processor_context": self._processor_context},
-            allocation_limit=StandardFirmware.DAC_MEM_SIZE_BITS // 32) for i in range(16)]
+        self._dac_dmas = [DMA() for i in range(16)]
         
-        def adc_dma_init(adc_dma_self, physical_channel):
-            adc_dma_self._physical_channel = physical_channel
-            super().__init__(StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 64)
+        self.DACDMADescriptorArray = [ManagedMemory(f"DACDMA{i}DescriptorArray", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["mem_decoder"][f"dac_dma{i}_descriptor_mem"].address().value()*16,
+            word_width=64,
+            pool_size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 64,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(16)]
+
+        self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["dac_mem_decoder"][f"dac_dma{i}_mem"].address().value()*16,
+            word_width=128,
+            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(16)]
         
         # The resource id is the index of the DMA
         self._ADCDMA = ManagedResource("ADCDMA", 
                                          (DMA,), 
-                                         {"OPERATORS": [],
-                                          "__init__": adc_dma_init},
-                                         allocation_limit=4)
+                                         {"OPERATORS": []},
+                                         allocation_limit=4,
+                                         required_parameters=["physical_channel"])
         
-        def cmacc_dma_init(cmacc_dma_self, physical_channel):
-            cmacc_dma_self._physical_channel = physical_channel
-            super().__init__(StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 64)
+        self.ADCDMADescriptorArray = [ManagedMemory(f"ADCDMA{i}DescriptorArray", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["mem_decoder"][f"adc_dma{i}_descriptor_mem"].address().value()*16,
+            word_width=64,
+            pool_size=StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 64,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(4)]
             
         # The resource id is the index of the DMA
         self._CMACCDMA = ManagedResource("CMACCDMA", 
                                          (DMA,), 
-                                         {"OPERATORS": [],
-                                          "__init__": cmacc_dma_init},
-                                         allocation_limit=4)
+                                         {"OPERATORS": []},
+                                         allocation_limit=4,
+                                         required_parameters=["physical_channel"])
         
-        # The resource id is the offset in 32-bit words from the start of the 
-        # kernel memory
-        self.CMACCKernelArray = [ManagedResource(
-            f"CMACCDMA{i}KernelArray", 
-            (), 
-            {"OPERATORS": [],
-             "__getitem__": Acadia._cmacc_kernel_mem_getitem,
-             "__setitem__": Acadia._cmacc_kernel_mem_setitem,
-             "_processor_context": self._processor_context},
-            use_instance_size=True,
-            allocation_limit=StandardFirmware.CMACC_KERNEL_MEM_SIZE_BITS // 32) for i in range(4)]
+        self.CMACCDMADescriptorArray = [ManagedMemory(f"CMACCDMA{i}DescriptorArray", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["mem_decoder"][f"cmacc_dma{i}_descriptor_mem"].address().value()*16,
+            word_width=64,
+            pool_size=StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 64,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(4)]
+        
+        self.CMACCKernelArray = [ManagedMemory(f"CMACCKernel{i}Array", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["mem_decoder"][f"cmacc_dma{i}_kernel_mem"].address().value()*16,
+            word_width=128,
+            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(16)]
         
         # PL DDR
         # The two banks of PL DDR are contiguous on the AXI network, so we can 
         # use one ManagedResource for all of the DDR
         # The resource ID refers to the offset in bytes from the start of
         # the PL C0 DDR
-        self.PLDDRArray = ManagedResource(f"PLDDRArray", 
-                                         (), 
-                                         {"OPERATORS": [],
-                                          "__getitem__": Acadia._plddr_getitem,
-                                          "__setitem__": Acadia._plddr_setitem,
-                                          "_processor_context": self._processor_context},
-                                         use_instance_size=True,
-                                         allocation_limit=2**33)
+        self.PLDDRArray = ManagedMemory(f"PLDDRArray", (), {},
+            word_address_base=StandardFirmware.DDR4_C0_ADDR,
+            byte_address_base=StandardFirmware.DDR4_C0_ADDR,
+            word_width=8,
+            pool_size=2**33,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor]))
         
         # PS DDR
-        self.PSDDRArray = ManagedResource(f"PSDDRArray", 
-                                         (), 
-                                         {"OPERATORS": [],
-                                          "__getitem__": Acadia._psddr_getitem,
-                                          "__setitem__": Acadia._psddr_setitem,
-                                          "_processor_context": self._processor_context},
-                                         use_instance_size=True,
-                                         allocation_limit=2**30)
+        self.PSDDRArray = ManagedMemory(f"PLDDRArray", (), {},
+            word_address_base=0x8_0000_0000,
+            byte_address_base=0x8_0000_0000,
+            word_width=8,
+            pool_size=2**30,
+            getitem_handler=make_memory_handler([PythonProcessor]),
+            setitem_handler=make_memory_handler([PythonProcessor]))
         
         # TODO: find a good way to implement single-bit PSIO writes for the 
         # sequencer
+        def _PSIO_word_read(self, data):
+            """
+            Reads data from a PS GPIO port.
+            """
+            if not self._processor_context:
+                raise TypeError("Calling `PSIO_word_read` is ambiguous outside"
+                                " of a ProcessorContext.")
+            proc = self._processor_context[-1]
+            if isinstance(proc, Sequencer):
+                # The sequencer reads from the PS GPIO out port
+                return proc.bus_read(self.firmware["sequencer_bus_decoder"][f"ps_gpio{3+psio_word_self._resource_id}"])
+            if isinstance(proc, PythonProcessor):
+                # The PS reads from the PS GPIO in port
+                return Operation("getitem", psio_word_self.memory_in, 0)
+
+            raise TypeError(f"PS GPIO word read not defined for processor {proc}.")
+
+        def _PSIO_word_write(psio_word_self, data):
+            """
+            Writes data to a PS GPIO port.
+            """
+            if not self._processor_context:
+                raise TypeError("Calling `PSIO_word_write` is ambiguous outside"
+                                " of a ProcessorContext.")
+            proc = self._processor_context[-1]
+            if isinstance(proc, Sequencer):
+                # The sequencer writes to the PS GPIO in port
+                return proc.bus_write(address=self.firmware["sequencer_bus_decoder"][f"ps_gpio{3+psio_word_self._resource_id}"], 
+                                      data=data)
+            if isinstance(proc, PythonProcessor):
+                # The PS writes to the PS GPIO out port
+                return proc(Operation("setitem", psio_word_self.memory_out, 0, data))
+
+            raise TypeError(f"PS GPIO word write not defined for processor {proc}.")
+            
         self.PSIOWord = ManagedResource(f"PSIOWord", 
                                          (), 
                                          {"OPERATORS": [],
-                                          "read": Acadia._psio_word_read,
-                                          "write": Acadia._psio_word_write,
-                                          "_processor_context": self._processor_context,
-                                          "_sequencer_bus_decoder": self.firmware["sequencer_bus_decoder"]},
+                                          "read": _PSIO_word_read,
+                                          "write": _PSIO_word_write},
                                          allocation_limit=2)
+        
+        @dataclass
+        class Channel:
+            tile: int = None
+            block: int = None
+            num: int = None
+            bank: int = None
+            converter_type: int = None
+
+            def __post_init__(self):
+                if self.num is not None:
+                    if self.tile is not None or self.block is not None:
+                        raise ValueError(f"Specify a channel either by channel"
+                                         " or by tile and block.")
+
+                    if self.num < 0 or self.num > 15:
+                        raise ValueError(f"Received invalid channel {self.num}.") 
+
+                    self.tile = self.num // 4
+                    self.block = self.num % 4
+
+                if self.bank is not None:
+                    if self.bank > 231 or self.bank < 224:
+                        raise ValueError(f"Received invalid bank {self.bank}.")
+
+                    self.converter_type = xrfdc.XRFDC_DAC_TILE if self.bank > 227 else xrfdc.XRFDC_ADC_TILE
+                    self.tile = (self.bank - 224) % 4
+
+                if self.block is not None:
+                    if self.tile is not None:
+                        self.num = self.tile*4 + self.block
+
+                if self.tile > 4 or self.tile < 0:
+                    raise ValueError(f"Received invalid tile {self.tile}.")
+
+                if self.block > 4 or self.block < 0:
+                    raise ValueError(f"Received invalid block {self.block}.")
+
+                if self.converter_type is not None:
+                    if self.converter_type not in [xrfdc.XRFDC_DAC_TILE, xrfdc.XRFDC_ADC_TILE]:
+                        raise ValueError(f"Converter type must be `XRFDC_DAC_TILE`"
+                                         f" or `XRFDC_ADC_TILE`; received"
+                                         f" {self.converter_type}.")
+
+                    self.bank = 224 + self.tile
+                    if self.converter_type == xrfdc.XRFDC_DAC_TILE:
+                        self.bank += 4
+
+            def configure_nco(self, frequency=None, phase=None, word=False, phase_reset=False):
+                """
+                Configure the NCO for the channel. If `word` is `True`, the 
+                provided values are understood to be integer words intended to be
+                written directly to the RFDC registers.
+                """
+                pass
+
+            def get_nco_settings(self):
+                pass
+
+            # Convenience functions
+            @property
+            def status(self):
+                """
+                Get the status of the converter.
+                """
+                pass
+
+            @property
+            def nco_frequency(self):
+                pass
+
+            @nco_frequency.setter
+            def nco_frequency(self, frequency):
+                pass
+
+            @property
+            def nco_phase(self):
+                pass
+
+            @nco_phase.setter
+            def nco_phase(self, phase):
+                pass
+
+            @property
+            def update_event(self):
+                pass
+
+            @update_event.setter
+            def update_event(self, v):
+                pass
+
+            @property
+            def nyquist_zone(self):
+                pass
+
+            @nyquist_zone.setter
+            def nyquist_zone(self, nz):
+                pass
+
+            @property
+            def decoder_mode(self):
+                pass
+
+            @decoder_mode.setter
+            def decoder_mode(self):
+                pass
+
+            @property
+            def current(self):
+                pass
+
+            @current.setter
+            def current(self, vop):
+                pass
+
+            @property
+            def attenuation(self):
+                pass
+
+            @attenuation.setter
+            def attenuation(self, dsa):
+                pass
+
+            @property
+            def coarse_delay(self):
+                pass
+
+            @coarse_delay.setter
+            def coarse_delay(self, delay):
+                pass
+
+            @property
+            def dither(self):
+                pass
+
+            @dither.setter
+            def dither(self, v):
+                pass
+
+            @property
+            def imr_passband(self):
+                pass
+
+            @imr_passband.setter
+            def imr_passband(self, v):
+                pass
+        
+        class DAC(Channel):
+            def __init__(dac_self, *args, **kwargs):
+                super().__init__(converter_type=xrfdc.XRFDC_DAC_TILE, *args, **kwargs)
+
+        class ADC(Channel):
+            def __init__(dac_self, *args, **kwargs):
+                super().__init__(converter_type=xrfdc.XRFDC_ADC_TILE, *args, **kwargs)
         
     def attach(self):
         """
-        Maps system memory and creates `memoryview` objects 
-        for all `ManagedResource` objects used to abstract regions of memory.
-        Connections to the Xilinx RFDC and RFClk libraries are also established.
-        """
-        import mmap
-        self._mem_file = os.open("/dev/mem", os.O_SYNC | os.O_RDWR)
-        
-        self.Cache._memory = mmap.mmap(self._mem_file, 
-            StandardFirmware.CACHE_SIZE_BITS // 8, 
-            mmap.MAP_SHARED, 
-            mmap.PROT_READ | mmap.PROT_WRITE, 
-            0, 
-            StandardFirmware.BRAM_CTRL_CACHE_ADDR)
-        
-        for arr in self.Cache.instances:
-            start = arr._resource_id
-            end = arr._resource_id + arr.size
-            arr.memory = memoryview(self.Cache._memory).cast('I')[start:end]
+        Maps system memory and connects to hardware drivers.
+        """        
+        self._hardware.attach_resource(self.Cache, mem_cast="I")
+        self._hardware.attach_resource(self.SequencerInstructionArray)
             
-        self.sequencer._Instruction._memory = mmap.mmap(self._mem_file, 
-            StandardFirmware.INSTRUCTION_MEM_SIZE_BITS // 8, 
-            mmap.MAP_SHARED, 
-            mmap.PROT_READ | mmap.PROT_WRITE, 
-            0, 
-            self.firmware["mem_decoder"]["instruction_mem"].address().value()*16)
-        
-        for dac,dma in enumerate(self._dac_dmas):
-            dma._Instruction._memory = mmap.mmap(self._mem_file, 
-                StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 8, 
-                mmap.MAP_SHARED, 
-                mmap.PROT_READ | mmap.PROT_WRITE, 
-                0, 
-                firmware["mem_decoder"][f"dac_dma{dac}_descriptor_mem"].address().value()*16) 
-        
-        for dac,mem in enumerate(self.DACArray):
-            mem._memory = mmap.mmap(self._mem_file, 
-                StandardFirmware.DAC_MEM_SIZE_BITS // 8, 
-                mmap.MAP_SHARED, 
-                mmap.PROT_READ | mmap.PROT_WRITE, 
-                0, 
-                firmware["dac_mem_decoder"][f"dac_dma{dac}_mem"].address().value()*16)
-            for arr in mem.instances:
-                start = arr._resource_id
-                end = arr._resource_id + arr.size
-                arr.memory = memoryview(mem._memory).cast('h')[start:end]
+        for dma_mem in self.DACDMADescriptorMemory:
+            self._hardware.attach_resource(dma_mem, mem_cast="Q")
+            
+        for dac_mem in self.DACArray:
+            self._hardware.attach_resource(dma_mem, mem_cast="h")
                 
-        for adc,dma in enumerate(self._ADCDMA.instances):
-            dma._Instruction._memory = mmap.mmap(self._mem_file, 
-                StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 8, 
-                mmap.MAP_SHARED, 
-                mmap.PROT_READ | mmap.PROT_WRITE, 
-                0, 
-                firmware["mem_decoder"][f"adc_dma{adc}_descriptor_mem"].address().value()*16) 
+        for dma_mem in self.ADCDMADescriptorMemory:
+            self._hardware.attach_resource(dma_mem, mem_cast="Q")
             
-        for cmacc,dma in enumerate(self._CMACCDMA.instances):
-            dma._Instruction._memory = mmap.mmap(self._mem_file, 
-                StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 8, 
-                mmap.MAP_SHARED, 
-                mmap.PROT_READ | mmap.PROT_WRITE, 
-                0, 
-                firmware["mem_decoder"][f"cmacc_dma{cmacc}_descriptor_mem"].address().value()*16) 
+        for dma_mem in self.CMACCDMADescriptorMemory:
+            self._hardware.attach_resource(dma_mem, mem_cast="Q")
             
-        for cmacc,mem in enumerate(self.CMACCArray):
-            mem._memory = mmap.mmap(self._mem_file, 
-                StandardFirmware.CMACC_KERNEL_MEM_SIZE_BITS // 8, 
-                mmap.MAP_SHARED, 
-                mmap.PROT_READ | mmap.PROT_WRITE, 
-                0, 
-                firmware["mem_decoder"][f"cmacc_dma{cmacc}_kernel_mem"].address().value()*16)
-            
-            for arr in mem.instances:
-                start = arr._resource_id
-                end = arr._resource_id + arr.size
-                arr.memory = memoryview(mem._memory).cast('h')[start:end]
+        for cmacc_kernel_mem in self.CMACCKernelArray:
+            self._hardware.attach_resource(dma_mem, mem_cast="h")
                 
-        self.DDRArray._memory = mmap.mmap(self._mem_file, 
-            2**33, 
-            mmap.MAP_SHARED, 
-            mmap.PROT_READ | mmap.PROT_WRITE, 
-            0, 
-            StandardFirmware.DDR4_C0_ADDR)
-        
-        for arr in self.DDRArray.instances:
-            start = arr._resource_id
-            end = arr._resource_id + arr.size
-            arr.memory = memoryview(self.DDRArray._memory).cast('i')[start:end]
+        self._hardware.attach_resource(self.PLDDRArray)
+        self._hardware.attach_resource(self.PSDDRArray)
             
         # PS GPIO
-        self._psio_memory = mmap.mmap(self._mem_file, 
-            0x400, 
-            mmap.MAP_SHARED, 
-            mmap.PROT_READ | mmap.PROT_WRITE, 
-            0, 
-            0xFF0A0000)
+        self._psio_memory = self._hardware.attach_memory(0xFF0A0000, 0x400, mem_cast="I")
         
         for io in self.PSIOWord.instances:
             # Map the PS GPIO input and output registers
             in_reg = (0x6C >> 2) + io._resource_id
-            io.memory_in = memoryview(self._psio_memory).cast('I')[in_reg:in_reg+1]
+            io.memory_in = self._psio_memory[in_reg:in_reg+1]
             out_reg = (0x4C >> 2) + io._resource_id
-            io.memory_out = memoryview(self._psio_memory).cast('I')[out_reg:out_reg+1]
+            io.memory_out = self._psio_memory[out_reg:out_reg+1]
             
     def deattach(self):
         """
@@ -1716,19 +1661,69 @@ class Acadia:
         self._psio_memory.close()
         
         self._mem_file.close()
+    
+    class Synchronizer:
+        """
+        A context manager for implementing the synchronization of system events.
+        """
+        def __new__(cls, *args, **kwargs):
+            """
+            When new instances are created, they are attached to the 
+            :class:`Acadia` instance.
+            """
+            instance = super().__new__(*args, **kwargs)
+            self._synchronizer = instance
+            return instance
         
-#     def configure_nco(self, frequency=None, phase=None, frequency_update=0b111):
-#         """
-#         Configures an NCO of the RF data converters.
-#         """
+        def __init__(synchronizer_self, blocking=True):
+            """
+            :param blocking: If `True`, program execution will halt until all
+            processes inside the block have completed. This may result in
+            differewnt behavior depending on the contents of the block.
+            :type blocking: bool, optional
+            """
+            synchronizer_self._blocking = True
         
-#     def synthesize(self, signal, channel):
-#         """
-#         Synthesizes a signal on a DAC channel. 
-#         """
+        def __enter__(synchronizer_self):
+            synchronizer_self._events = []
+            
+        def __exit__(synchronizer_self):
+            # Carry out any closing behavior (e.g., triggering)
+            if synchronizer_self._blocking:
+                synchronizer_self.await_completion()
         
-#     def capture(self, length, channel):
-#         """
-#         Captures a signal from a physical ADC channel.
-#         """
+        def await_completion(synchronizer_self):
+            """
+            Halts execution until the condition for synchronization has been 
+            met. The exact behavior will be determined by the type of captured
+            events, as determined by examining the first event and enforcing
+            the ability to synchronize with it for the rest of the block.
+            """
+            pass
+        
+        def notify(synchronizer_self, event_type, **kwargs):
+            """
+            Notify the synchronizer that an event relevant to synchronization
+            has occurred.
+            """
+            pass
+            
+        
+    def dma_stream(self, signal, channel):
+        """
+        Streams a signal from a DMA. 
+        """
+        # Create a DMA descriptor
+        # Instruct the sequencer to write to the DMA's FIFO
+        # If this Acadia instance has an active DMA synchronizer, notify it
+        # that this was called
+        # Otherwise, add an instruction to trigger
+        pass
+        
+    def configure_nco(self, frequency=None, phase=None, frequency_update=0b111):
+        """
+        Configures an NCO of the RF data converters.
+        """
+        pass
+        
     

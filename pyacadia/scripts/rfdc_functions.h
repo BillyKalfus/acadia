@@ -985,6 +985,11 @@ typedef struct {
 /*****************************************************************************/
 /************************** Function Prototypes ******************************/
 
+// We need to define a function to get some defines from libmetal in order for
+// CFFI to find them
+struct metal_init_params _METAL_INIT_DEFAULTS(void);
+int metal_init(const struct metal_init_params *);
+
 XRFdc_Config *XRFdc_LookupConfig(u16 DeviceId);
 u32 XRFdc_RegisterMetal(XRFdc *InstancePtr, u16 DeviceId, struct metal_device **DevicePtr);
 u32 XRFdc_CfgInitialize(XRFdc *InstancePtr, XRFdc_Config *ConfigPtr);

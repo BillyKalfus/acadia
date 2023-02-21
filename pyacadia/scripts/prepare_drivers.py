@@ -2,18 +2,28 @@ from cffi import FFI
 import os
 import re
 
-RFDC_SRC_DIR = "../../embeddedsw-master/XilinxProcessorIPLib/drivers/rfdc/src"
+EMBEDDEDSW = "../../../embeddedsw-master"
 
-with open("rfdc_functions.h") as f:
-    header = f.read()
+SRC_DIRS = {"rfdc": f"{EMBEDDEDSW}/XilinxProcessorIPLib/drivers/rfdc/src",
+            "rfclk": f"{EMBEDDEDSW}/XilinxProcessorIPLib/drivers/board_common/src/rfclk/src"}
 
-ffibuilder = FFI()
-ffibuilder.cdef(header)
-ffibuilder.set_source("pyxrfdc", 
-                      "\n".join(["#include \"xrfdc.h\""]), 
-                      sources=[os.path.join(RFDC_SRC_DIR, f) for f in os.listdir(RFDC_SRC_DIR) if ".c" in f], 
-                      libraries=["metal"], 
-                      include_dirs=[RFDC_SRC_DIR], 
-                      extra_compile_args=["-Wall", "-fPIC"])
+HEADERS = {"rfdc": '#include "xrfdc.h"\n'
+                   '#include <metal/sys.h>\n'
+                   'struct metal_init_params _METAL_INIT_DEFAULTS() { return METAL_INIT_DEFAULTS; }',
+           "rfclk": '#include "xrfclk.h"\n'}
 
-ffibuilder.compile(verbose=True)
+
+for lib,src_dir in SRC_DIRS.items():
+    ffibuilder = FFI()
+    
+    with open(f"{lib}_functions.h") as f:
+        ffibuilder.cdef(f.read(), packed=True)
+    
+    ffibuilder.set_source(f"pyx{lib}", 
+                          HEADERS[lib], 
+                          sources=[os.path.join(src_dir, f) for f in os.listdir(src_dir) if ".c" in f], 
+                          libraries=["metal"], 
+                          include_dirs=[src_dir], 
+                          extra_compile_args=["-Wall", "-fPIC"])
+
+    ffibuilder.compile(verbose=True)

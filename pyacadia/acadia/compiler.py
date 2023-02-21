@@ -6,6 +6,7 @@ __all__ = ["Operable",
            "Operation", 
            "Symbol", 
            "ManagedResource",
+           "ManagedMemory",
            "Processor", 
            "ProcessorSubroutineMixin"]
 
@@ -43,7 +44,7 @@ class Operable(type):
                          "ixor"]
     
     @staticmethod
-    def make_op_func(op):
+    def make_op_func(op, handler=None):
         """
         A function factory for creating functions for operator calls. This is
         mainly necessary because if we try to loop through the list of 
@@ -71,6 +72,8 @@ class Operable(type):
             if op in Operable.HANDLED_OPERATORS:
                 args[0].operator_handler(operation)
                 return args[0]
+            if handler is not None:
+                return handler(operation)
             return operation
         
         return op_func
@@ -108,8 +111,13 @@ class Operable(type):
                                    + Operable.MISC_OPERATORS 
                                    + Operable.HANDLED_OPERATORS)
             
+        handlers = dct["handlers"] if "handlers" in dct else []
+            
         for op in supported_operators:
-            dct[f"__{op}__"] = Operable.make_op_func(op)
+            if op in handlers:
+                dct[f"__{op}__"] = Operable.make_op_func(op, handler=handlers[op])
+            else:
+                dct[f"__{op}__"] = Operable.make_op_func(op)
                 
         return super(Operable, cls).__new__(cls, name, bases, dct)
     
@@ -277,12 +285,14 @@ class ManagedResource(Operable):
     
     :param instance_limit: The maximum number of instances that may be 
     created by the class.
-    
     :type instance_limit: int, optional
-    
+    :param required_parameters: A list of parameters which must be supplied to
+    instances' initializers. The supplied values are assigned to the instance
+    as attributes.
+    :type required_parameters: list of str, optional
     :param use_instance_size: If `True`, indicates that the allocation 
-    offset should be increased by an amount equal to the provided `size` keyword.  
-    
+    offset should be increased by an amount equal to the provided `size` 
+    keyword.
     :type use_instance_size: bool, optional
     """
     def __new__(
@@ -291,6 +301,7 @@ class ManagedResource(Operable):
         bases_meta_new,
         dct_meta_new,
         allocation_limit=None,
+        required_parameters=None,
         use_instance_size=False):
         
         def cls_new(cls, *inst_args, **inst_kwargs):
@@ -304,18 +315,30 @@ class ManagedResource(Operable):
             whose interpretation is left to the owning class. If not provided,
             a new :class:`Symbol` will be instantiated.
             """
-            if allocation_limit is not None and cls._allocation_index >= allocation_limit:
-                # Find a free instance we can use, as indicated by noting that it is released
+            if (allocation_limit is not None 
+                and cls._allocation_index >= allocation_limit):
+                # Find a free instance we can use, as indicated by noting that
+                # it is released
                 for instance in cls.instances:
                     if instance._released:
                         instance._released = False
                         return instance
                     
-                raise ValueError(f"Unable to allocate resource; instance limit reached for {cls} with no released instance found.")
+                raise ValueError(f"Unable to allocate resource;"
+                                 f" instance limit reached for {cls} with no"
+                                 f" released instance found.")
             
             instance = super(cls, cls).__new__(cls)
             instance._released = False
             instance._resource_id = cls._allocation_index
+            
+            if required_parameters is not None:
+                for param in required_parameters:
+                    if param not in inst_kwargs:
+                        raise ValueError(f"{name_meta_new} instances must be"
+                                         f" instantiated with parameter `{param}`.")
+                    setattr(instance, param, inst_kwargs[param])
+            
             instance._size = inst_kwargs["size"] if "size" in inst_kwargs and use_instance_size else 1
             
             if hasattr(cls, "_next_instance_symbol") and not cls.next_instance_assigned():
@@ -362,6 +385,121 @@ class ManagedResource(Operable):
 
         new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)
         return new_cls
+    
+class ManagedMemory(ManagedResource):
+    """
+    A class implementing additional common utilities for managing memory.
+    """
+    
+    def __new__(cls_meta_new,
+                name_meta_new,
+                bases_meta_new,
+                dct_meta_new,
+                pool_size,
+                word_width,
+                required_parameters=None,
+                base_word_address=None,
+                base_byte_address=None,
+                getitem_handler=None,
+                setitem_handler=None):
+        """
+        Creates a new type of managed memory. The total region of memory
+        (also referred to as the "pool") is comprised of a finite number of 
+        entries, referred to as "words". Words may have arbitrary widths.
+        It is assumed that this memory is shared and that the memory has 
+        (possibly disjoint) address mappings in the spaces into which it is
+        mapped. It is assumed that one space is word-addressed and the other
+        is byte-addressed, with given offsets in both address spaces.
+        
+        :param pool_size: The total size of the memory region in number of 
+        words.
+        :type pool_size: int
+        :param word_width: Width of a word in the memory pool.
+        :type word_width: int
+        :param base_word_address: The starting address of the memory region in
+        the word-addressed space.
+        :param base_byte_address: The starting address of the memory region in
+        the byte-addressed space.
+        :param getitem_handler: A function to be called with an instance of 
+        :class:`Operation` when `getitem` is invoked on the resource instance.
+        :type getitem_handler: callable
+        :param setitem_handler: A function to be called with an instance of 
+        :class:`Operation` when `setitem` is invoked on the resource instance.
+        :type setitem_handler: callable
+        """
+        
+        def res_word_length(self):
+            """
+            :return: The length of the array in words
+            :rtype int:
+            """
+            return self._size
+        
+        def res_byte_length(self):
+            """
+            :return: The length of the array in bytes
+            :rtype: int
+            """
+            return self.word_length() * (word_width // 8)
+        
+        def res_word_address(self):
+            """
+            :return: The address of the array within the word-indexed address 
+            space
+            :rtype: int
+            """
+            return base_word_address + self._resource_id
+        
+        def res_byte_address(self):
+            """
+            :return: The address of the array within the byte-indexed address 
+            space
+            :rtype: int
+            """
+            return base_byte_address + (self._resource_id * (word_width // 8))
+        
+        # Add the new address methods                
+        dct_meta_new["word_address"] = res_word_address
+        dct_meta_new["byte_address"] = res_byte_address
+        dct_meta_new["word_length"] = res_word_length
+        dct_meta_new["byte_length"] = res_byte_length
+        
+        # The "default" address will be the word address
+        dct_meta_new["address"] = res_word_address 
+        
+        # Add the handlers for getitem and setitem
+        operators = dct_meta_new["OPERATORS"] if "OPERATORS" in dct_meta_new else []
+        handlers = dct_meta_new["handlers"] if "handlers" in dct_meta_new else {}
+        
+        if getitem_handler is not None:
+            if "getitem" not in operators:
+                operators.append("getitem")
+            if "getitem" not in handlers:
+                handlers["getitem"] = getitem_handler
+                
+        if setitem_handler is not None:    
+            if "setitem" not in operators:
+                operators.append("setitem")
+            if "getitem" not in handlers:
+                handlers["getitem"] = setitem_handler    
+                
+        dct_meta_new["OPERATORS"] = operators
+        dct_meta_new["handlers"] = handlers
+        
+        # Store some parameters
+        dct_meta_new["pool_size"] = pool_size
+        dct_meta_new["word_width"] = word_width
+        dct_meta_new["required_parameters"] = required_parameters
+        dct_meta_new["base_word_address"] = base_word_address
+        dct_meta_new["base_byte_address"] = base_byte_address
+        
+        return super().__new__(cls_meta_new,
+                                name_meta_new,
+                                bases_meta_new,
+                                dct_meta_new,
+                                use_instance_size=True,
+                                required_parameters=required_parameters,
+                                allocation_limit=pool_size)
         
 class Processor(ABC):
     """
@@ -589,7 +727,7 @@ class Processor(ABC):
             
         return named_instruction_decorator
     
-    def __init__(self, instruction_limit=None):
+    def __init__(self):
         """
         Creates an instance with an optional instruction limit.
         :param instruction_limit: Maximum number of instructions allowed to 
@@ -624,8 +762,7 @@ class Processor(ABC):
                                 f"Instruction", 
                                 (dict,), 
                                 {"OPERATORS": [],
-                                 "address": instruction_address}, 
-                                instance_limit=instruction_limit)
+                                 "address": instruction_address})
             
     def block_start(self, inline=False, previous_instruction=False):
         """

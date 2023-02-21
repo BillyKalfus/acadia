@@ -163,7 +163,7 @@ class STP:
         tmp |= self.src2.value() << 88
         tmp |= self.dest1.value() << 80
         tmp |= self.dest2.value() << 72
-        tmp |= (self.dsp_cep.value() << 64) if self.dsp_cep is not None else 0
+        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
 
         if (isinstance(self.imm1, Symbol) 
             or isinstance(self.imm1, Operation)
@@ -249,7 +249,7 @@ class STC:
         tmp |= self.src_tval.value() << 88
         tmp |= self.dest_stval.value() << 80
         tmp |= self.op << 72
-        tmp |= (self.dsp_cep.value() << 64) if self.dsp_cep is not None else 0
+        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
 
         if (isinstance(self.imm_stval, Symbol) 
             or isinstance(self.imm_stval, Operation)
@@ -553,6 +553,14 @@ class Sequencer(Processor):
             self.store(src=DSPConfiguration(dsp_cep="reset"), 
                        dest=Destination(major=Destination.Major.DSP_CFG,
                                         minor=dsp_self._resource_id))
+        
+        @contextmanager
+        def dsp_enabled(dsp_self):
+            start_idx = len(self._Instruction.instances)
+            yield
+            for instruction in self._Instruction.instances[start_idx:]:
+                if "dsp_cep" not in instruction["kwargs"]:
+                    instruction["kwargs"]["dsp_cep"] = dsp_self
             
         self.DSP = ManagedResource(
             "DSP", 
@@ -565,6 +573,7 @@ class Sequencer(Processor):
              "__getitem__": dsp_getitem,
              "start_count": dsp_start_count,
              "stop_count": dsp_stop_count,
+             "enabled": dsp_enabled,
              "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
@@ -610,7 +619,43 @@ class Sequencer(Processor):
         
     def nop(self):
         self.store(src=Source.REG, dest=Destination.REG)
-                
+        
+    def __call__(self, op):
+        """
+        Execute an operation on the sequencer specified by an instance of 
+        :class:`Operation`. The only supported operators are `getitem` and 
+        `setitem`, which will translate to performing reads and writes on the
+        bus (respectively).
+        """
+        if op._op == "getitem":
+            # The first argument will be the object to get an item from, and
+            # the second will be the key. We'll assume that the object to get
+            # the item from is able to be compiled as a source
+            if len(op._args) != 2 or len(op._kwargs) != 0:
+                raise ValueError("`getitem` Operations called on a Sequencer"
+                                 " must have exactly two positional arguments.")
+            return self.bus_read(Operation("add", op._args[0], op._args[1]))
+        if op._op == "setitem":
+            if len(op._args) != 3 or len(op._kwargs) != 0:
+                raise ValueError("`setitem` Operations called on a Sequencer"
+                                 " must have exactly three positional arguments.")
+            return self.bus_write(address=Operation("add", op._args[0], op._args[1]), 
+                                  data=op._args[2])
+        
+        raise ValueError("Operations called on a Sequencer must either be"
+                         " `getitem` or `setitem`.")
+        
+    def compile_all(self):
+        """
+        Calls `Processor.compile_all()` and updates the compiled instructions 
+        to enable any DSP slices as necessary.
+        """
+        super().compile_all()
+        for instruction in self._Instruction.instances:
+            if "dsp_cep_enable" in instruction["kwargs"]:
+                for compiled_instruction in instruction["compiled_instructions"]:
+                    compiled_instruction["dsp_cep"] = instruction["kwargs"]["dsp_cep"]
+            
     @Processor.instruction()
     def STP(self, instruction_resource):
         """
