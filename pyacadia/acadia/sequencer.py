@@ -556,9 +556,9 @@ class Sequencer(Processor):
         
         @contextmanager
         def dsp_enabled(dsp_self):
-            start_idx = len(self._Instruction.instances)
+            start_idx = len(self.Instruction.instances)
             yield
-            for instruction in self._Instruction.instances[start_idx:]:
+            for instruction in self.Instruction.instances[start_idx:]:
                 if "dsp_cep" not in instruction["kwargs"]:
                     instruction["kwargs"]["dsp_cep"] = dsp_self
             
@@ -651,7 +651,7 @@ class Sequencer(Processor):
         to enable any DSP slices as necessary.
         """
         super().compile_all()
-        for instruction in self._Instruction.instances:
+        for instruction in self.Instruction.instances:
             if "dsp_cep_enable" in instruction["kwargs"]:
                 for compiled_instruction in instruction["compiled_instructions"]:
                     compiled_instruction["dsp_cep"] = instruction["kwargs"]["dsp_cep"]
@@ -1193,10 +1193,10 @@ class Sequencer(Processor):
                               when=condition,
                               mask=mask,
                               push_return=True)
-            jump_target = self._Instruction.next_instance()
+            jump_target = self.Instruction.next_instance()
 
         self.block_start(inline=speculation)
-        num_before = self._Instruction.usage()
+        num_before = self.Instruction.usage()
         yield Source.TEST_VALUE
         self.block_end(inline=speculation)
         
@@ -1205,7 +1205,7 @@ class Sequencer(Processor):
         # write, just replace it with an STC
         
         if speculation:
-            jump_target = self._Instruction.next_instance()
+            jump_target = self.Instruction.next_instance()
         else:
             # Return from the block
             self.store(src=Source.STACK, dest=Destination.PC)
@@ -1221,7 +1221,7 @@ class Sequencer(Processor):
         at the end if the condition is not satisfied (analogous to a "do-while" 
         loop in other languages). 
         """
-        return_instruction = self._Instruction.next_instance()
+        return_instruction = self.Instruction.next_instance()
         yield
         mask_determined = (mask is not None)
         for arg in range(2):
@@ -1232,7 +1232,7 @@ class Sequencer(Processor):
         # because if the clauses add any instructions then checking whether the
         # next_instance symbol was assigned will break
         if mask_determined:
-            if not self._Instruction.next_instance_assigned():
+            if not self.Instruction.next_instance_assigned():
                 # No instructions have been added in the block and we can infer 
                 # which argument should be stored in the mask. Therefore, we can
                 # use the hold destination                
@@ -1242,7 +1242,7 @@ class Sequencer(Processor):
                 
                 # Call next_instance() again because store() will mean that
                 # return_instruction will not have the value we want
-                hold_instruction["kwargs"]["src"] = self._Instruction.next_instance()
+                hold_instruction["kwargs"]["src"] = self.Instruction.next_instance()
                 
             # TODO
                 # Alternatively, if we added only one DSP augmenting operation

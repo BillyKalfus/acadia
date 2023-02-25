@@ -14,27 +14,25 @@ class Descriptor:
     trace_length: 'int or Symbol or Operation' = 0
     trace_address: 'int or Symbol or Operation' = 0
     decimate: 'int or Symbol' = 0
-    hold: 'bool' = False
     
     def assemble(self):
         tmp = 0
-        tmp |= self.hold << 40
         
-        if isinstance(self.decimate, Symbol):
-            tmp |= self.decimate.value() << 32
-        else:
-            tmp |= self.decimate << 32
-            
-        if isinstance(self.trace_address, Symbol) or isinstance(self.trace_address, Operation):
-            tmp |= self.trace_address.value() << 16
-        else:
-            tmp |= self.trace_address << 16
-            
         if isinstance(self.trace_length, Symbol) or isinstance(self.trace_length, Operation):
             tmp |= self.trace_length.value()-1
         else:
             tmp |= self.trace_length-1
             
+        if isinstance(self.trace_address, Symbol) or isinstance(self.trace_address, Operation):
+            tmp |= self.trace_address.value() << 32
+        else:
+            tmp |= self.trace_address << 32
+        
+        if isinstance(self.decimate, Symbol):
+            tmp |= self.decimate.value() << (32+16)
+        else:
+            tmp |= self.decimate << (32+16)
+              
         return tmp
     
 class DMA(Processor):
@@ -61,7 +59,6 @@ class DMA(Processor):
         :type hold: `bool`, optional
         """
         fields = {}
-        fields["hold"] = False
         fields["decimate"] = 0
         
         if len(instruction_resource["args"]) == 1:
@@ -77,7 +74,7 @@ class DMA(Processor):
                              f" args={instruction_resource['args']}")
             
         for key in instruction_resource["kwargs"].keys():
-            if key in ["decimate", "hold", "trace_length", "trace_address"]:
+            if key in ["decimate", "trace_length", "trace_address"]:
                 fields[key] = instruction_resource["kwargs"][key]
             else:
                 raise KeyError(f"Unrecognized keyword argument {key}.")

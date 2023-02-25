@@ -8,7 +8,8 @@ __all__ = ["Operable",
            "ManagedResource",
            "ManagedMemory",
            "Processor", 
-           "ProcessorSubroutineMixin"]
+           "ProcessorSubroutineMixin",
+           "Synchronizer"]
 
 from types import MethodType
 from abc import ABC, abstractmethod
@@ -464,24 +465,21 @@ class ManagedMemory(ManagedResource):
         dct_meta_new["word_length"] = res_word_length
         dct_meta_new["byte_length"] = res_byte_length
         
-        # The "default" address will be the word address
-        dct_meta_new["address"] = res_word_address 
-        
         # Add the handlers for getitem and setitem
         operators = dct_meta_new["OPERATORS"] if "OPERATORS" in dct_meta_new else []
         handlers = dct_meta_new["handlers"] if "handlers" in dct_meta_new else {}
         
-        if getitem_handler is not None:
-            if "getitem" not in operators:
-                operators.append("getitem")
-            if "getitem" not in handlers:
-                handlers["getitem"] = getitem_handler
+        if ("getitem" not in operators 
+                and "getitem" not in handlers 
+                and getitem_handler is not None):
+            operators.append("getitem")
+            handlers["getitem"] = getitem_handler
                 
-        if setitem_handler is not None:    
-            if "setitem" not in operators:
-                operators.append("setitem")
-            if "getitem" not in handlers:
-                handlers["getitem"] = setitem_handler    
+        if ("setitem" not in operators 
+                and "setitem" not in handlers 
+                and setitem_handler is not None):
+            operators.append("setitem")
+            handlers["setitem"] = setitem_handler    
                 
         dct_meta_new["OPERATORS"] = operators
         dct_meta_new["handlers"] = handlers
@@ -613,9 +611,24 @@ class Processor(ABC):
     make decisions about the locations in instruction memory from which to
     load the instructions following the branch). Here, we choose to defer 
     this decision to the user.
+    
+    When writing a program for a system comprised of multiple 
+    :class:`Processor` objects, it may become ambiguous which instance a 
+    particular command is intended for (especially if there are multiple 
+    instances of the same hardware). To prevent the code from becoming 
+    unnecessarily verbose, instances of :class:`Processor` can act as context 
+    managers. Upon entering the context, the :class:`Processor` instance will
+    update a class variable that keeps track of the "active" processor context.
+    External functions that create commands for systems of :class:`Processor`
+    objects can then query this variable (using :meth:`active_processor`) to 
+    determine where and how instructions should be generated.
     """
     
+    # Keep track of the instruction set of a given type of Processor
     _instruction_set = {}
+    
+    # Keep track of active processor contexts
+    _processor_contexts = []
     
     @classmethod
     def make_instruction_func(cls, name):
@@ -665,7 +678,7 @@ class Processor(ABC):
 
         """
         def append_instruction(self, *args, **kwargs):
-            instruction_resource = self._Instruction({
+            instruction_resource = self.Instruction({
                 "instruction": name, 
                 "args": args, 
                 "kwargs": kwargs, 
@@ -758,11 +771,43 @@ class Processor(ABC):
         def instruction_address(instruction_self):
             return instruction_self["compiled_address"]
         
-        self._Instruction = ManagedResource(
+        self.Instruction = ManagedResource(
                                 f"Instruction", 
                                 (dict,), 
                                 {"OPERATORS": [],
                                  "address": instruction_address})
+        
+    def __enter__(self):
+        self._processor_contexts.append(self)
+
+    def __exit__(self):
+        self._processor_contexts.pop()
+    
+    def operation_handler(self):
+        """
+        :return: A function which may be called with an operation as its sole
+        argument. Calling the returned function is understood to represent
+        executing an instruction abstracted by the operation.
+        :rtype: callable
+        """
+        def _handler(op):
+            return self(op)
+        return _handler
+        
+    @classmethod
+    def active_processor(cls):
+        """
+        Get the innermost processor context. If called when no context is 
+        active, an error is thrown.
+        :return: The :class:`Processor` instance establishing the innermost
+        context.
+        :rtype: :class:`Processor`
+        """
+        if len(cls._processor_contexts) == 0:
+            raise ValueError("Active processor queried outside of any"
+                             " processor context.")
+            
+        return cls._processor_contexts[-1]
             
     def block_start(self, inline=False, previous_instruction=False):
         """
@@ -777,7 +822,7 @@ class Processor(ABC):
         :type previous_instruction: `bool`, optional
         """
         if previous_instruction:
-            self._Instruction.instances[-1]["inline_block_start" if inline else "block_start"] = True
+            self.Instruction.instances[-1]["inline_block_start" if inline else "block_start"] = True
         else:
             if inline:
                 self._inline_block_start_next = True
@@ -801,7 +846,7 @@ class Processor(ABC):
             else:
                 self._block_end_next = True
         else:
-            self._Instruction.instances[-1]["inline_block_end" if inline else "block_end"] = True
+            self.Instruction.instances[-1]["inline_block_end" if inline else "block_end"] = True
         
     def compile_all(self, overwrite=False):
         """
@@ -835,7 +880,7 @@ class Processor(ABC):
         block_current = 0
                 
         # Compile every instruction and arrange blocks as necessary
-        for instruction in self._Instruction.instances:
+        for instruction in self.Instruction.instances:
             compilation_func = self._instruction_set[instruction["instruction"]]
             
             # Create a new block if necessary
@@ -930,3 +975,125 @@ class ProcessorSubroutineMixin(ABC):
         """
         pass
     
+    
+class SynchronizedFunction:
+    """
+    A callable wrapper for functions that are to notify :class:`Synchronizer`
+    instances of their invocations. See the documentation for 
+    :class:`Synchronizer` for a description of this class' role.
+    """
+    def __init__(self, synchronizer, func):
+        self._synchronizer = synchronizer
+        self._func = func
+        
+    def __get__(self, obj, objtype=None):
+        self._processor = obj
+        return self
+    
+    def __call__(self, *args, **kwargs):
+        self._synchronizer.add({"function": self._func.__name__, 
+                                "processor": self._processor, 
+                                "args": args, 
+                                "kwargs": kwargs})
+        self._func(self._processor, *args, **kwargs)
+    
+class Synchronizer:
+    """
+    A class for organizing instructions across processors and implementing 
+    synchronization routines. Specific routines are carried out by dedicated 
+    subclasses for enforcing different types of synchronization, and an error 
+    will be thrown if an instruction is placed into a synchronization block 
+    with which it is not compatible.
+    
+    Instances of :class:`Synchronizer` are context managers and the statements
+    within them define the operations to be synchronized in some way. In order
+    for an operation to be considered a valid command for a given type of 
+    :class:`Synchronizer`, it must be a function decorated with the 
+    :class:`Synchronizer` object's :meth:`synchronizer` decorator. This 
+    decorator wraps the decorated function in a :class:`SynchronizedFunction` 
+    object, whose purpose is solely to capture both the :class:`Synchronizer` 
+    to which it belongs and the :class:`Processor` to which the 
+    :class:`Synchronizer` belongs. 
+    
+    Synchronizers are instantiated as members of a :class:`Processor` class. 
+    Conceptually, the synchronization routines implemented by a 
+    :class:`Synchronizer` is local to one :class:`Processor`, so in principle 
+    they could have been implemented as instance members, but this requires 
+    more closures and enforces better code organization when being used. The 
+    only restriction this applies is that it is not allowed to create a 
+    synchronization context on one :class:`Processor` inside of the same 
+    synchronization context on another :class:`Processor`, which wouldn't make
+    sense anyway.
+    
+    Synchronization is carried out almost entirely by Python dunder methods, so
+    following the flow of function calls can be nontrivial. Let's walk through 
+    an example to illustrate the interplay between the classes:
+    
+    ```
+    class SomeProcessor:
+        synchronizer = Synchronizer()
+
+        @synchronizer.synchronized
+        def command(self, *args, **kwargs):
+            do_synchronized_things()
+    ```
+    
+    The decorator returns a :class:`SynchronizedFunction` initialized with a
+    reference to `synchronizer` (and of course, to `command` as well). 
+    
+    A synchronization context is established like so:
+    
+    ```
+    p = SomeProcessor()
+    
+    with p.synchronizer:
+        p.command()
+    ```
+    
+    When the context is entered, the :class:`Synchronizer` marks itself as 
+    active and initializes a `list` for keeping track of command calls. When
+    `p.command()` is called, the Python interpreter immediately looks to see 
+    if `p` has any attribute "command", which it does - the 
+    :class:`SynchronizedFunction` that was generated by the decorator. This 
+    means that when `p.command()` is called, the :meth:`__get__` method of the 
+    :class:`SynchronizedFunction` is called with `p` as its argument. The 
+    return value is understood to be the function that is called. The 
+    :class:`SynchronizedFunction` stores a reference to `p` and returns itself.
+    Because `p.command()` is a function call and `p.command` returned a 
+    :class:`SynchronizedFunction`, the :meth:`__call__` method is invoked on 
+    the :class:`SynchronizedFunction`, which reports to its synchronizer that 
+    the function was called and then calls the decorated function on the 
+    previously-captured :class:`Processor` object.
+    """
+    def __init__(self):
+        self._active = False
+    
+    def synchronized(self, func):
+        return SynchronizedFunction(self, func)
+    
+    def __call__(self, *args, **kwargs):
+        """
+        Configures the :class:`Synchronizer` when the context is being entered.
+        """
+        return self
+    
+    def add(self, obj):
+        if not self._active:
+            raise ValueError("Attempted call to a synchronized function"
+                             " outside of a synchronization context.")
+        self._calls.append(obj)
+    
+    def __enter__(self):
+        if self._active:
+            raise ValueError("Synchronizer is already active.")
+        self._active = True
+        self._calls = []
+                
+    def __exit__(self, *args, **kwargs):
+        self._active = False
+
+        
+        
+   
+    
+        

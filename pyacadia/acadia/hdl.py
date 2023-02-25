@@ -195,7 +195,7 @@ class BusDataport(BusDevice, HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
         
-        # Make the delayed enable signals
+        # Make the delayed write enable signals
         for d in range(1,self._max_write_delay):
             hdl += f'    signal master_bus_wr_{"d"*d}: std_logic;\n'
         hdl += "\n"
@@ -210,7 +210,7 @@ class BusDataport(BusDevice, HDLModule):
                 hdl += f'\n'
         hdl += f'\nbegin\n'
         
-        # Delay the enable signals
+        # Delay the write enable signals
         if self._max_write_delay > 1:
             hdl += f"    delay_enable_proc: process(master_bus_clk) begin\n"
             hdl += f"        if rising_edge(master_bus_clk) then\n"

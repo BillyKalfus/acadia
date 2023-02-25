@@ -31,8 +31,8 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
                        FunctionType : "{obj}",
                       }
     
-    def __init__(self, instruction_limit=None):
-        super().__init__(instruction_limit)
+    def __init__(self):
+        super().__init__()
         
         # Create a ManagedResource for keeping track of imports and allowing
         # their members to be called
@@ -106,13 +106,19 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             
         # Assign the compiled lines to the instruction resource
         instruction_resource["compiled_instructions"] = indented_lines
+        
+    def call(self, *args, **kwargs):
+        """
+        Create an :class:`Operation` to call a function on the PythonProcessor.
+        """
+        return Operation("call", *args, **kwargs)
     
     def call_subroutine(self, instruction_resource):
         """
         Implement subroutine calls by extracting the function from the
         :class:`PythonProcessor` instance at runtime, along with the arguments.
         """
-        instruction_instance = f"self._Instruction.instances[{instruction_resource._resource_id}]"
+        instruction_instance = f"self.Instruction.instances[{instruction_resource._resource_id}]"
         code_string = (f"self._subroutines[{instruction_resource['instruction']}]"
                        f"(*({instruction_instance}[\'args\']), "
                        f"**({instruction_instance}[\'kwargs\']))")
@@ -211,14 +217,14 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             if not isinstance(operation._args[1], str):
                 raise TypeError(f"Attribute must be a string; received {operation._args[1]}")
                 
-            obj = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
+            obj = self.compile_arg(operation._args[0])
             return f"{obj}.{operation._args[1]}"
         
         if operation._op == "setattr":
             if len(operation._args) != 3 or len(operation._kwargs) != 0:
                 raise ValueError(f"A setattr Operation must have exactly three positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            obj = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
+            obj = self.compile_arg(operation._args[0])
             translated_value = self.compile_arg(operation._args[2])
             return f"setattr({obj}, \"{operation._args[1]}\", {translated_value})"
         
@@ -226,7 +232,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             if len(operation._args) != 2 or len(operation._kwargs) != 0:
                 raise ValueError(f"A getitem Operation must have exactly two positional arguments"
                                  f" (got args={operation._args}, kwargs={operation._kwargs}).")
-            obj = operation._args[0] if isinstance(operation._args[0], str) else self.compile_arg(operation._args[0], str)
+            obj = self.compile_arg(operation._args[0])
             translated_key = self.compile_arg(operation._args[1])
             return f"{obj}[{translated_key}]"
         
@@ -238,6 +244,21 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             translated_key = self.compile_arg(operation._args[1])
             translated_value = self.compile_arg(operation._args[2])
             return f"{obj}[{translated_key}] = {translated_value}"
+        
+        if operation._op == "getdata":
+            if len(operation._args) != 1 or len(operation._kwargs) != 0:
+                raise ValueError(f"A getdata Operation must have exactly one positional argument"
+                                 f" (got args={operation._args}, kwargs={operation._kwargs}).")
+            translated_key = self.compile_arg(operation._args[0])
+            return f"self._data[{translated_key}]"
+        
+        if operation._op == "setdata":
+            if len(operation._args) != 2 or len(operation._kwargs) != 0:
+                raise ValueError(f"A setdata Operation must have exactly two positional arguments"
+                                 f" (got args={operation._args}, kwargs={operation._kwargs}).")
+            translated_key = self.compile_arg(operation._args[0])
+            translated_value = self.compile_arg(operation._args[1])
+            return f"self._data[{translated_key}] = {translated_value}"
         
         if operation._op in ["neg", "abs", "invert"]:
             # Unary operators
@@ -298,7 +319,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         """
         Access a Python object in the namespace of the compiled program.
         """
-        return Operation("getitem", f"self._data", key)
+        return Operation("getdata", key)
         
     def __setitem__(self, key, value):
         """
@@ -309,28 +330,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         :type key: `str`
         :param value: The value to assign to the variable
         """
-        return self(Operation("setitem", f"self._data", key, value))
-    
-    def __getattr__(self, key):
-        """
-        Access a Python object in the namespace of the compiled program.
-        """
-        if key.startswith("_") or key == "Import" or key in self._instruction_set or hasattr(self.__class__, key):
-            return super().__getattribute__(key)
-        return Operation("getitem", f"self._data", key)
-        
-    def __setattr__(self, key, value):
-        """
-        Assign a value to a Python variable in the namespace of the compiled 
-        program.
-        
-        :param key: Name of the variable to be assigned.
-        :type key: `str`
-        :param value: The value to assign to the variable
-        """
-        if key.startswith("_") or key == "Import" or key in self._instruction_set or hasattr(self.__class__, key):
-            return super().__setattr__(key, value)
-        self(Operation("setitem", f"self._data", key, value))
+        return self(Operation("setdata", key, value))
     
     # Macros for control flow
     

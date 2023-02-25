@@ -169,6 +169,7 @@ set files [list \
  [file normalize "${origin_dir}/acadia_axi_bram_ctrl_addr_slice.vhd" ]\
  [file normalize "${origin_dir}/acadia_fast_complex_macc.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma.vhd" ]\
+ [file normalize "${origin_dir}/acadia_sysref_capture.vhd" ]\
  [file normalize "${origin_dir}/acadia_bram_write_pipeline.vhd" ]\
 ]
 set imported_files [import_files -fileset sources_1 $files]
@@ -230,6 +231,17 @@ set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
 set file "acadia_dma.vhd"
+set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
+set_property -name "file_type" -value "VHDL" -objects $file_obj
+set_property -name "is_enabled" -value "1" -objects $file_obj
+set_property -name "is_global_include" -value "0" -objects $file_obj
+set_property -name "library" -value "xil_defaultlib" -objects $file_obj
+set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
+set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
+set_property -name "used_in_simulation" -value "1" -objects $file_obj
+set_property -name "used_in_synthesis" -value "1" -objects $file_obj
+
+set file "acadia_sysref_capture.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -684,6 +696,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_bd_pin -dir I seq_interconnect_aresetn
   create_bd_pin -dir I seq_peripheral_aresetn
   create_bd_pin -dir O -from 31 -to 0 sequencer_flags
+  create_bd_pin -dir O CLK104_SYNC_IN
 
   # Create interface connections
 
@@ -857,6 +870,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   # Create ports
   set ADCIO [ create_bd_port -dir I -from 15 -to 0 ADCIO ]
   set DACIO [ create_bd_port -dir O -from 15 -to 0 DACIO ]
+  set CLK104_SYNC_IN [ create_bd_port -dir O CLK104_SYNC_IN ]
 
   # Create instance: DDR4_C0_MIG, and set properties
   set DDR4_C0_MIG [ create_bd_cell -type ip -vlnv xilinx.com:ip:ddr4:2.2 DDR4_C0_MIG ]
@@ -1766,6 +1780,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net xpm_cdc_DDR4_C1_MIG_dest_rst_out [get_bd_pins DDR4_C1_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C1_MIG/dest_rst_out]
   connect_bd_net -net xpm_cdc_seq_rst_dest_rst_out [get_bd_pins sequencer/nrst] [get_bd_pins xpm_cdc_seq_rst/dest_rst_out]
   connect_bd_net -net xpm_cdc_seq_run_dest_rst_out [get_bd_pins sequencer/run] [get_bd_pins xpm_cdc_seq_run/dest_rst_out]
+  connect_bd_net -net hedgehog_CLK104_SYNC_IN [get_bd_ports CLK104_SYNC_IN] [get_bd_pins hedgehog/CLK104_SYNC_IN]
 
   # Create address segments
   assign_bd_address -offset 0x80020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_ddr/S_AXI/Reg] -force

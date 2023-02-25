@@ -1,9 +1,5 @@
 create_clock -period 3.3333 -name clk104_pl_clk [get_ports CLK104_PL_CLK_clk_p]
 
-set_input_delay -clock [get_clocks clk104_pl_clk] -min -add_delay 3.3533 [get_ports CLK104_PL_SYSREF_clk_p]
-set_input_delay -clock [get_clocks clk104_pl_clk] -max -add_delay 3.3733 [get_ports CLK104_PL_SYSREF_clk_p]
-
-
 # Set multicycle path constraints on internal signals to the RF data converter (from the example design)
 set_multicycle_path -to [get_pins -filter {REF_PIN_NAME== D} -of [get_cells -hier -filter {name =~ acadia_bd_i/hedgehog/rfdc/inst/IP2Bus_Data_reg*}]] -setup 2
 set_multicycle_path -to [get_pins -filter {REF_PIN_NAME== D} -of [get_cells -hier -filter {name =~ acadia_bd_i/hedgehog/rfdc/inst/IP2Bus_Data_reg*}]] -hold 1
@@ -19,10 +15,10 @@ set_property IOSTANDARD  LVCMOS18 [get_ports "GPIO_SPI_tri_o[0]"] ;
 set_property IOSTANDARD  LVCMOS18 [get_ports "GPIO_SPI_tri_o[1]"] ;
 
 # CLK104 connections
-set_property PACKAGE_PIN D11       [get_ports "CLK104_PL_SYSREF_N"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89
-set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_SYSREF_N"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89
-set_property PACKAGE_PIN E11       [get_ports "CLK104_PL_SYSREF_P"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8P_HDGC_AD4P_89
-set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_SYSREF_P"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8P_HDGC_AD4P_89
+set_property PACKAGE_PIN D11       [get_ports "CLK104_PL_SYSREF_clk_n"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89
+set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_SYSREF_clk_n"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89
+set_property PACKAGE_PIN E11       [get_ports "CLK104_PL_SYSREF_clk_p"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8P_HDGC_AD4P_89
+set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_SYSREF_clk_p"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8P_HDGC_AD4P_89
 set_property PACKAGE_PIN E9        [get_ports "CLK104_PL_CLK_clk_n"] ;      # Bank  89 VCCO - VCC1V8   - IO_L7N_HDGC_AD5N_89
 set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_CLK_clk_n"] ;      # Bank  89 VCCO - VCC1V8   - IO_L7N_HDGC_AD5N_89
 set_property PACKAGE_PIN E10       [get_ports "CLK104_PL_CLK_clk_p"] ;      # Bank  89 VCCO - VCC1V8   - IO_L7P_HDGC_AD5P_89
@@ -31,8 +27,8 @@ set_property PACKAGE_PIN BA22      [get_ports "CLK104_SFP_REC_CLK_N"] ; # Bank  
 set_property IOSTANDARD  LVDS      [get_ports "CLK104_SFP_REC_CLK_N"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5N_T0U_N9_AD14N_66
 set_property PACKAGE_PIN AY22      [get_ports "CLK104_SFP_REC_CLK_P"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5P_T0U_N8_AD14P_66
 set_property IOSTANDARD  LVDS      [get_ports "CLK104_SFP_REC_CLK_P"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5P_T0U_N8_AD14P_66
-# set_property PACKAGE_PIN L15       [get_ports "CLK104_SYNC_IN"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
-# set_property IOSTANDARD  LVCMOS18  [get_ports "CLK104_SYNC_IN"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
+set_property PACKAGE_PIN L15       [get_ports "CLK104_SYNC_IN"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "CLK104_SYNC_IN"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
 
 # SI570
 # set_property PACKAGE_PIN AR19            [get_ports "USER_SI570_C0_N"] ; # Bank  65 VCCO - VCC1V2   - IO_L12N_T1U_N11_GC_65

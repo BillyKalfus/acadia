@@ -55,13 +55,18 @@ entity acadia_dma is
         descriptor_address_fifo_in           : in  std_logic_vector(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0);
         descriptor_address_fifo_wr           : in  std_logic;
         descriptor_address_fifo_almost_empty : out std_logic;
-        descriptor_address_fifo_empty : out std_logic;
+        descriptor_address_fifo_empty        : out std_logic;
         
         running        : out std_logic
     );
+
+    attribute USE_DSP : string;
+
 end acadia_dma;
 
 architecture rtl of acadia_dma is 
+    
+    attribute USE_DSP of rtl : architecture is "YES";
 
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;
@@ -87,35 +92,28 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_MODE of mem_control_addr    : SIGNAL is "Master";
 
     -- Inverted reset
-    signal rst                                  : std_logic;
+    signal rst              : std_logic;
 
     -- Run state
-    signal running_int                          : std_logic;
+    signal running_int      : std_logic;
 
     -- Descriptor address FIFO
-    signal descriptor_address_fifo_empty_int    : std_logic;
-    signal descriptor_address_fifo_rd_en        : std_logic;
-    signal descriptor_load                      : std_logic;
+    signal fifo_empty_int   : std_logic;
+    signal fifo_rd_en_int   : std_logic;
                                                 
     -- Descriptor fields
-    signal desc_lm1                             : unsigned(15 downto 0);
-    signal desc_addr                            : unsigned(15 downto 0);
-    signal desc_dec                             : unsigned(7 downto 0);
-    signal desc_hold                            : std_logic;
+    signal descriptor_lm1   : unsigned(31 downto 0);
+    signal descriptor_addr  : unsigned(15 downto 0);
+    signal descriptor_dec   : unsigned(7 downto 0);
     
     -- Progress counters
-    signal dec_cycle                            : unsigned(7 downto 0);
-    signal descriptor_point                     : unsigned(15 downto 0);
+    signal decimation_count : unsigned(7 downto 0);
+    signal descriptor_point : unsigned(15 downto 0);
     
     -- Combinational progress flags
-    signal point_first_dec_cycle                : std_logic;
-    signal point_last_dec_cycle                 : std_logic;
-    signal descriptor_first_point               : std_logic;
-    signal descriptor_last_point                : std_logic;
+    signal descriptor_done  : std_logic;
+    signal decimation_done  : std_logic;
     
-    signal descriptor_first_cycle               : std_logic;
-    signal descriptor_last_cycle                : std_logic;
-         
 begin    
     
     -- Create an active-high reset for the fifo
@@ -123,15 +121,6 @@ begin
     
     -- Control the interface to descriptor memory
     descriptor_mem_clk  <= clk;
-
-    -- Establish some progress flags
-    point_first_dec_cycle  <= '1' when to_integer(dec_cycle) = 0        else '0';
-    point_last_dec_cycle   <= '1' when dec_cycle = desc_dec             else '0';
-    descriptor_first_point <= '1' when to_integer(descriptor_point) = 0 else '0';
-    descriptor_last_point  <= '1' when descriptor_point = desc_lm1      else '0';
-    
-    descriptor_first_cycle <= descriptor_first_point and point_first_dec_cycle;
-    descriptor_last_cycle <= descriptor_last_point and point_last_dec_cycle;
 
     descriptor_address_fifo_inst : xpm_fifo_sync
         generic map (
@@ -162,12 +151,12 @@ begin
             
             -- The output connects directly to the descriptor memory
             dout  => descriptor_mem_addr,
-            rd_en => descriptor_address_fifo_rd_en, 
+            rd_en => fifo_rd_en_int, 
             
             -- We'll use the empty signal to determine when to stop,
             -- but we don't need the full signal because writing to 
             -- a full FIFO is nondestructive
-            empty        => descriptor_address_fifo_empty_int, 
+            empty        => fifo_empty_int, 
             almost_empty => descriptor_address_fifo_almost_empty,
             full         => open,                  
             
@@ -181,12 +170,17 @@ begin
         
     -- Because the FIFO is FWFT, we can pulse the FIFO read enable
     -- once we've already started the descriptor
-    descriptor_address_fifo_rd_en <= running_int and descriptor_first_cycle;
-    descriptor_address_fifo_empty <= descriptor_address_fifo_empty_int;
+    fifo_rd_en_int <= trigger or descriptor_done;
+    descriptor_address_fifo_empty <= fifo_empty_int;
+
+    -- Establish some progress flags
+    -- These should ideally be mapped into the DSP slice pattern detector
+    decimation_done <= '1' when decimation_count = descriptor_dec else '0';
+    descriptor_done <= '1' when descriptor_point = descriptor_lm1 else '0';
                                 
     running_int_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0' or (descriptor_last_cycle and descriptor_address_fifo_empty_int) = '1') then
+            if(nrst = '0' or (descriptor_done and fifo_empty_int) = '1') then
                 running_int <= '0';
             elsif(trigger = '1') then
                 running_int <= '1';
@@ -206,37 +200,36 @@ begin
     -- - If we're in the last cycle of a descriptor, then we need to load.
     descriptor_field_load_proc: process(clk) begin
         if rising_edge(clk) then
-            if((trigger or descriptor_last_cycle) = '1') then
-                desc_lm1  <= unsigned(descriptor_mem_dout(15 downto 0));
-                desc_addr <= unsigned(descriptor_mem_dout(31 downto 16));
-                desc_dec  <= unsigned(descriptor_mem_dout(39 downto 32));
-                desc_hold <= descriptor_mem_dout(40);
+            if(trigger = '1' or descriptor_done = '1') then
+                descriptor_lm1  <= unsigned(descriptor_mem_dout(31 downto 0));
+                descriptor_addr <= unsigned(descriptor_mem_dout(47 downto 32));
+                descriptor_dec  <= unsigned(descriptor_mem_dout(55 downto 48));
             end if;
         end if;
     end process descriptor_field_load_proc;
-    
-    -- Count cycles for decimation
-    dec_count_proc: process(clk) begin
-        if rising_edge(clk) then
-            if(point_last_dec_cycle = '1' or trigger = '1') then
-                dec_cycle <= (others => '0');
-            else
-                dec_cycle <= dec_cycle + 1;
-            end if;
-        end if;
-    end process dec_count_proc;
-        
+            
     -- Progress through the descriptor one point at a time
     descriptor_point_proc: process(clk) begin
         if rising_edge(clk) then
-            if(trigger = '1' or (point_last_dec_cycle and descriptor_last_point) = '1') then
+            if(trigger = '1' or descriptor_done = '1') then
                 descriptor_point <= (others => '0');
-            elsif(point_last_dec_cycle = '1') then
+            else
                 descriptor_point <= descriptor_point + 1;
             end if;
         end if;
     end process descriptor_point_proc;
     
+    -- Count cycles for decimation
+    decimation_count_proc: process(clk) begin
+        if rising_edge(clk) then
+            if(trigger = '1' or decimation_done = '1') then
+                decimation_count <= (others => '0');
+            else
+                decimation_count <= decimation_count + 1;
+            end if;
+        end if;
+    end process decimation_count_proc;
+        
     -- Drive the output interfaces
     mem_control_clk  <= clk;
       
@@ -244,16 +237,16 @@ begin
         if rising_edge(clk) then
             -- Stream the address out of the AXI-stream port
             -- Data present on the stream is considered valid when its NOT during decimation
-            addr_tvalid <= running_int and (not trigger) and point_first_dec_cycle;
-            addr_tdata  <= std_logic_vector(descriptor_point + desc_addr);
-            addr_tlast  <= descriptor_last_point and point_first_dec_cycle;
+            addr_tvalid <= running_int and decimation_done;
+            addr_tdata  <= std_logic_vector(descriptor_point + descriptor_addr);
+            addr_tlast  <= running_int and descriptor_done;
             
             -- Control the memory master port
             -- Memory will be accessed at the beginning of decimation, after which the enable
             -- pin will be deasserted
             -- The memory interface will be reset either when de-triggered, or when the sequence is complete 
-            mem_control_addr <= std_logic_vector(descriptor_point + desc_addr);
-            mem_control_rst  <= (not running_int) or trigger;
+            mem_control_addr <= std_logic_vector(descriptor_point + descriptor_addr);
+            mem_control_rst  <= not running_int;
             mem_control_en   <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
         end if;
     end process output_proc;
