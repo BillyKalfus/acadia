@@ -3125,7 +3125,7 @@ typedef struct {
 void INITIALIZE_METAL_INIT_DEFAULTS(struct metal_init_params*);
 u32 DEF_XRFDC_BLOCK_BASE(u32, u32, u32);
 int metal_init(const struct metal_init_params *);
-void WriteReg16(XRFdc*, u32, u32, u32);
+void XRFdc_WriteReg16Wrapper(XRFdc*, u32, u32, u32);
 
 XRFdc_Config *XRFdc_LookupConfig(u16 DeviceId);
 u32 XRFdc_RegisterMetal(XRFdc *InstancePtr, u16 DeviceId, struct metal_device **DevicePtr);

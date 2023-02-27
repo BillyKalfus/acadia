@@ -218,37 +218,14 @@ class StandardFirmware(Firmware):
         ps_irq = BusDataport(name="ps_irq", ports=ps_irq_dataports)
         sequencer_bus_decoder.add(ps_irq)
         self.add(ps_irq)
-        
-        ps_gdma_dataports = []
-        ps_gdma_dataports += [{"name": f"cvld",
-                                   "direction": BusDataport.OUTPUT,
-                                   "offset": 0,
-                                   "width": StandardFirmware.NUM_PS_GDMA,
-                                   "gate": BusDataport.GATE_REGCE,
-                                   "pipeline": 2}]
-        ps_gdma_dataports += [{"name": f"tack",
-                                   "direction": BusDataport.OUTPUT,
-                                   "offset": StandardFirmware.NUM_PS_GDMA,
-                                   "width": StandardFirmware.NUM_PS_GDMA,
-                                   "gate": BusDataport.GATE_REGCE,
-                                   "pipeline": 2}]
-        ps_gdma_dataports += [{"name": f"cack",
-                                   "direction": BusDataport.INPUT,
-                                   "offset": 0,
-                                   "width": StandardFirmware.NUM_PS_GDMA,
-                                   "pipeline": 2}]
-        ps_gdma_dataports += [{"name": f"tvld",
-                                   "direction": BusDataport.INPUT,
-                                   "offset": StandardFirmware.NUM_PS_GDMA,
-                                   "width": StandardFirmware.NUM_PS_GDMA,
-                                   "pipeline": 2}]
-        ps_gdma = BusDataport(name="ps_gdma", ports=ps_gdma_dataports)
-        sequencer_bus_decoder.add(ps_gdma)
-        self.add(ps_gdma)    
 
         # Create a register file for RFDC real-time updates and connect it to the sequencer bus
         rfdc_rts_regs = BusDevice("rfdc_rts_regs", size=256)
         sequencer_bus_decoder.add(rfdc_rts_regs, pipeline=True)
+        
+        # Create a register file for interacting with the PS GDMA
+        zdma_controller = BusDevice("zdma_controller", size=64)
+        sequencer_bus_decoder.add(zdma_controller, pipeline=True)
         
         clk104_sync_in_dataports = [{"name": f"sync",
                                        "direction": BusDataport.OUTPUT,
@@ -547,7 +524,12 @@ class StandardFirmware(Firmware):
                 for block in range(4):
                     # We'll only connect the DAC TDD signals here
                     connect_bd_net(f, f"hedgehog/rfdc/dac{tile}{block}_tdd_mode", f"hedgehog/rfdc_rts_regs/dac{tile}{block}_tdd_mode")
-
+            
+            # Create the interface to the PS DMA
+            create_module(f, f"hedgehog/zdma_controller", "acadia_zdma_controller")
+            connect_bd_net(f, "hedgehog/zdma_controller/nrst", "hedgehog/seq_peripheral_aresetn")
+            connect_bd_intf_net(f, "hedgehog/sequencer_bus_decoder/zdma_controller", "hedgehog/zdma_controller/master_bus")
+            
             # Add all the dataports
             for module in self._modules:
                 if isinstance(module, BusDataport):
@@ -716,10 +698,10 @@ class StandardFirmware(Firmware):
                 
             # ------------------- PS GDMA Connections -------------------- #
 
-            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/cack", f"hedgehog/ps_gdma_cack")
-            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/tvld", f"hedgehog/ps_gdma_tvld")
-            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/tack", f"hedgehog/ps_gdma_tack")
-            connect_bd_net(f, f"hedgehog/ps_gdma_dataport/cvld", f"hedgehog/ps_gdma_cvld")
+            connect_bd_net(f, f"hedgehog/zdma_controller/cack", f"hedgehog/ps_gdma_cack")
+            connect_bd_net(f, f"hedgehog/zdma_controller/tvld", f"hedgehog/ps_gdma_tvld")
+            connect_bd_net(f, f"hedgehog/zdma_controller/tack", f"hedgehog/ps_gdma_tack")
+            connect_bd_net(f, f"hedgehog/zdma_controller/cvld", f"hedgehog/ps_gdma_cvld")
             connect_bd_net(f, f"hedgehog/ps_irq_dataport/gdma_irq", f"hedgehog/ps_gdma_irq")
             
             # ------------------- ADC AXIS Switch -------------------- #
@@ -1274,6 +1256,39 @@ class StandardFirmware(Firmware):
                 # Connect the DAC Descriptor BRAMs to the memory controller through a pipeline
                 connect_bd_intf_net(f, f"hedgehog/mem_decoder/dac_dma{channel}_descriptor_mem", f"hedgehog/dac_dma{channel}_descriptor_mem/BRAM_PORTA") 
                 
+def livecallable(imperative=True):
+    """
+    A decorator for wrapping functions that the user may want to call live on 
+    hardware instead of creating an instruction for a :class:`PythonProcessor`.
+    The behavior is determined by the active processor at the time of invocation.
+    :param imperative: Determines whether a new instruction for a 
+    :class:`PythonProcessor` should be created when called in the context of one.
+    If `False`, `Processor.call` is executed and returned. If `True`, a new 
+    instruction is created to by calling the :class:`Processor` instance on an
+    invocation of `Processor.call`.
+    """
+                
+    def livecallable_inner(func):
+        
+        @wraps(func)
+        def _new_func(*args, **kwargs):
+            proc = Processor.active_processor()
+            if proc is None:
+                return func(*args, **kwargs)
+            elif isinstance(proc, PythonProcessor):
+                call = proc.call(func, *args, **kwargs)
+                if imperative:
+                    return proc(call)
+                return call
+            else:
+                raise TypeError(f"Function {func} must either be called outside of"
+                                 " a processor context or within one for a"
+                                 " `PythonProcessor`.")
+
+        return _new_func
+    
+    return livecallable_inner
+                
 class NCOSynchronizer(Synchronizer):
     """
     Synchronizes updates for NCOs.
@@ -1285,19 +1300,18 @@ class NCOSynchronizer(Synchronizer):
         
     def __exit__(self, *args, **kwargs):        
         proc = Processor.active_processor()
-        if isinstance(proc, PythonProcessor):
+        if proc is None or isinstance(proc, PythonProcessor):
             # Set the event sources
             for (function,channel,args,kwargs) in self._calls.values():
                 channel.set_nco_event_source(self._event_source)
                 
                 if self._event_source == "immediate":
-                    offset = proc.call(f"pyxrfdc.lib.XRFDC_{'ADC' if self.is_adc() else 'DAC'}_UPDATE_DYN_OFFSET")
-                    proc(proc.call("XRFdc_ClrSetReg", 
-                                   proc["rfdc"], 
+                    offset = channel.RFDC_def(f"XRFDC_{'ADC' if channel.is_adc() else 'DAC'}_UPDATE_DYN_OFFSET")
+                    channel.RFDC_call("ClrSetReg", 
                                    channel._base_address, 
                                    offset, 
-                                   proc.call("pyxrfdc.lib.XRFDC_UPDT_EVNT_MASK"),
-                                   proc.call(f"pyxrfdc.lib.XRFDC_UPDT_EVNT_NCO_MASK")))
+                                   channel.RFDC_def(f"XRFDC_UPDT_EVNT_MASK"),
+                                   channel.RFDC_def(f"XRFDC_UPDT_EVNT_NCO_MASK"))
                     
         elif isinstance(proc, Sequencer):
             if self._event_source not in ["immediate", "pl"]:
@@ -1364,7 +1378,6 @@ class NCOSynchronizer(Synchronizer):
                 # Pulse it for one cycle
                 proc.bus_write(address=rts_address + 0x6C, data=nco_update_request)
                 proc.bus_write(address=rts_address + 0x6C, data=0)
-                raise NotImplemented("PL event synchronization not yet supported")
         else:
             raise TypeError(f"Invalid processor for NCO synchronization: {proc}")
                 
@@ -1513,61 +1526,108 @@ class Channel:
                        converter_type=xrfdc.XRFDC_ADC_TILE, 
                        **kwargs)
     
+    @livecallable()
+    @classmethod
+    def RFDC_init(cls):
+        """
+        Initializes the RFDC library and stores a reference to the initialized
+        driver instance internally. This function should only be called on live
+        hardware.
+        """
+        import pyxrfdc as xrfdc
+        cls._rfdc = xrfdc.ffi.new("XRFdc*")
+        cls._device_ptr = xrfdc.ffi.new("struct metal_device*")
+
+        metal_init_params = xrfdc.ffi.new("struct metal_init_params*")
+        xrfdc.lib.INITIALIZE_METAL_INIT_DEFAULTS(metal_init_params)
+
+        config_ptr = xrfdc.lib.XRFdc_LookupConfig(0)
+        if config_ptr is xrfdc.ffi.NULL:
+            raise ValueError("XRFdc_LookupConfig failed.")
+
+        cls.RFDC_call("RegisterMetal", 0, cls._device_ptr)
+        cls.RFDC_call("CfgInitialize", config_ptr)
+        
+    @livecallable()
+    @classmethod
+    def RFDC_call(cls, func_name, *args, **kwargs):
+        """
+        Call a function in the XRFDC driver. If no Processor is active, it is
+        assumed that the code is being run live on hardware and should be 
+        executed immediately.
+        :param func_name: Name of RFDC function to execute. Omit any "XRFdc_"
+        prefix.
+        :type func_name: str
+        """
+        if not hasattr(cls, "_rfdc"):
+            raise ValueError("RFDC driver not initialized.")
+            
+        if getattr(xrfdc.lib, f"XRFdc_{func_name}")(cls._rfdc, *args, **kwargs) != pyxrfdc.lib.XRFDC_SUCCESS:
+            raise ValueError(f"XRFdc_{func_name} failed.")
+            
+    @livecallable(imperative=False)
+    @classmethod
+    def RFDC_def(cls, name):
+        """
+        Get a definition from the XRFDC library by name.
+        """
+        if not hasattr(cls, "_rfdc"):
+            raise ValueError("RFDC driver not initialized.")
+            
+        return getattr(xrfdc.lib, name)
+    
+    @livecallable(imperative=False)
+    @classmethod
+    def RFDC_struct(cls, name, init=None):
+        """
+        Get a definition from the XRFDC library by name.
+        """
+        if not hasattr(cls, "_rfdc"):
+            raise ValueError("RFDC driver not initialized.")
+            
+        return xrfdc.ffi.new(name, init)
+    
+    @livecallable(imperative=False)
+    @classmethod
+    def IP_status(cls):
+        """
+        Get the status of the RFDC IP.
+        """
+        ip_status = xrfdc.ffi.new("XRFdc_IPStatus*")
+        cls.RFDC_call("GetIPStatus", ip_status)
+        return ip_status
+    
+    @livecallable(imperative=False)
+    def status(self):
+        """
+        Get the status of the converter. 
+        """
+        block_status = xrfdc.ffi.new("XRFdc_BlockStatus*")
+        self.RFDC_call("GetBlockStatus", 
+                   channel.converter_type, 
+                   channel.tile, 
+                   channel.block, 
+                   block_status)
+        return block_status            
+    
+    @livecallable(imperative=False)
     def is_dac(self):
         """
         :return: `True` if this channel represents a DAC channel
         :rtype: bool
         """
-        return self.converter_type == xrfdc.XRFDC_DAC_TILE
+        if not hasattr(self, "_rfdc"):
+            raise ValueError("RFDC driver not initialized.")
+            
+        return self.converter_type == self.RFDC_def("XRFDC_DAC_TILE")
     
+    @livecallable(imperative=False)
     def is_adc(self):
         """
         :return: `True` if this channel represents an ADC channel
         :rtype: bool
         """
-        return self.converter_type == xrfdc.XRFDC_ADC_TILE
-    
-    def set_nco_update_event_source(self, source="immediate"):
-        """
-        Set the NCO update source.
-        :param source: The source of the update event. Must be one of: 
-        "immediate", "slice", "tile", "sysref", "marker", "pl"
-        :type source: str, optional
-        
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("NCO update event source may only be set on the PS.")
-            
-        if self._base_address is None:
-            raise ValueError("Insufficient information provided to"
-                                 " `Channel` instance to determine"
-                                 " configuration address.")
-
-        if source not in ["immediate", "slice", "tile", "sysref", "marker", "pl"]:
-            raise ValueError(f"Invalid source {source}.")
-        
-        proc(proc.call("XRFdc_ClrSetReg", 
-                       proc["rfdc"], 
-                       self._base_address, 
-                       proc.call("pyxrfdc.lib.XRFDC_NCO_UPDT_OFFSET"), 
-                       proc.call("pyxrfdc.lib.XRFDC_NCO_UPDT_MODE_MASK"),
-                       proc.call(f"pyxrfdc.lib.XRFDC_EVNT_SRC_{source.upper()}")))
-        
-    def nco_update_event(self):
-        """
-        Trigger an NCO update event from the RFDC software driver.
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("Update events may only be triggered by the PS.")
-            
-        proc(proc.call("XRFdc_UpdateEvent", 
-                       proc["rfdc"], 
-                       self.converter_type, 
-                       self.tile,
-                       self.block,
-                       proc.call(f"pyxrfdc.lib.XRFDC_EVENT_MIXER")))
+        return self.converter_type == self.RFDC_def("XRFDC_ADC_TILE")
     
     @nco_synchronizer.synchronized
     def set_nco_frequency(self, frequency, low=True, mid=True, high=True):
@@ -1586,32 +1646,28 @@ class Channel:
         :param high: Indicates whether the high bits of the frequency tuning
         word are to be updated
         :type high: bool, optional
-        """
+        """     
         proc = Processor.active_processor()
-        if isinstance(proc, PythonProcessor):
+        if proc is None or isinstance(proc, PythonProcessor):
             if self._base_address is None:
                 raise ValueError("Insufficient information provided to"
                                  " `Channel` instance to determine"
                                  " configuration address.")
-            
             if low:
-                proc(proc.call("pyxrfdc.lib.WriteReg16", 
-                               proc["rfdc"], 
+                self.RFDC_call("WriteReg16Wrapper", 
                                self._base_address, 
-                               proc.call("pyxrfdc.lib.XRFDC_ADC_NCO_FQWD_LOW_OFFSET"), 
-                               frequency & 0xFFFF))
+                               self.RFDC_def("XRFDC_ADC_NCO_FQWD_LOW_OFFSET"), 
+                               frequency & 0xFFFF)
             if mid:
-                proc(proc.call("pyxrfdc.lib.WriteReg16", 
-                               proc["rfdc"], 
+                self.RFDC_call("WriteReg16Wrapper", 
                                self._base_address, 
-                               proc.call("pyxrfdc.lib.XRFDC_ADC_NCO_FQWD_MID_OFFSET"), 
-                               (frequency >> 16) & 0xFFFF))
+                               self.RFDC_def("XRFDC_ADC_NCO_FQWD_MID_OFFSET"), 
+                               (frequency >> 16) & 0xFFFF)
             if high:
-                proc(proc.call("pyxrfdc.lib.WriteReg16", 
-                               proc["rfdc"], 
+                self.RFDC_call("WriteReg16Wrapper", 
                                self._base_address, 
-                               proc.call("pyxrfdc.lib.XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
-                               (frequency >> 32) & 0xFFFF))
+                               self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
+                               (frequency >> 32) & 0xFFFF)
                 
         elif isinstance(proc, Sequencer):
             if (mid and not high) or (high and not mid):
@@ -1645,24 +1701,22 @@ class Channel:
         :type high: bool, optional
         """
         proc = Processor.active_processor()
-        if isinstance(proc, PythonProcessor):
+        if proc is None or isinstance(proc, PythonProcessor):
             if self._base_address is None:
                 raise ValueError("Insufficient information provided to"
                                  " `Channel` instance to determine"
                                  " configuration address.")
             if low:
-                proc(proc.call("pyxrfdc.lib.WriteReg16", 
-                               proc["rfdc"], 
+                self.RFDC_call("WriteReg16Wrapper", 
                                self._base_address, 
-                               proc.call("pyxrfdc.lib.XRFDC_NCO_PHASE_LOW_OFFSET"), 
-                               phase & 0xFFFF))
+                               self.RFDC_def("XRFDC_NCO_PHASE_LOW_OFFSET"), 
+                               phase & 0xFFFF)
 
             if high:
-                proc(proc.call("pyxrfdc.lib.WriteReg16", 
-                               proc["rfdc"], 
+                self.RFDC_call("WriteReg16Wrapper", 
                                self._base_address, 
-                               proc.call("pyxrfdc.lib.XRFDC_NCO_PHASE_UPP_OFFSET"),
-                               (phase >> 16) & 0x3))
+                               self.RFDC_def("XRFDC_NCO_PHASE_UPP_OFFSET"),
+                               (phase >> 16) & 0x3)
                 
         elif isinstance(proc, Sequencer):
             phase_reg = Acadia.firmware["rfdc_rts_regs"].address().value() + 0x40 + self.num
@@ -1681,16 +1735,13 @@ class Channel:
         Reset the value of the NCO phase accumulator.
         """
         proc = Processor.active_processor()
-        if isinstance(proc, PythonProcessor):
+        if proc is None or isinstance(proc, PythonProcessor):
             if self._base_address is None:
                 raise ValueError("Insufficient information provided to"
                                  " `Channel` instance to determine"
                                  " configuration address.")
-            proc(proc["acadia"].RFDC_call(
-                           "ResetNCOPhase",
-                           self.converter_type, 
-                           self.tile, 
-                           self.block))
+            self.RFDC_call("ResetNCOPhase",
+                           self.converter_type, self.tile, self.block)
                 
         elif isinstance(proc, Sequencer):
             # Do nothing, the synchronizer will set the bit in the register
@@ -1698,220 +1749,38 @@ class Channel:
             
         raise TypeError("NCO accumulator phase can only be reset in"
                         " `PythonProcessor` or `Sequencer` contexts.")
+        
+    def set_nco_update_event_source(self, source="immediate"):
+        """
+        Set the NCO update source.
+        :param source: The source of the update event. Must be one of: 
+        "immediate", "slice", "tile", "sysref", "marker", "pl"
+        :type source: str, optional
+        
+        """ 
+        if self._base_address is None:
+            raise ValueError("Insufficient information provided to"
+                                 " `Channel` instance to determine"
+                                 " configuration address.")
 
-#     @property
-#     def nco_frequency(self):
-#         """
-#         Get the NCO frequency.
-#         """
-#         proc = Processor.active_processor()
-#         if isinstance(proc, PythonProcessor):
-#             proc["mixer_settings"] = proc.call("pyxrfdc.ffi.new", 
-#                                                "XRFdc_Mixer_Settings*")
-#             proc(proc["acadia"].RFDC_call( 
-#                       "GetMixerSettings",
-#                        self.converter_type, 
-#                        self.tile, 
-#                        self.block, 
-#                        proc["mixer_settings"]))
-#             return proc["mixer_settings"].Freq
+        if source not in ["immediate", "slice", "tile", "sysref", "marker", "pl"]:
+            raise ValueError(f"Invalid source {source}.")
         
-#         raise TypeError(f"Unable to read NCO frequency in context {proc}.")
-        
-
-#     @nco_frequency.setter
-#     def nco_frequency(self, frequency):
-#         """
-#         Set the NCO frequency.
-#         :param frequency: NCO frequency in MHz
-#         :type frequency: float
-#         """
-#         proc = Processor.active_processor()
-#         if isinstance(proc, PythonProcessor):
-#             proc["mixer_settings"] = proc.call("pyxrfdc.ffi.new", 
-#                                                "XRFdc_Mixer_Settings*")
-#             proc(proc["acadia"].RFDC_call( 
-#                       "GetMixerSettings",
-#                        self.converter_type, 
-#                        self.tile, 
-#                        self.block, 
-#                        proc["mixer_settings"]))
-#             proc["mixer_settings"].Freq = frequency
-#             proc(proc["acadia"].RFDC_call( 
-#                       "SetMixerSettings",
-#                        self.converter_type, 
-#                        self.tile, 
-#                        self.block, 
-#                        proc["mixer_settings"]))
-#         else:
-#             raise TypeError("NCO frequency can only be set in MHz on the PS.")
-
-    def set_nyquist_zone(self, nz):
-        """
-        Sets the Nyquist zone setting of the channel to the specified number.
-        :param nz: Nyquist zone
-        :type nz: int
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("Nyquist zone may only be set on the PS.")
-            
-        reg_value = proc.call(f"pyxrfdc.lib.XRFDC_{'EVEN' if nz % 2 == 0 else 'ODD'}_NYQUIST_ZONE")
-        
-        proc(proc["acadia"].RFDC_call( 
-                           "SetNyquistZone",
-                           self.converter_type, 
-                           self.tile, 
-                           self.block,
-                           reg_value))
-
-    def set_decoder_mode(self, mode):
-        """
-        Sets the DAC decoder mode.
-        :param mode: One of "Low Noise" or "High Linearity"
-        :type mode: str
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("Decoder mode may only be set on the PS.")
-            
-        if not self.is_dac():
-            raise TypeError("Decoder mode may only be set for DACs.")
-            
-        if mode.lower() == "low noise":
-            reg_value = proc.call(f"pyxrfdc.lib.XRFDC_DECODER_MAX_SNR_MODE")
-        elif mode.lower() == "high linearity":
-            reg_value = proc.call(f"pyxrfdc.lib.XRFDC_DECODER_MAX_LINEARITY_MODE")
-        else:
-            raise ValueError(f"Invalid decoder mode {mode}.")
-        
-        proc(proc["acadia"].RFDC_call( 
-                           "SetDecoderMode",
-                           self.tile, 
-                           self.block,
-                           reg_value))
-
-    def set_coarse_delay(self, delay):
-        """
-        Sets the coarse delay of an ADC Or DAC channel.
-        :param delay: Channel delay in units of the sample clock period.
-        :type delay: int
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("InvSincFIR may only be set on the PS.")
-        
-        # Create a new settings structure and initialize it with the delay
-        # and immediate update (a constant which has a value of 0)
-        settings = proc.call("pyxrfdc.ffi.new", "XRFdc_Coarse_Delay_Settings*", [delay, 0])
-        proc(proc["acadia"].RFDC_call( 
-                           "SetCoarseDelaySettings",
-                            self.converter_type,
-                            self.tile, 
-                            self.block,
-                            settings))
-        
-    def set_inv_sinc_FIR(self, mode):
-        """
-        Sets the mode of the inverse-sinc FIR filter.
-        :param mode: Filter mode. May be 0 (disable), 1 (first Nyquist zone),
-        or 2 (second Nyquist zone)
-        :type mode: int
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("InvSincFIR may only be set on the PS.")
-            
-        if not self.is_dac():
-            raise TypeError("InvSincFIR may only be set for DACs.")
-            
-        if mode not in [0, 1, 2]:
-            raise ValueError(f"InvSincFIR mode must be 0, 1, or 2; received {mode}.")
-            
-        proc(proc["acadia"].RFDC_call( 
-                           "SetInvSincFIR",
-                            self.tile, 
-                            self.block,
-                            mode))    
-            
-
-    def set_dither(self, mode):
-        """
-        Enables or disables ADC dithering.
-        :param mode: If `True`, dithering is enabled; otherwise, it is disabled.
-        :type mode: bool
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("Dithering may only be set on the PS.")
-            
-        if not self.is_adc():
-            raise TypeError("Dithering may only be set for ADCs.")
-            
-        proc(proc["acadia"].RFDC_call( 
-                           "SetDither",
-                            self.tile, 
-                            self.block,
-                            bool(mode)))  
-        
-    def configure_PLL(self, source, ref_clk_frequency, sample_rate):
-        """
-        Configures the PLL and enables switching between internal and external
-        clocking.
-        :param source: One of "external" or "internal"
-        :type source: str
-        :param ref_clk_frequency: Frequency of the reference clock in MHz
-        :type ref_clk_frequency: float
-        :param sample_rate: Sample rate in MHz
-        """
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("Dithering may only be set on the PS.")
-            
-        if self.block is not None:
-            raise ValueError("Clocking can only be configured for tiles; block must be None.")
-            
-        if source == "internal":
-            source_value = proc.call("pyxrfdc.lib.XRFDC_INTERNAL_PLL_CLK")
-        elif source == "external":
-            source_value = proc.call("pyxrfdc.lib.XRFDC_EXTERNAL_CLK")
-        else:
-            raise ValueError(f"Invalid PLL source {source}.")
-            
-        proc(proc["acadia"].RFDC_call( 
-                           "DynamicPLLConfig",
-                            self.converter_type,
-                            self.tile, 
-                            source_value,
-                            ref_clk_frequency,
-                            sample_rate))
-
-    def set_imr_passband(self, mode):
-        """
-        Sets the passband for a DAC NCO IMR filter, when enabled.
-        :param mode: One of "lowpass" or "highpass"
-        :type mode: str
-        """
-        if not self.is_dac():
-            raise TypeError("IMR passband can only be set on DAC channels.")
-            
-        proc = Processor.active_processor()
-        if not isinstance(proc, PythonProcessor):
-            raise TypeError("IMR passband may only be set on the PS.")
-            
-        if mode.lower() == "lowpass":
-            reg_value = proc.call("pyxrfdc.lib.XRFDC_DAC_IMR_MODE_LOWPASS")
-        elif mode.lower() == "highpass":
-            reg_value = proc.call("pyxrfdc.lib.XRFDC_DAC_IMR_MODE_HIGHPASS")
-        else:
-            raise ValueError(f"Invalid mode {mode}.")
-        
-        proc(proc["acadia"].RFDC_call( 
-                           "SetIMRPassMode",
-                            self.tile, 
-                            self.block,
-                            reg_value))
+        self.RFDC_call("ClrSetReg", 
+                       self._base_address, 
+                       self.RFDC_def("XRFDC_NCO_UPDT_OFFSET"), 
+                       self.RFDC_def("XRFDC_NCO_UPDT_MODE_MASK"),
+                       self.RFDC_def("XRFDC_EVNT_SRC_{source.upper()}"))
     
+    @livecallable
+    def nco_update_event(self):
+        """
+        Trigger an NCO update event from the RFDC software driver.
+        """
+        self.RFDC_call("UpdateEvent", 
+                       self.converter_type, self.tile, self.block,
+                       self.RFDC_def("XRFDC_EVENT_MIXER"))
+        
     @vop_dsa_synchronizer.synchronized
     def set_vop(self, vop):
         """
@@ -1921,14 +1790,10 @@ class Channel:
         """
         if not self.is_dac():
             raise TypeError("VOP can only be set on DAC channels.")
-            
+         
         proc = Processor.active_processor()
-        if isinstance(proc, PythonProcessor):
-            proc(proc["acadia"].RFDC_call( 
-                           "SetDACVOP",
-                            self.tile, 
-                            self.block,
-                            vop))
+        if proc is None or isinstance(proc, PythonProcessor):
+            self.RFDC_call("SetDACVOP", self.tile, self.block, vop)
                 
         elif isinstance(proc, Sequencer):
             vop_reg = Acadia.firmware["rfdc_rts_regs"].address().value() + 0x70 + self.num
@@ -1948,13 +1813,9 @@ class Channel:
             raise TypeError("DSA can only be set on ADC channels.")
             
         proc = Processor.active_processor()
-        if isinstance(proc, PythonProcessor):
-            settings = proc.call("pyxrfdc.ffi.new", "XRFdc_DSA_Settings*", [0, dsa])
-            proc(proc["acadia"].RFDC_call( 
-                               "SetDSA",
-                                self.tile, 
-                                self.block,
-                                settings))
+        if proc is None or isinstance(proc, PythonProcessor):
+            settings = self.RFDC_struct("XRFdc_DSA_Settings*", [0, dsa])
+            self.RFDC_call("SetDSA", self.tile, self.block, settings)
                 
         elif isinstance(proc, Sequencer):
             # Do nothing, the synchronizer will manage writing the codes
@@ -1973,36 +1834,230 @@ class Channel:
         # Do nothing. the synchronizer will calculate the register value and
         # write it
         pass
-    
-class PS_GPIO:
-    """
-    A wrapper for a Python environment running on the Processing Subsystem (PS)
-    of the Zynq Ultrascale.
-    """
-    PS_GPIO3_IN = 0x6C >> 2
-    PS_GPIO3_OUT = 0x4C >> 2
-    PS_GPIO4_IN = GPIO3_IN + 1
-    PS_GPIO4_OUT = GPIO3_OUT + 1
-    
-    @staticmethod
-    def read(port):
-        if isinstance(Processor.active_processor(), PythonProcessor):
-            pass
-        if isinstance(Processor.active_processor(), Sequencer):
-            pass
+
+    def set_nyquist_zone(self, nz):
+        """
+        Sets the Nyquist zone setting of the channel to the specified number.
+        :param nz: Nyquist zone
+        :type nz: int
+        """ 
+        reg_value = self.RFDC_def(f"XRFDC_{'EVEN' if nz % 2 == 0 else 'ODD'}_NYQUIST_ZONE")
         
-    @staticmethod
-    def write(port, data):
-        if isinstance(Processor.active_processor(), PythonProcessor):
-            pass
-        if isinstance(Processor.active_processor(), Sequencer):
-            pass
+        self.RFDC_call("SetNyquistZone", 
+                       self.converter_type, self.tile, self.block, reg_value)
+
+    def set_decoder_mode(self, mode):
+        """
+        Sets the DAC decoder mode.
+        :param mode: One of "Low Noise" or "High Linearity"
+        :type mode: str
+        """
+        if not self.is_dac():
+            raise TypeError("Decoder mode may only be set for DACs.")
+            
+        if mode.lower() == "low noise":
+            reg_value = self.RFDC_def(f"XRFDC_DECODER_MAX_SNR_MODE")
+        elif mode.lower() == "high linearity":
+            reg_value = self.RFDC_def(f"XRFDC_DECODER_MAX_LINEARITY_MODE")
+        else:
+            raise ValueError(f"Invalid decoder mode {mode}.")
         
-class PS_ZDMA:
+        self.RFDC_call("SetDecoderMode", self.tile, self.block, reg_value)
+
+    def set_coarse_delay(self, delay):
+        """
+        Sets the coarse delay of an ADC Or DAC channel.
+        :param delay: Channel delay in units of the sample clock period.
+        :type delay: int
+        """        
+        # Create a new settings structure and initialize it with the delay
+        # and immediate update (a constant which has a value of 0)
+        settings = self.RFDC_struct("XRFdc_Coarse_Delay_Settings*", [delay, 0])
+        self.RFDC_call("SetCoarseDelaySettings",
+                        self.converter_type, self.tile, self.block, settings)
+        
+    def set_inv_sinc_FIR(self, mode):
+        """
+        Sets the mode of the inverse-sinc FIR filter.
+        :param mode: Filter mode. May be 0 (disable), 1 (first Nyquist zone),
+        or 2 (second Nyquist zone)
+        :type mode: int
+        """
+        if not self.is_dac():
+            raise TypeError("InvSincFIR may only be set for DACs.")
+            
+        if mode not in [0, 1, 2]:
+            raise ValueError(f"InvSincFIR mode must be 0, 1, or 2; received {mode}.")
+            
+        self.RFDC_call("SetInvSincFIR", self.tile, self.block, mode)   
+
+    def set_dither(self, mode):
+        """
+        Enables or disables ADC dithering.
+        :param mode: If `True`, dithering is enabled; otherwise, it is disabled.
+        :type mode: bool
+        """
+        if not self.is_adc():
+            raise TypeError("Dithering may only be set for ADCs.")
+            
+        self.RFDC_call("SetDither", self.tile, self.block, bool(mode))
+        
+    def configure_PLL(self, source, ref_clk_frequency, sample_rate):
+        """
+        Configures the PLL and enables switching between internal and external
+        clocking.
+        :param source: One of "external" or "internal"
+        :type source: str
+        :param ref_clk_frequency: Frequency of the reference clock in MHz
+        :type ref_clk_frequency: float
+        :param sample_rate: Sample rate in MHz
+        """ 
+        if self.block is not None:
+            raise ValueError("Clocking can only be configured for tiles; block must be None.")
+            
+        if source == "internal":
+            source_value = self.RFDC_def("XRFDC_INTERNAL_PLL_CLK")
+        elif source == "external":
+            source_value = self.RFDC_def("XRFDC_EXTERNAL_CLK")
+        else:
+            raise ValueError(f"Invalid PLL source {source}.")
+            
+        self.RFDC_call("DynamicPLLConfig",
+                        self.converter_type, self.tile, 
+                        source_value, ref_clk_frequency, sample_rate)
+
+    def set_imr_passband(self, mode):
+        """
+        Sets the passband for a DAC NCO IMR filter, when enabled.
+        :param mode: One of "lowpass" or "highpass"
+        :type mode: str
+        """
+        if not self.is_dac():
+            raise TypeError("IMR passband can only be set on DAC channels.")
+            
+        if mode.lower() in ["lowpass", "highpass"]:
+            reg_value = self.RFDC_def(f"XRFDC_DAC_IMR_MODE_{mode.upper()}")
+        else:
+            raise ValueError(f"Invalid mode {mode}.")
+        
+        self.RFDC_call("SetIMRPassMode", self.tile, self.block, reg_value)
+        
+    def setup_fifo(self, enable):
+        """
+        Enables or disables the interface FIFO to a DAC or ADC tile.
+        :param enable: If `True`, the FIFO is enabled.
+        :type enable: bool
+        """ 
+        self.RFDC_call("SetupFIFO", self.converter_type, self.tile, enable)
+            
+    def set_interpolation(self, factor):
+        """
+        Sets the interpolation factor for a DAC tile. The fabric write width
+        is maintained at 128 bits with the understanding that the external 
+        stream clock rate will be adjusted accordingly.
+        :param factor: Interpolation factor
+        :type factor: int
+        """
+        if not self.is_dac():
+            raise TypeError("Interpolation can only be set on DAC channels.")
+            
+        if self.block is not None:
+            raise ValueError("Software only support setting interpolation for"
+                             " a full tile, as the interface clock rate will"
+                             " be adjusted.")
+            
+        if factor not in [1,2,3,4,5,6,8,10,12,16,20,24,40]:
+            raise ValueError(f"Invalid interpolation factor {factor}.")
+            
+        self.RFDC_call("SetInterpolationFactor", self.tile, self.block, factor)
+                
+        # Reconfigure the interface width to 128 bits
+        self.RFDC_call("SetFabWrVldWords", self.tile, self.block, 128 // 16)
+        
+    def set_decimation(self, factor):
+        """
+        Sets the decimation factor for an ADC tile. The fabric read width
+        is maintained at 128 bits with the understanding that the external 
+        stream clock rate will be adjusted accordingly.
+        :param factor: Decimation factor
+        :type factor: int
+        """
+        if not self.is_adc():
+            raise TypeError("Decimation can only be set on ADC channels.")
+            
+        if self.block is not None:
+            raise ValueError("Software only support setting decimation for"
+                             " a full tile, as the interface clock rate will"
+                             " be adjusted.")
+            
+        if factor not in [1,2,3,4,5,6,8,10,12,16,20,24,40]:
+            raise ValueError(f"Invalid decimation factor {factor}.")
+            
+        self.RFDC_call("SetDecimationFactor", self.tile, self.block, factor)
+                
+        # Reconfigure the interface width to 128 bits
+        self.RFDC_call("SetFabRdVldWords", self.tile, self.block, 128 // 16)
+    
+class PSGPIO:
+    """
+    An interface to the GPIO pins of the PS exposed to the PL over EMIO.
+    """
+    PSGPIO3_IN = 0x6C
+    PSGPIO3_OUT = 0x4C
+    PSGPIO4_IN = GPIO3_IN + 1
+    PSGPIO4_OUT = GPIO3_OUT + 1
+    
+    @classmethod
+    def attach(cls, mem):
+        """
+        Attach the class to a memory view of the GPIO registers.
+        """
+        cls._mem = mem.cast("I")
+    
+    def __init__(self, port):
+        # Store relevant register values
+        self._port = port
+        self._in = (PSGPIO.PSGPIO3_IN >> 2) + port - 3
+        self._out = (PSGPIO.PSGPIO3_OUT >> 2) + port - 3
+        self._sequencer_address = Acadia.firmware["sequencer_bus_decoder"][f"ps_gpio{port}"].address().value()
+    
+    def read(self):
+        proc = Processor.active_processor()
+        if proc is None:
+            return self._mem[self._in]
+        elif isinstance(proc, PythonProcessor):
+            return proc.call("PSGPIO.read", self)
+        elif isinstance(proc, Sequencer):
+            return proc.bus_read(self._sequencer_address)
+        else:
+            raise TypeError(f"Unable to access GPIO on processor {proc}.")
+        
+    def write(self, data):
+        proc = Processor.active_processor()
+        if proc is None:
+            self._mem[self._out] = data
+        if isinstance(proc, PythonProcessor):
+            return proc(proc.call("PSGPIO.write", self, data))
+        if isinstance(proc, Sequencer):
+            return proc.bus_write(address=self._sequencer_address, data=data)
+        else:
+            raise TypeError(f"Unable to access GPIO on processor {proc}.")
+        
+@dataclass
+class ZDMA:
     """
     Configures a channel of the PS ZDMA.
     """
+    channel: "DMA channel ID" = None
+    src: "Address of transaction source or constant for write-only mode" = None
+    dst: "Transaction destination" = None
+    size: "Transaction size in bytes. If None, source size is used." = None
+    wr_only: "Operate the DMA in write-only mode" = False
+    fci_enable: "Enable flow control from the PL" = False
+    fci_side: "Selects read or write channel for flow control" = "read"
+    fci_buffer_usage: "Size of common buffer to use for FCI cache" = 256
     
+    # Register offsets
     ERR_CTRL = 0
     CH_ISR = 0x100
     CH_IMR = 0x104
@@ -2027,41 +2082,158 @@ class PS_ZDMA:
     CH_IRQ_DST_ACCT = 0x194
     CH_CTRL2 = 0x200
     
-    def __init__(self, mem):
-        self._mem = mem
+    def __post_init__(self):
+        self.calculate_registers()
         
-    def configure_transfer(self, src, dst, size, wr_only=False, fci=False):
+    def calculate_registers(self):
         """
-        Configures the DMA for simple transfer with options for flow control
-        interface (FCI) enablement and write-only modes.
-        :param src: Byte-wise source address, or write data when `wr_only` is
-        `True`
-        :type src: int
-        :param dst: Byte-wise destination address
-        :type dst: int
-        :param size: Number of bytes to transfer
-        :type size: int
-        :param wr_only: Enables write-only mode
-        :param fci: If `True`, the transfer is carried out by the FCI.
-        :type fci: bool, optional
+        Populate internal fields with configuration values.
         """
-        pass
+        self._regs = {}
+        # Settings for ZDMA_CH_CTRL0
+        ch_ctrl0_value = 0
+        ch_ctrl0_value |= (1 << 7) # bit 7: overfetch
+        # bit 6: 0 = simple DMA mode, 1 = scatter-gather
+        # bit 5-4: 00 = read and write, 01 = write only, 10 = read only
+        ch_ctrl0_value |= (self.wr_only << 4)
+        # bit 3: rate control
+
+        self._regs[ZDMA.CH_CTRL0] = ch_ctrl0_value.to_bytes(4, "little")
+        
+        # Settings for ZDMA_CH_FCI
+        ch_fci_value = 0
+        # bits 3-2: Number of 128-bit words (or 64-bit for the LPD DMA) from the common buffer to use
+        #  00 = use 32+AxLEN
+        #  01 = use 64+AxLEN
+        #  10 = use 128+AxLEN
+        #  11 = use 256
+        if buffer_usage == 32:
+            pass
+        elif buffer_usage == 64:
+            ch_fci_value |= 1 << 2
+        elif buffer_usage == 128:
+            ch_fci_value |= 2 << 2
+        elif buffer_usage == 256:
+            ch_fci_value |= 3 << 2
+        else:
+            raise ValueError(f"Invalid buffer usage {buffer_usage}.")
+        
+        # bit 1: 0 = control the read side, 1 = control the write side
+        if side == "read":
+            pass
+        elif side == "write":
+            ch_fci_value |= 1 << 1
+        else:
+            raise ValueError(f"Invalid FCI side {side}.")
+        # bit 0: enable FCI
+        ch_fci_value |= enable
+        
+        self._regs[ZDMA.CH_FCI] = ch_fci_value.to_bytes(4, "little")
+        
+        # Source and destination
+        self._regs[ZDMA.CH_SRC_START_LSB] = src.to_bytes(8, "little")
+        self._regs[ZDMA.CH_DST_START_LSB] = dst.to_bytes(8, "little")
+        
+        # Write the size to the source and destination registers
+        self._regs[ZDMA.CH_SRC_DSCR_WORD0+8] = size.to_bytes(4, "little")
+        self._regs[ZDMA.CH_DST_DSCR_WORD0+8] = size.to_bytes(4, "little")
+        
+    def attach(self, mem):
+        """
+        Attaches the object to a memory map of the DMA registers.
+        """ 
+        self._mem = mem.cast("B")
+        
+    @livecallable()
+    def configure_hardware(self):
+        """
+        Writes the internally-stored configuration to the hardware.
+        """
+        for reg,value in self._regs.items():
+            self._mem[reg:reg+len(value)] = value
     
     def start_transfer(self):
         """
         Starts the configured transfer.
         """
-        pass
-    
+        proc = Processor.active_processor()
+        if proc is None:
+            self._mem[ZDMA.CH_CTRL2:ZDMA.CH_CTRL2+4] = (1).to_bytes(4, "little")
+        if isinstance(proc, PythonProcessor):
+            return proc.call("PS_ZDMA.start_transfer", self)
+        elif isinstance(proc, Sequencer):
+            # Use the flow control interface to start the copy
+            return proc.bus_write(address=Acadia.firmware["sequencer_bus_decoder"]["zdma_controller"].address().value(),
+                                 data=(1 << self.channel))
+        else:
+            raise ValueError(f"Unable to start DMA transfer from processor {proc}.")
+            
+    @livecallable(imperative=False)
     def byte_count(self, clear=False):
         """
         :return: The total number of bytes transferred since the last clear.
+        :rtype: int
         :param clear: Clear the total byte count.
         :type clear: bool, optional
         """
+        count = int.from_bytes(self._mem[ZDMA.CH_TOTAL_BYTE:ZDMA.CH_TOTAL_BYTE+4], "little")
+        if clear:
+            self._mem[ZDMA.CH_TOTAL_BYTE:ZDMA.CH_TOTAL_BYTE+4] = (0).to_bytes(4, "little")
+        return count
     
     def status(self):
-        pass
+        """
+        Get the status of the DMA. On the PS, this is the value of the STATUS
+        bitfield, and on the sequencer this is the value of the credit 
+        acknowledgement counter.
+        :return: 0 = done without error, 1 = paused without error, 2 = busy 
+        transferring, 3 = done with error
+        :rtype: int
+        """
+        proc = Processor.active_processor()
+        if proc is None:
+            return int.from_bytes(self._mem[ZDMA.CH_STATUS:ZDMA.CH_STATUS+4], "little")
+        elif isinstance(proc, PythonProcessor):            
+            return proc.call("PS_ZDMA.status", self)
+        elif isinstance(proc, Sequencer):
+            # Get the internally-stored credit acknowledgement
+            return proc.bus_read(Acadia.firmware["sequencer_bus_decoder"]["zdma_controller"].address().value()+self.channel)
+        else:
+            raise ValueError(f"Unable to query status from processor {proc}.") 
+    
+    def is_complete(self):
+        """
+        Read the completion status of the DMA. On the PS, this compares the 
+        DMA status value to that associated with successful completion. On the
+        sequencer, this returns the transaction acknowledgement counter.
+        :return: DMA completion status 
+        :rtype: int
+        """
+        proc = Processor.active_processor()
+        if proc is None or isinstance(proc, PythonProcessor):
+            status = self.status()
+            return (status == 0) or (status == 3)
+        elif isinstance(proc, Sequencer):
+            # Check the internally-stored transaction acknowledgement
+            return proc.bus_read(Acadia.firmware["sequencer_bus_decoder"]["zdma_controller"].address().value()+32+self.channel)
+        else:
+            raise ValueError(f"Unable to query completion from processor {proc}.")    
+            
+    def clear_fci_counters(self):
+        """
+        Clear the counters for managing the FCI in the ZDMA controller.
+        """
+        proc = Processor.active_processor()
+        if isinstance(proc, Sequencer):
+            # Clear credit acknowledgement counter
+            proc.bus_write(address=Acadia.firmware["sequencer_bus_decoder"]["zdma_controller"].address().value()+1,
+                           data=(1 << self.channel))
+            
+            # Clear transaction valid counter
+            proc.bus_write(address=Acadia.firmware["sequencer_bus_decoder"]["zdma_controller"].address().value()+2,
+                           data=(1 << self.channel))
+        else:
+            raise ValueError(f"Unable to clear FCI counters from processor {proc}.")
         
 class AXISSwitch:
     """
@@ -2073,22 +2245,44 @@ class AXISSwitch:
     
     CONTROL_REG = 0
     COMMIT_VALUE = 1 << 1
+
+    def attach(self, mem):
+        """
+        Attaches the instance to a view of its registers. The `memoryview`
+        """
+        self._mem = mem.cast("I")
     
-    def __init__(self, mem):
-        self._mem = mem
-        
-    def reset(self):
-        for i in range(16):
-            self._mem[AXISSwitch.MUX0_REG + i] = AXISSwitch.DISABLE_VALUE
-        self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
-            
-    def disconnect(self, mi, commit=True):
-        self._mem[AXISSwitch.MUX0_REG + mi] = AXISSwitch.DISABLE_VALUE
+    @livecallable()
+    def connect(self, mi, si, commit=True):
+        """
+        Connect a master interface to a slave interface.
+        :param mi: Master interface number
+        :type mi: int
+        :param si: Slave interface number
+        :type si: int
+        :param commit: If `True`, the connection request is committed. 
+        Otherwise, only the connection register is updated.
+        :type commit: bool, optional
+        """ 
+        self._mem[AXISSwitch.MUX0_REG + mi] = si
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
-        
-    def connect(self, mi, si, commit=True):
-        self._mem[AXISSwitch.MUX0_REG + mi] = si
+    
+    @livecallable()
+    def disconnect(self, mi=None, commit=True):
+        """
+        Disconnect a master interface. If not provided, all are disconnected.
+        :param mi: Interface number to disconnect.
+        :type mi: int or None, optional
+        :param commit: If `True`, the connection request is committed. 
+        Otherwise, only the connection register is updated.
+        :type commit: bool, optional
+        """ 
+        if mi is not None:
+            self._mem[AXISSwitch.MUX0_REG + mi] = AXISSwitch.DISABLE_VALUE
+        else:
+            for i in range(16):
+                self._mem[AXISSwitch.MUX0_REG + i] = AXISSwitch.DISABLE_VALUE
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
         
@@ -2121,11 +2315,6 @@ class Acadia:
                                          allocation_limit=4,
                                          required_parameters=["physical_channel"])
         
-        self.PS_GDMA = ManagedResource("PS_GDMA", 
-                                         (), 
-                                         {"OPERATORS": []},
-                                         allocation_limit=8)
-        
         self._create_cache()
         self._create_dac_arrays()
         self._create_cmacc_kernel_arrays()
@@ -2133,98 +2322,17 @@ class Acadia:
         self._create_ps_ddr_arrays()
         self._create_ocm_arrays()
         
-    def _create_cache(self):
-        def _cache_load(cache_self, src):
-            proc = Processor.active_processor()
-            if isinstance(proc, PythonProcessor):
-                pass
-            elif isinstance(proc, Sequencer):
-                pass
-            raise TypeError("")
-            
-        def _cache_getitem(cache_self, key):
-            proc = Processor.active_processor()
-            if isinstance(proc, PythonProcessor):
-                pass
-            elif isinstance(proc, Sequencer):
-                pass
-            raise TypeError("")
-            
-        def _cache_setitem(cache_self, key, value):
-            proc = Processor.active_processor()
-            if isinstance(proc, PythonProcessor):
-                pass
-            elif isinstance(proc, Sequencer):
-                pass
-            raise TypeError("")
-            
+        def zdma_postinit(zdma_self):
+            zdma_self.channel = zdma_self._resource_id
+            super().__post_init__()
         
-        self.CacheArray = ManagedMemory("CacheArray", (), {},
-            word_address_base=self.firmware["sequencer_bus_decoder"]["cache"].address().value(),
-            byte_address_base=StandardFirmware.BRAM_CTRL_CACHE_ADDR,
-            word_width=32,
-            pool_size=StandardFirmware.CACHE_SIZE_BITS // 32,
-            getitem_handler=make_memory_handler([PythonProcessor, Sequencer]),
-            setitem_handler=make_memory_handler([PythonProcessor, Sequencer]))
+        self._ZDMA = ManagedResource("ZDMAResource", 
+                                         (ZDMA,), 
+                                         {"__post_init__": zdma_postinit,
+                                          "OPERATORS": []},
+                                         allocation_limit=8)
         
-    def _create_dac_arrays(self):
-        def _dac_array_load(cache_self, src):
-            proc = Processor.active_processor()
-            if isinstance(proc, PythonProcessor):
-                pass
-            elif isinstance(proc, Sequencer):
-                pass
-            raise TypeError("")
-            
-        self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {},
-            word_address_base=0,
-            byte_address_base=self.firmware["dac_mem_decoder"][f"dac_dma{i}_mem"].address().value()*16,
-            word_width=128,
-            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128,
-            getitem_handler=make_memory_handler([PythonProcessor]),
-            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(16)]
-        
-    def _create_cmacc_kernel_arrays(self):
-        self.CMACCKernelArray = [ManagedMemory(f"CMACCKernel{i}Array", (), {},
-            word_address_base=0,
-            byte_address_base=self.firmware["mem_decoder"][f"cmacc_dma{i}_kernel_mem"].address().value()*16,
-            word_width=128,
-            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128,
-            getitem_handler=make_memory_handler([PythonProcessor]),
-            setitem_handler=make_memory_handler([PythonProcessor])) for i in range(16)]
-        
-    def _create_pl_ddr_arrays(self):
-        # PL DDR
-        # The two banks of PL DDR are contiguous on the AXI network, so we can 
-        # use one ManagedResource for all of the DDR
-        # The resource ID refers to the offset in bytes from the start of
-        # the PL C0 DDR
-        self.PLDDRArray = ManagedMemory(f"PLDDRArray", (), {},
-            word_address_base=StandardFirmware.DDR4_C0_ADDR,
-            byte_address_base=StandardFirmware.DDR4_C0_ADDR,
-            word_width=8,
-            pool_size=2**33,
-            getitem_handler=make_memory_handler([PythonProcessor]),
-            setitem_handler=make_memory_handler([PythonProcessor]))
-        
-    def _create_ps_ddr_arrays(self):
-        # PS DDR
-        self.PSDDRArray = ManagedMemory(f"PLDDRArray", (), {},
-            word_address_base=0x8_0000_0000,
-            byte_address_base=0x8_0000_0000,
-            word_width=8,
-            pool_size=2**30,
-            getitem_handler=make_memory_handler([PythonProcessor]),
-            setitem_handler=make_memory_handler([PythonProcessor]))
-        
-    def _create_ocm_arrays(self):
-        self.OCMArray = ManagedMemory(f"OCMArray", (), {},
-            word_address_base=0xFFFC_0000,
-            byte_address_base=0xFFFC_0000,
-            word_width=8,
-            pool_size=2**18,
-            getitem_handler=make_memory_handler([PythonProcessor]),
-            setitem_handler=make_memory_handler([PythonProcessor]))
+        self._ADC_AXIS_switch = AXISSwitch()
         
     def attach(self):
         """
@@ -2263,30 +2371,23 @@ class Acadia:
         self._attach_resource(self.PLDDRArray)
         self._attach_resource(self.PSDDRArray)
             
-        # Provide the PS with access to the Acadia runtime
-        self.PS._data["acadia"] = self
-            
         # Connect to the RFDC driver and initialize
-        self.RFDC_init()
-                
-        self.PS._data["rfdc"] = self._rfdc
+        Channel.RFDC_init()
         
         # Connect to the GPIO registers
-        self._psio_memory = self._attach_memory(0xFF0A0000, 0x400, mem_cast="I")
+        PSGPIO.attach(self._attach_memory(0xFF0A0000, 0x400))
         
         # Connect to the ADC AXIS switch
-        self._adc_axis_switch_memory = self._attach_memory(
+        self.ADC_AXIS_switch.attach(self._attach_memory(
             address=StandardFirmware.ADC_AXIS_SWITCH_ADDR, 
             size=0x1000, 
-            mem_cast="I")
-        
-        self.adc_axis_switch = AXISSwitch(self._axis_switch_memory)
+            mem_cast="I"))
         
         # Connect to the PS GDMA
-        self._ps_gdma_memory = [self._attach_memory(
-            address=0xFD50_0000 + (i*0x1_0000),
-            size=0x1_0000,
-            mem_cast="I") for i in range(8)]
+        for instance in self._ZDMA.instances:
+            instance.attach(self._attach_memory(
+                address=0xFD50_0000 + (instance._resource_id*0x1_0000),
+                size=0x1_0000))
             
     def detach(self):
         """
@@ -2294,8 +2395,229 @@ class Acadia:
         """
         for m in self._mem_maps:
             m.close()
+            
+    def memcpy(self, src, dst, size=None, block=True, ps_fci=False, ps_fci_side=None):
+        """
+        Copy memory from one location to another using either the PS or the PL,
+        depending on the active processor.
+        :param src: Source array
+        :type src: CacheArray, PSDDRArray, PLDDRArray, OCMArray, DACArray, 
+        CMACCKernelArray, bytes
+        :param dst: Destination array
+        :type dst: CacheArray, PSDDRArray, PLDDRArray, OCMArray, DACArray,
+        CMACCKernelArray
+        :param size: Size of memory copy in bytes. If not provided, the size of
+        the source array is used.
+        :type size: int, optional
+        :param block: If `True`, the active processor will be instructed to halt
+        until the memory copy is completed. Otherwise, the function will return
+        immediately after initiating the transfer.
+        :param ps_fci: If `True`, the transfer is assumed to be carried out by
+        the PS using the DMA controlled by its flow control interface (FCI)
+        exposed to the PL. The sequencer is then responsible for initiating and
+        executing the transaction. When `True`, the active processor is ignored.
+        :return: If `ps_fci` is `True` or if the active processor is a 
+        :class:`PythonProcessor`, then the :class:`ZDMA` object representing 
+        the DMA configuration is returned. If the active processor is a 
+        :class:`Sequencer`, the value used for the DataMover TAG field is 
+        returned.
+        :type ps_fci: bool, optional
+        :param ps_fci_side: The flow-controlled side; either "read" or "write"
+        :type ps_fci_side: str
+        """
+        if not isinstance(src)
+        if size is None:
+            size = src.byte_length()
+            
+        proc = Processor.active_processor()
+        if isinstance(src, bytes) and isinstance(type(dst), ManagedMemory):
+            if size > 2**30:
+                raise ValueError(f"Size must be less than 1 GB; received {size}.")
+            if not block:
+                raise ValueError("Copying a literal must block.")
+            if ps_fci:
+                raise ValueError("Copying a literal cannot use the FCI.")
+            if proc is None:
+                if not hasattr(dst, "memory"):
+                    raise ValueError("Destination resource not attached.")
+                # Loading from virtual memory, can't use DMA
+                dst.memory.cast("B")[:size] = src
+            elif isinstance(proc, PythonProcessor):
+                # Rather than storing a reference to self, we'll just
+                # call setitem on the memory (better for pickling)
+                proc(proc.call("memoryview.__setitem__", 
+                               proc.call("getattr", dst, "memory"), 
+                               slice(0, size),
+                               src))
+            else:
+                raise TypeError(f"Unable to copy literal into memory on"
+                                f" processor {proc}.")
+        elif hasattr(src, "byte_address") and hasattr(dst, "byte_address"):    
+            if proc is None or isinstance(proc, PythonProcessor):
+                if size > 2**30:
+                    raise ValueError(f"Size must be less than 1 GB; received {size}.")
+                # Use the DMA for the copy
+                dma = self._ZDMA(src=src.byte_address(), 
+                                 dst=dst.byte_address(), 
+                                 size=size, 
+                                 fci_enable=ps_fci, 
+                                 fci_side=ps_fci_side)
+                dma.start_transfer()
+                if block:
+                    if proc is None:
+                        while not dma.is_complete():
+                            pass
+                    else:
+                        proc.wait_until(dma.is_complete())
+                
+                return dma
+            elif isinstance(proc, Sequencer):
+                # Use the AXI DataMover. Because of the arrangement of the AXI
+                # master interfaces, memories on the config SmartConnect cannot
+                # be sources
+                if (isinstance(src, self.CacheArray) 
+                        or isinstance(src, self.DACArray) 
+                        or isinstance(src, self.CMACCKernelArray)):
+                    raise TypeError(f"Unable to use sequencer to copy data from"
+                                    f" source of type {type(self)}.")
+                if size > 2**23:
+                    raise ValueError(f"Size must be less than 8 MB; received {size}.")
+                    
+                transfer_type = 1 # INCR transaction
+                transfer_eof = 0 # TLAST will arrive with the data
+                transfer_tag = 0xC # Arbitrary value that will be included in the status word
+                transfer_cache = 0 # not needed for now
+                transfer_user = 0 # not needed for now
+                
+                misc_reg = ((transfer_user << 10) 
+                            | (transfer_cache << 6) 
+                            | (transfer_tag << 2) 
+                            | (transfer_eof << 1) 
+                            | (transfer_type << 0))
+                
+                btt_reg = size
+                
+                mm2s_addr_reg = src.byte_address() & 0xFFFFFFFF
+                mm2s_misc_reg = misc_reg | ((src.byte_address() >> 32) << 14) 
+                
+                s2mm_addr_reg = dst.byte_address() & 0xFFFFFFFF
+                s2mm_misc_reg = misc_reg | ((dst.byte_address() >> 32) << 14) 
+
+                # Configure the DataMover controller (the last bus write will 
+                # push the complete command into the command FIFO)
+                # Configure the S2MM side first so that it is prepared when the
+                # MM2S side starts streaming after the command gets pushed in
+                proc.bus_write(address=firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_s2mm"]+2, 
+                                    data=s2mm_misc_reg)
+                proc.bus_write(address=firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_s2mm"]+1, 
+                                    data=size)
+                proc.bus_write(address=firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_s2mm"]+0, 
+                                    data=s2mm_addr_reg)
+                
+                # Now MM2S
+                proc.bus_write(address=firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_mm2s"]+2, 
+                                    data=mm2s_misc_reg)
+                proc.bus_write(address=firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_mm2s"]+1, 
+                                    data=size)
+                proc.bus_write(address=firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_mm2s"]+0, 
+                                    data=mm2s_addr_reg)
+                
+                if block:
+                    # Wait until we get a status from the S2MM
+                    with proc.wait_until(proc.bus_read(firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_s2mm"]+1) != 0):
+                        pass
+                return transfer_tag
+            else:
+                raise TypeError(f"Unable to copy memory using processor {proc}.")
+        else:
+            raise TypeError("Memory source and/or destination lack sufficient"
+                            " information to execute copy.")
+            
+    def dma_stream(self, signal, channel):
+        """
+        Streams a signal from a DMA. 
+        """
+        # Create a DMA descriptor
+        # Instruct the sequencer to write to the DMA's FIFO
+        # If this Acadia instance has an active DMA synchronizer, notify it
+        # that this was called
+        # Otherwise, add an instruction to trigger
+        pass
         
-    def _attach_resource(self, resource_manager, mem_cast='c'):
+    def _create_cache(self):
+        def _cache_getitem(cache_self, key):
+            proc = Processor.active_processor()
+            if proc is None:
+                return cache_self.memory[key]
+            elif isinstance(proc, PythonProcessor):
+                return proc.call("memoryview.__getitem__", cache_self, key)
+            elif isinstance(proc, Sequencer):
+                return proc.bus_read(Acadia.firmware["sequencer_bus_decoder"]["cache"].address().value() + key)
+            raise TypeError(f"Unable to access cache on processor {proc}.")
+            
+        def _cache_setitem(cache_self, key, value):
+            proc = Processor.active_processor()
+            if proc is None:
+                cache_self.memory[key] = value
+            elif isinstance(proc, PythonProcessor):
+                proc.call("memoryview.__setitem__", cache_self, key, value)
+            elif isinstance(proc, Sequencer):
+                proc.bus_write(address=Acadia.firmware["sequencer_bus_decoder"]["cache"].address().value() + key,
+                               data=value)
+            raise TypeError(f"Unable to access cache on processor {proc}.")
+        
+        self.CacheArray = ManagedMemory("CacheArray", 
+            (), 
+            {"OPERATORS": [], 
+             "__getitem__": _cache_getitem, 
+             "__setitem__": _cache_setitem},
+            word_address_base=self.firmware["sequencer_bus_decoder"]["cache"].address().value(),
+            byte_address_base=StandardFirmware.BRAM_CTRL_CACHE_ADDR,
+            word_width=32,
+            pool_size=StandardFirmware.CACHE_SIZE_BITS // 32)
+        
+    def _create_dac_arrays(self):
+        self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["dac_mem_decoder"][f"dac_dma{i}_mem"].address().value()*16,
+            word_width=128,
+            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128) for i in range(16)]
+        
+    def _create_cmacc_kernel_arrays(self):
+        self.CMACCKernelArray = [ManagedMemory(f"CMACCKernel{i}Array", (), {},
+            word_address_base=0,
+            byte_address_base=self.firmware["mem_decoder"][f"cmacc_dma{i}_kernel_mem"].address().value()*16,
+            word_width=128,
+            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128) for i in range(16)]
+        
+    def _create_pl_ddr_arrays(self):
+        # PL DDR
+        # The two banks of PL DDR are contiguous on the AXI network, so we can 
+        # use one ManagedResource for all of the DDR
+        # The resource ID refers to the offset in bytes from the start of
+        # the PL C0 DDR
+        self.PLDDRArray = ManagedMemory(f"PLDDRArray", (), {},
+            word_address_base=StandardFirmware.DDR4_C0_ADDR,
+            byte_address_base=StandardFirmware.DDR4_C0_ADDR,
+            word_width=8,
+            pool_size=2**33)
+        
+    def _create_ps_ddr_arrays(self):
+        # PS DDR
+        self.PSDDRArray = ManagedMemory(f"PLDDRArray", (), {},
+            word_address_base=0x8_0000_0000,
+            byte_address_base=0x8_0000_0000,
+            word_width=8,
+            pool_size=2**30)
+        
+    def _create_ocm_arrays(self):
+        self.OCMArray = ManagedMemory(f"OCMArray", (), {},
+            word_address_base=0xFFFC_0000,
+            byte_address_base=0xFFFC_0000,
+            word_width=8,
+            pool_size=2**18)
+        
+    def _attach_resource(self, resource_manager, mem_cast='B'):
         """
         Maps the memory associated with a managed resource in the physical 
         address space of the hardware. Instances of `memoryview` are assigned
@@ -2322,7 +2644,7 @@ class Acadia:
             end_byte = start_byte + instance.byte_length()
             instance.memory = memoryview(m)[start_byte:end_byte].cast(mem_cast)
         
-    def _attach_memory(self, address, size, mem_cast='c'):
+    def _attach_memory(self, address, size, mem_cast='B'):
         """
         Maps a region of memory in the physical address space of the hardware.
         
@@ -2340,67 +2662,6 @@ class Acadia:
         self._mem_maps.append(m)
         
         return memoryview(m).cast(mem_cast)
-            
-    @classmethod
-    def RFDC_call(func_name, *args, **kwargs):
-        if getattr(pyxrfdc.lib, f"XRFdc_{func_name}")(cls._rfdc, *args, **kwargs) != pyxrfdc.lib.XRFDC_SUCCESS:
-            raise ValueError(f"XRFdc_{func_name} failed.")
-                
-    @classmethod
-    def RFDC_init(cls):
-        """
-        Initializes the RFDC library and stores a reference to the initialized
-        driver instance internally. This function should only be called on live
-        hardware.
-        """
-        import pyxrfdc as xrfdc
-        cls._rfdc = xrfdc.ffi.new("XRFdc*")
-        cls._device_ptr = xrfdc.ffi.new("struct metal_device*")
-        
-        metal_init_params = xrfdc.ffi.new("struct metal_init_params*")
-        xrfdc.lib.INITIALIZE_METAL_INIT_DEFAULTS(metal_init_params)
-        
-        config_ptr = xrfdc.lib.XRFdc_LookupConfig(0)
-        if config_ptr is xrfdc.ffi.NULL:
-            raise ValueError("XRFdc_LookupConfig failed.")
-            
-        cls.RFDC_call("RegisterMetal", 0, cls._device_ptr)
-        cls.RFDC_call("CfgInitialize", config_ptr)
-        
-    @classmethod
-    def RFDC_status(cls):
-        """
-        Get the status of the converter. This function should only be called
-        on live hardware.
-        """
-        ip_status = xrfdc.ffi.new("XRFdc_IPStatus*")
-        cls.RFDC_call("GetIPStatus", ip_status)
-        return ip_status
-        
-    @classmethod
-    def RFDC_channel_status(cls, channel):
-        """
-        Get the status of the converter. This function should only be called
-        on live hardware.
-        """
-        block_status = xrfdc.ffi.new("XRFdc_BlockStatus*")
-        cls.RFDC_call("GetBlockStatus", 
-                   channel.converter_type, 
-                   channel.tile, 
-                   channel.block, 
-                   block_status)
-        return block_status            
-        
-    def dma_stream(self, signal, channel):
-        """
-        Streams a signal from a DMA. 
-        """
-        # Create a DMA descriptor
-        # Instruct the sequencer to write to the DMA's FIFO
-        # If this Acadia instance has an active DMA synchronizer, notify it
-        # that this was called
-        # Otherwise, add an instruction to trigger
-        pass
         
         
     

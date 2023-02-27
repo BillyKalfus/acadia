@@ -29,6 +29,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
                        range        : "{obj}",
                        list         : "{obj}",
                        FunctionType : "{obj}",
+                       bytes        : "{obj}",
                       }
     
     def __init__(self):

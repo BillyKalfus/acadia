@@ -11,7 +11,7 @@ HEADERS = {"rfdc": '#include "xrfdc.h"\n'
                    '#include <metal/sys.h>\n'
                    'void INITIALIZE_METAL_INIT_DEFAULTS(struct metal_init_params* p) { *p = METAL_INIT_DEFAULTS; }\n'
                    'u32 DEF_XRFDC_BLOCK_BASE(u32 type, u32 tile, u32 block) { return XRFDC_BLOCK_BASE(type, tile, block); }\n'
-                   'void WriteReg16(xRFdc* InstancePtr, u32 BaseAddress, u32 RegOffset, u32 RegisterValue) { XRFdc_WriteReg16(InstancePtr, BaseAddress, RegOffset, RegisterValue); }',
+                   'void XRFdc_WriteReg16Wrapper(xRFdc* InstancePtr, u32 BaseAddress, u32 RegOffset, u32 RegisterValue) { XRFdc_WriteReg16(InstancePtr, BaseAddress, RegOffset, RegisterValue); }',
            "rfclk": '#include "xrfclk.h"\n'}
 
 

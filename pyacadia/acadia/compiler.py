@@ -797,15 +797,13 @@ class Processor(ABC):
     @classmethod
     def active_processor(cls):
         """
-        Get the innermost processor context. If called when no context is 
-        active, an error is thrown.
+        Get the innermost processor context.
         :return: The :class:`Processor` instance establishing the innermost
         context.
         :rtype: :class:`Processor`
         """
         if len(cls._processor_contexts) == 0:
-            raise ValueError("Active processor queried outside of any"
-                             " processor context.")
+            return None
             
         return cls._processor_contexts[-1]
             
@@ -990,7 +988,7 @@ class SynchronizedFunction:
         self._processor = obj
         return self
     
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs):            
         self._synchronizer.add({"function": self._func.__name__, 
                                 "processor": self._processor, 
                                 "args": args, 
@@ -1046,7 +1044,7 @@ class Synchronizer:
     ```
     p = SomeProcessor()
     
-    with p.synchronizer:
+    with p.synchronizer():
         p.command()
     ```
     
@@ -1065,8 +1063,9 @@ class Synchronizer:
     the function was called and then calls the decorated function on the 
     previously-captured :class:`Processor` object.
     """
-    def __init__(self):
+    def __init__(self, allow_standalone=False):
         self._active = False
+        self._allow_standalone = allow_standalone
     
     def synchronized(self, func):
         return SynchronizedFunction(self, func)
@@ -1075,13 +1074,18 @@ class Synchronizer:
         """
         Configures the :class:`Synchronizer` when the context is being entered.
         """
+        self._kwargs = kwargs
         return self
     
     def add(self, obj):
-        if not self._active:
+        if self._active:
+            self._calls.append(obj)
+        elif self._allow_standalone:
+            self._calls = [obj]
+            self.__exit__()
+        else:
             raise ValueError("Attempted call to a synchronized function"
                              " outside of a synchronization context.")
-        self._calls.append(obj)
     
     def __enter__(self):
         if self._active:
@@ -1091,6 +1095,7 @@ class Synchronizer:
                 
     def __exit__(self, *args, **kwargs):
         self._active = False
+        self._kwargs = {}
 
         
         
