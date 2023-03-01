@@ -23,7 +23,7 @@ petalinux-config --get-hw-description=$VIVADO_PROJ_DIR
 
 # Copy the device tree files and autostart package into the project
 cp -r $VIVADO_PROJ_DIR/dts/* components/plnx_workspace/device-tree/device-tree
-cp -r $SRC_DIR/autostart project-spec/meta-user/recipes-apps
+cp -r $SRC_DIR/trd-autostart project-spec/meta-user/recipes-apps
 
 # Replace the system-user.dtsi device tree file
 cp $SRC_DIR/system-user.dtsi project-spec/meta-user/recipes-bsp/device-tree/files

@@ -18,6 +18,14 @@ typedef unsigned long u64;
 typedef signed long s64;
 typedef unsigned long metal_phys_addr_t;
 
+struct metal_init_params {
+    ...;
+};
+
+struct metal_device {
+    ...;
+};
+
 /**
 * The handler data type allows the user to define a callback function to
 * respond to interrupt events in the system. This function is executed
@@ -34,9 +42,6 @@ typedef unsigned long metal_phys_addr_t;
 */
 typedef void (*XRFdc_StatusHandler)(void *CallBackRef, u32 Type, u32 Tile_Id, u32 Block_Id, u32 StatusEvent);
 #pragma pack(1)
-/**
- * PLL settings.
- */
 typedef struct {
 	u32 Enabled; /* PLL Enables status (not a setter) */
 	double RefClkFreq;
@@ -435,17 +440,7 @@ typedef struct {
  * RFdc Structure.
  */
 typedef struct {
-	XRFdc_Config RFdc_Config; /* Config Structure */
-	u32 IsReady;
-	u32 ADC4GSPS;
-	metal_phys_addr_t BaseAddr; /* BaseAddress */
-	struct metal_io_region *io; /* Libmetal IO structure */
-	struct metal_device *device; /* Libmetal device structure */
-	XRFdc_DAC_Tile DAC_Tile[4];
-	XRFdc_ADC_Tile ADC_Tile[4];
-	XRFdc_StatusHandler StatusHandler; /* Event handler function */
-	void *CallBackRef; /* Callback reference for event handler */
-	u8 UpdateMixerScale; /* Set to 1, if user overwrite mixer scale */
+	...;
 } XRFdc;
 
 /***************** Macros (Inline Functions) Definitions *********************/
@@ -3093,38 +3088,13 @@ typedef struct {
 // #define XRFDC_BLOCK_ADDR_OFFSET(X) (X * 0x400U)
 #define XRFDC_TILE_DRP_OFFSET 0x2000U
 
-
-#define XRFdc_ReadReg16(InstancePtr, BaseAddress, RegOffset)                                                           \
-	XRFdc_In16((InstancePtr->io), ((u32)RegOffset + (u32)BaseAddress))
-
-/***************************************************************************/
-/**
-* Write to a register.
-*
-* @param    InstancePtr is a pointer to the XRfdc instance.
-* @param    BaseAddress contains the base address of the device.
-* @param    RegOffset contains the offset from the 1st register of the
-*           device to target register.
-* @param    RegisterValue is the value to be written to the register.
-*
-* @note     None.
-*
-* @note     C-Style signature:
-*	void XRFdc_WriteReg16(XRFdc *InstancePtr, u32 BaseAddress, int RegOffset,
-*	u16 RegisterValue)
-*
-******************************************************************************/
-#define XRFdc_WriteReg16(InstancePtr, BaseAddress, RegOffset, RegisterValue)                                           \
-	XRFdc_Out16((InstancePtr->io), ((u32)RegOffset + (u32)BaseAddress), (u32)(RegisterValue))
-
 /*****************************************************************************/
 /************************** Function Prototypes ******************************/
 
 // We need to define a function to get some defines from libmetal in order for
 // CFFI to find them
-void INITIALIZE_METAL_INIT_DEFAULTS(struct metal_init_params*);
-u32 DEF_XRFDC_BLOCK_BASE(u32, u32, u32);
-int metal_init(const struct metal_init_params *);
+u32 metal_init_METAL_INIT_DEFAULTS(void);
+u32 def_XRFDC_BLOCK_BASE(u32, u32, u32);
 void XRFdc_WriteReg16Wrapper(XRFdc*, u32, u32, u32);
 
 XRFdc_Config *XRFdc_LookupConfig(u16 DeviceId);

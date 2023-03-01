@@ -33,8 +33,8 @@ entity acadia_zdma_controller is
     port (
         nrst            : in std_logic;
         
-        master_bus_din  : out  std_logic_vector(DATA_WIDTH-1 downto 0);
-        master_bus_dout : in  std_logic_vector(DATA_WIDTH-1 downto 0);
+        master_bus_miso  : out std_logic_vector(DATA_WIDTH-1 downto 0);
+        master_bus_mosi : in  std_logic_vector(DATA_WIDTH-1 downto 0);
         master_bus_addr : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
         master_bus_wr   : in  std_logic;
         master_bus_en   : in  std_logic;
@@ -52,8 +52,8 @@ architecture rtl of acadia_zdma_controller is
     ATTRIBUTE X_INTERFACE_INFO : STRING;    
     ATTRIBUTE X_INTERFACE_MODE : STRING;
     
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_din:  SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DIN";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_dout: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DOUT";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DIN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DOUT";
     ATTRIBUTE X_INTERFACE_INFO of master_bus_wr:   SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus WE";
     ATTRIBUTE X_INTERFACE_INFO of master_bus_en:   SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus EN";
     ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus ADDR";
@@ -76,7 +76,7 @@ begin
                     cack_count(i) <= (others => '0');
                 elsif((master_bus_wr 
                           and master_bus_en 
-                          and master_bus_dout(i)) = '1') then
+                          and master_bus_mosi(i)) = '1') then
                     if(master_bus_addr(1 downto 0) = "00") then
                         cvld_int(i) <= '1';
                     elsif(master_bus_addr(1 downto 0) = "01") then
@@ -97,7 +97,7 @@ begin
                     tvld_count(i) <= (others => '0');
                 elsif((master_bus_wr 
                           and master_bus_en 
-                          and master_bus_dout(i)) = '1'
+                          and master_bus_mosi(i)) = '1'
                           and master_bus_addr(1 downto 0) = "10") then
                     tvld_count(i) <= (others => '0');  
                 elsif(tvld(i) = '1') then
@@ -121,21 +121,21 @@ begin
         end if;
     end process tack_proc;
                                    
-    master_bus_din(DATA_WIDTH-1 downto NUM_DMA) <= (others => '0');
+    master_bus_miso(DATA_WIDTH-1 downto COUNTER_WIDTH) <= (others => '0');
                                    
-    master_bus_din_proc: process(master_bus_clk) begin
+    master_bus_miso_proc: process(master_bus_clk) begin
         if rising_edge(master_bus_clk) then
-            master_bus_din_loop: for i in 0 to NUM_DMA-1 loop
+            master_bus_miso_loop: for i in 0 to NUM_DMA-1 loop
                 -- Maximum NUM_DMA is 32, so we only need to compare the lower 5 bits
                 if(to_integer(unsigned(master_bus_addr(4 downto 0))) = i) then
                     if(master_bus_addr(5) = '0') then
-                        master_bus_din(NUM_DMA-1 downto 0) <= std_logic_vector(cack_count(i));
+                        master_bus_miso(COUNTER_WIDTH-1 downto 0) <= std_logic_vector(cack_count(i));
                     else
-                        master_bus_din(NUM_DMA-1 downto 0) <= std_logic_vector(tvld_count(i));
+                        master_bus_miso(COUNTER_WIDTH-1 downto 0) <= std_logic_vector(tvld_count(i));
                     end if;
                 end if;
-            end loop master_bus_din_loop;
+            end loop master_bus_miso_loop;
         end if;
-    end process master_bus_din_proc;
+    end process master_bus_miso_proc;
 
 end rtl;

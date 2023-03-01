@@ -1,7 +1,7 @@
-APP = autostart
+APP = trd-autostart
 
 # Add any other object files to this list below
-APP_OBJS = autostart.o
+APP_OBJS = trd-autostart.o
 
 all: build
 

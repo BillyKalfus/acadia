@@ -1,16 +1,24 @@
-__all__ = ["StandardFirmware"]
+__all__ = ["StandardFirmware", "Acadia", "Channel", "PSGPIO"]
 
 import os
+import re
 from dataclasses import dataclass
+from functools import wraps
+from abc import ABC, abstractmethod
 
 from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController
-from .compiler import ManagedResource, ManagedMemory, Processor
+from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer
 from .firmware import Firmware
-from .hardware import LinuxMemory
 from .pythonprocessor import PythonProcessor
 from .sequencer import Sequencer
 from .dma import DMA
 from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg, next_highest_power_of_2
+
+try:
+    import pyxrfclk as xrfclk
+    import pyxrfdc as xrfdc
+except ImportError as e:
+    print(e)
 
 class StandardFirmware(Firmware):
     # Designate some addresses for memory slave segments
@@ -39,7 +47,7 @@ class StandardFirmware(Firmware):
     DDR4_C0_ADDR = 0x40_0000_0000
     DDR4_C1_ADDR = 0x41_0000_0000
 
-    # We"ll manually choose addresses for the AXI HPM1 interface since there are particular alignment requirements
+    # We'll manually choose addresses for the AXI HPM1 interface since there are particular alignment requirements
     RFDC_ADDR = 0x00_B000_0000
     CLK_WIZ_ADDR = 0x00_B004_0000
     BRAM_CTRL_MEM_DECODER_ADDR = 0x00_B020_0000
@@ -80,6 +88,7 @@ class StandardFirmware(Firmware):
         dma_trigger_ports = []
         dma_fifo_empty_ports = []
         dma_fifo_almost_empty_ports = []
+        dma_running_ports = []
         
         for label,count in [("dac", StandardFirmware.NUM_DAC), ("adc", StandardFirmware.NUM_ADC), ("cmacc", StandardFirmware.NUM_CMACC)]:
             for idx in range(count):
@@ -101,6 +110,12 @@ class StandardFirmware(Firmware):
                                                   "offset": bit,
                                                   "width": 1,
                                                   "pipeline": 1}]
+                
+                dma_running_ports += [{"name": f"{label}_dma{idx}", 
+                                          "direction": BusDataport.INPUT, 
+                                          "offset": bit,
+                                          "width": 1,
+                                          "pipeline": 1}]
             
                 
                 bit += 1
@@ -120,6 +135,10 @@ class StandardFirmware(Firmware):
         dma_fifo_almost_empty = BusDataport(name="dma_fifo_almost_empty", ports=dma_fifo_almost_empty_ports)
         sequencer_bus_decoder.add(dma_fifo_almost_empty)
         self.add(dma_fifo_almost_empty) 
+        
+        dma_running = BusDataport(name="dma_running", ports=dma_running_ports)
+        sequencer_bus_decoder.add(dma_running)
+        self.add(dma_running)
             
         # Create dataports for controlling accumulator offsets and output values
         for i in range(StandardFirmware.NUM_CMACC):
@@ -861,6 +880,7 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/adc_dma{d}_fifo_mosi", f"hedgehog/adc_dma{d}/descriptor_address_fifo_in")
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/adc_dma{d}_fifo_wr", f"hedgehog/adc_dma{d}/descriptor_address_fifo_wr")
                 connect_bd_net(f, f"hedgehog/dma_trigger_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_running_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/running")
                 connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/descriptor_address_fifo_empty")
                 connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/adc_dma{d}", f"hedgehog/adc_dma{d}/descriptor_address_fifo_almost_empty")
                 
@@ -1057,6 +1077,7 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cmacc_dma{d}_fifo_mosi", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_in")
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/cmacc_dma{d}_fifo_wr", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_wr")
                 connect_bd_net(f, f"hedgehog/dma_trigger_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_running_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/running")
                 connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_empty")
                 connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/cmacc_dma{d}", f"hedgehog/cmacc_dma{d}/descriptor_address_fifo_almost_empty")
 
@@ -1222,6 +1243,7 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{channel}_fifo_mosi", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_in")
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{channel}_fifo_wr", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_wr")
                 connect_bd_net(f, f"hedgehog/dma_trigger_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/trigger")
+                connect_bd_net(f, f"hedgehog/dma_running_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/running")
                 connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_empty")
                 connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/dac_dma{channel}", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_almost_empty")
                 
@@ -1270,7 +1292,7 @@ def livecallable(imperative=True):
                 
     def livecallable_inner(func):
         
-        @wraps(func)
+        # @wraps(func)
         def _new_func(*args, **kwargs):
             proc = Processor.active_processor()
             if proc is None:
@@ -1504,7 +1526,7 @@ class Channel:
         if (self.converter_type is not None 
                 and self.tile is not None 
                 and self.block is not None):
-            self._base_address = pyxrfdc.lib.DEF_XRFDC_BLOCK_BASE(self.converter_type, self.tile, self.block)
+            self._base_address = xrfdc.lib.def_XRFDC_BLOCK_BASE(self.converter_type, self.tile, self.block)
             
     @staticmethod
     def DAC(*args, **kwargs):
@@ -1513,7 +1535,7 @@ class Channel:
         :rtype: :class:`Channel`
         """
         return Channel(*args,
-                       converter_type=xrfdc.XRFDC_DAC_TILE, 
+                       converter_type=xrfdc.lib.XRFDC_DAC_TILE, 
                        **kwargs)
 
     @staticmethod
@@ -1523,24 +1545,22 @@ class Channel:
         :rtype: :class:`Channel`
         """
         return Channel(*args,
-                       converter_type=xrfdc.XRFDC_ADC_TILE, 
+                       converter_type=xrfdc.lib.XRFDC_ADC_TILE, 
                        **kwargs)
     
-    @livecallable()
     @classmethod
+    @livecallable()
     def RFDC_init(cls):
         """
         Initializes the RFDC library and stores a reference to the initialized
         driver instance internally. This function should only be called on live
         hardware.
         """
-        import pyxrfdc as xrfdc
         cls._rfdc = xrfdc.ffi.new("XRFdc*")
-        cls._device_ptr = xrfdc.ffi.new("struct metal_device*")
-
-        metal_init_params = xrfdc.ffi.new("struct metal_init_params*")
-        xrfdc.lib.INITIALIZE_METAL_INIT_DEFAULTS(metal_init_params)
-
+        cls._device_ptr = xrfdc.ffi.new("struct metal_device**")
+        
+        xrfdc.lib.metal_init_METAL_INIT_DEFAULTS()
+        
         config_ptr = xrfdc.lib.XRFdc_LookupConfig(0)
         if config_ptr is xrfdc.ffi.NULL:
             raise ValueError("XRFdc_LookupConfig failed.")
@@ -1548,8 +1568,8 @@ class Channel:
         cls.RFDC_call("RegisterMetal", 0, cls._device_ptr)
         cls.RFDC_call("CfgInitialize", config_ptr)
         
-    @livecallable()
     @classmethod
+    @livecallable()
     def RFDC_call(cls, func_name, *args, **kwargs):
         """
         Call a function in the XRFDC driver. If no Processor is active, it is
@@ -1562,11 +1582,11 @@ class Channel:
         if not hasattr(cls, "_rfdc"):
             raise ValueError("RFDC driver not initialized.")
             
-        if getattr(xrfdc.lib, f"XRFdc_{func_name}")(cls._rfdc, *args, **kwargs) != pyxrfdc.lib.XRFDC_SUCCESS:
+        if getattr(xrfdc.lib, f"XRFdc_{func_name}")(cls._rfdc, *args, **kwargs) != xrfdc.lib.XRFDC_SUCCESS:
             raise ValueError(f"XRFdc_{func_name} failed.")
             
-    @livecallable(imperative=False)
     @classmethod
+    @livecallable(imperative=False)
     def RFDC_def(cls, name):
         """
         Get a definition from the XRFDC library by name.
@@ -1576,8 +1596,8 @@ class Channel:
             
         return getattr(xrfdc.lib, name)
     
-    @livecallable(imperative=False)
     @classmethod
+    @livecallable(imperative=False)
     def RFDC_struct(cls, name, init=None):
         """
         Get a definition from the XRFDC library by name.
@@ -1587,8 +1607,8 @@ class Channel:
             
         return xrfdc.ffi.new(name, init)
     
-    @livecallable(imperative=False)
     @classmethod
+    @livecallable(imperative=False)
     def IP_status(cls):
         """
         Get the status of the RFDC IP.
@@ -1825,7 +1845,7 @@ class Channel:
         raise TypeError("ADC DSA can only be set in"
                         " `PythonProcessor` or `Sequencer` contexts.")
     
-    @tdd_mode_synchronizer.synchronized
+    @tdd_synchronizer.synchronized
     def set_tdd_mode(self, mode):
         """
         Set time-division duplexing (TDD) mode. Note that in the current version
@@ -1998,14 +2018,226 @@ class Channel:
         # Reconfigure the interface width to 128 bits
         self.RFDC_call("SetFabRdVldWords", self.tile, self.block, 128 // 16)
     
+class RFClk:
+    """
+    A wrapper for the Xilinx XRFClk driver.
+    """
+    FIRMWARE_SPI_GPIO_ADDRESS = 0x80000000
+    DMESG_GPIO_PATTERN = "gpio@(?P<axi_address>[0-9]+)[:,\ a-z]+(?P<gpio_num>[0-9]+)"
+    
+    @staticmethod
+    def get_gpio_base():
+        """
+        Get the base GPIO number for the pins that control the SPI mux on the ZCU216.
+        """
+        with open("/var/log/dmesg") as f:
+            dmesg = f.read()
+                
+        gpio_matches = re.finditer(RFClk.DMESG_GPIO_PATTERN, dmesg)
+        if not gpio_matches:
+            raise ValueError("No GPIO found in dmesg output.")
+            
+        for match in gpio_matches:
+            if int(match["axi_address"], 16) == RFClk.FIRMWARE_SPI_GPIO_ADDRESS:
+                return int(match["gpio_num"])
+                    
+        raise ValueError("Unable to extract GPIO base.")
+        
+    @classmethod
+    @livecallable()
+    def init(cls):
+        """
+        Initialize the xrfclk driver.
+        """
+        xrfclk.lib.XRFClk_Init(RFClk.get_gpio_base())
+        
+    class RFClkChip(ABC):
+        """
+        Wrapper for operations on a particular chip
+        """
+        @classmethod
+        @abstractmethod
+        def chip_id(cls):
+            """
+            The chip ID, as designated by the XRFClk driver.
+            """
+            pass
+        
+        @classmethod
+        @livecallable()
+        def reset(cls):
+            xrfclk.lib.XRFClk_ResetChip(cls.chip_id())
+            
+        @classmethod
+        @livecallable()
+        def set_config(cls, config_id=1):
+            """
+            Set a configuration present in the driver on the chip.
+            """
+            xrfclk.lib.XRFClk_SetConfigOnOneChipFromConfigId(cls.chip_id(), config_id)
+            
+        @classmethod
+        @livecallable(imperative=False)
+        def read_reg(cls, address):
+            """
+            Read a register on the chip.
+            """
+            value = xrfclk.ffi.new("unsigned int*", address << 8)
+            xrfclk.lib.XRFClk_ReadReg(cls.chip_id(), value)
+            return value[0]
+        
+        @classmethod
+        @livecallable()
+        def write_reg(cls, address, data):
+            """
+            Write a register on the chip.
+            """
+            xrfclk.lib.XRFClk_WriteReg(cls.chip_id(), (address << 8) | data)
+        
+    class LMK(RFClkChip):
+        DCLK_LMX_ADC = 0
+        SDCLK_LMX_ADC = 1
+        DCLK_LMX_DAC = 4
+        SDCLK_LMX_DAC = 5
+        DCLK_RFDC_DAC = 6
+        DCLK_RFDC_ADC = 12
+        SDCLK_RFDC = 3
+        DCLK_PL = 8
+        SDCLK_PL = 9
+        
+        @classmethod
+        def chip_id(cls):
+            return xrfclk.lib.RFCLK_LMK
+        
+        @classmethod
+        def read_reg16(cls, address):
+            """
+            Read a big-endian 16-bit number.
+            """
+            regH = cls.read_reg(address)
+            regL = cls.read_reg(address+1)
+            return (regH << 8) | regL
+        
+        @classmethod
+        def write_reg16(cls, address, data, mask=0xFFFF):
+            """
+            Write a big-endian 16-bit number.
+            """
+            cls.write_reg(address, (R >> 8) & (mask >> 8) & 0xFF)
+            cls.write_reg(address, R & mask & 0xFF)
+        
+        @classmethod
+        @livecallable()
+        def set_output_divider(cls, output, div):
+            """
+            Set the value of an output divider on a DCLK output.
+            """
+            cls.write_reg(0x100 + 8*output, div & 0x1F)
+            
+        @classmethod
+        @livecallable(imperative=False)
+        def get_output_divider(cls, output):
+            """
+            Set the value of an output divider on a DCLK output.
+            """
+            reg = cls.read_reg(0x100 + 8*output) & 0x1F
+            if reg == 0:
+                return 32
+            return reg
+        
+        @classmethod
+        @livecallable()
+        def set_input(cls, clkin):
+            """
+            Set the clock input mux.
+            """
+            cls.write_reg(0x147, (clkin << 4) | (2 << 2) | (2 << 0))
+            
+        @classmethod
+        @livecallable(imperative=False)
+        def get_input(cls, clkin):
+            """
+            Get the setting of the clock input mux.
+            """
+            reg = cls.read_reg(0x147) >> 4
+            return reg & 0x7
+        
+        @classmethod
+        @livecallable()
+        def set_input_R(cls, clkin, R):
+            cls.write_reg16(0x153 + 2*clkin, R, mask=0x3FFF)
+        
+        @classmethod
+        @livecallable(imperative=False)
+        def get_input_R(cls, clkin):
+            return read_reg16(0x153 + 2*clkin) & 0x3FFF
+        
+        @classmethod
+        @livecallable()
+        def set_PLL2_R(cls, N):
+            cls.write_reg16(0x160, N, mask=0x0FFF)
+        
+        @classmethod
+        @livecallable(imperative=False)
+        def get_PLL2_R(cls):
+            return read_reg16(0x160) & 0x0FFF
+        
+        @classmethod
+        @livecallable()
+        def set_PLL1_N(cls, N):
+            cls.write_reg16(0x159, N, mask=0x3FFF)
+        
+        @classmethod
+        @livecallable(imperative=False)
+        def get_PLL1_N(cls):
+            return read_reg16(0x159) & 0x3FFF
+        
+        @classmethod
+        @livecallable()
+        def set_PLL2_N(cls, N):
+            cls.write_reg16(0x167, N)
+        
+        @classmethod
+        @livecallable(imperative=False)
+        def get_PLL2_N(cls):
+            return read_reg16(0x167)
+        
+        @classmethod
+        @livecallable(imperative=False)
+        def get_PLL2_P(cls):
+            reg = read_reg16(0x162)
+            reg = (reg >> 5) & 0x7
+            
+            # This register has a weird encoding, decode it
+            if reg == 0:
+                return 8
+            if reg == 1 or reg == 2:
+                return 2
+            return reg
+        
+        
+        
+    class LMX(RFClkChip):
+        pass
+        
+    class LMX_ADC(LMX):
+        @classmethod
+        def chip_id(cls):
+            return xrfclk.lib.RFCLK_LMX2594_1
+        
+    class LMX_ADC(LMX):
+        @classmethod
+        def chip_id(cls):
+            return xrfclk.lib.RFCLK_LMX2594_2
+    
 class PSGPIO:
     """
     An interface to the GPIO pins of the PS exposed to the PL over EMIO.
     """
     PSGPIO3_IN = 0x6C
     PSGPIO3_OUT = 0x4C
-    PSGPIO4_IN = GPIO3_IN + 1
-    PSGPIO4_OUT = GPIO3_OUT + 1
+    PSGPIO4_IN = PSGPIO3_IN + 1
+    PSGPIO4_OUT = PSGPIO3_OUT + 1
     
     @classmethod
     def attach(cls, mem):
@@ -2425,7 +2657,6 @@ class Acadia:
         :param ps_fci_side: The flow-controlled side; either "read" or "write"
         :type ps_fci_side: str
         """
-        if not isinstance(src)
         if size is None:
             size = src.byte_length()
             

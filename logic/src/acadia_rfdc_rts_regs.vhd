@@ -1041,7 +1041,7 @@ begin
                     -- TDD mode control register
                     when X"6A" => tdd_mode_reg <= master_bus_mosi_dd;
                     when X"6B" => tdd_mode_reg <= tdd_mode_reg or master_bus_mosi_dd;
-                    when X"6C" => tdd_mode_reg <= tdd_mode_reg and ~master_bus_mosi_dd;
+                    when X"6C" => tdd_mode_reg <= tdd_mode_reg and not master_bus_mosi_dd;
                   
                     when X"6D" => update_vop_dsa_reg <= master_bus_mosi_dd(19 downto 0);
                     when X"6E" => pl_event_reg       <= master_bus_mosi_dd;
@@ -1070,19 +1070,19 @@ begin
 
                     when X"90" => dac_tile0_fast_shutdown_reg <= master_bus_mosi_dd(11 downto 0);
                     when X"91" => dac_tile0_fast_shutdown_reg <= dac_tile0_fast_shutdown_reg or master_bus_mosi_dd(11 downto 0);
-                    when X"92" => dac_tile0_fast_shutdown_reg <= dac_tile0_fast_shutdown_reg and ~master_bus_mosi_dd(11 downto 0);
+                    when X"92" => dac_tile0_fast_shutdown_reg <= dac_tile0_fast_shutdown_reg and not master_bus_mosi_dd(11 downto 0);
 
                     when X"94" => dac_tile1_fast_shutdown_reg <= master_bus_mosi_dd(11 downto 0);
                     when X"95" => dac_tile1_fast_shutdown_reg <= dac_tile1_fast_shutdown_reg or master_bus_mosi_dd(11 downto 0);
-                    when X"96" => dac_tile1_fast_shutdown_reg <= dac_tile1_fast_shutdown_reg and ~master_bus_mosi_dd(11 downto 0);
+                    when X"96" => dac_tile1_fast_shutdown_reg <= dac_tile1_fast_shutdown_reg and not master_bus_mosi_dd(11 downto 0);
 
                     when X"98" => dac_tile2_fast_shutdown_reg <= master_bus_mosi_dd(11 downto 0);
                     when X"99" => dac_tile2_fast_shutdown_reg <= dac_tile2_fast_shutdown_reg or master_bus_mosi_dd(11 downto 0);
-                    when X"9A" => dac_tile2_fast_shutdown_reg <= dac_tile2_fast_shutdown_reg and ~master_bus_mosi_dd(11 downto 0);
+                    when X"9A" => dac_tile2_fast_shutdown_reg <= dac_tile2_fast_shutdown_reg and not master_bus_mosi_dd(11 downto 0);
 
                     when X"9C" => dac_tile3_fast_shutdown_reg <= master_bus_mosi_dd(11 downto 0);
                     when X"9D" => dac_tile3_fast_shutdown_reg <= dac_tile3_fast_shutdown_reg or master_bus_mosi_dd(11 downto 0);
-                    when X"9E" => dac_tile3_fast_shutdown_reg <= dac_tile3_fast_shutdown_reg and ~master_bus_mosi_dd(11 downto 0);
+                    when X"9E" => dac_tile3_fast_shutdown_reg <= dac_tile3_fast_shutdown_reg and not master_bus_mosi_dd(11 downto 0);
                     
                     when others => zero <= '0';
                 end case;

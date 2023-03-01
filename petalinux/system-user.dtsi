@@ -3,18 +3,30 @@
 
 / {
 	
-	acadia_ps_ddr: sram@800000000 {
-        compatible = "mmio-sram";
-		reg = <0x8 0x00000000 0x0 0x40000000>;
-		ranges;
-		#address-cells = <2>;
+    reserved-memory {
+        #address-cells = <2>;
 		#size-cells = <2>;
+        ranges;
         
-		psddr0@0 {
-			reg = <0x8 0x00000000 0x0 0x40000000>;
+        psddr0: ddr4@800000000 {
+			reg = <0x8 0x00000000 0x0 0x20000000>;
 		}; 
-		
-	};
-	
+    
+    };
+    
+    psddr {
+        compatible = "mmio-sram";
+        memory-region = <&psddr0>;
+    };
+    
+	plddr0@4000000000 {
+        compatible = "mmio-sram";
+        reg = <0x40 0x00000000 0x1 0x00000000>;
+    }; 
+    
+    plddr1@4100000000 {
+        compatible = "mmio-sram";
+        reg = <0x41 0x00000000 0x1 0x00000000>;
+    }; 
 };
 	
