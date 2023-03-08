@@ -5,32 +5,38 @@ processors.
 
 __all__ = ["PythonProcessor"]
 
+import operator
+from dataclasses import dataclass
 from numbers import Number
 from types import FunctionType
 from contextlib import contextmanager
-import operator
 
 from .compiler import Operation, Symbol, ManagedResource, Processor, ProcessorSubroutineMixin
-        
+
+class PythonProcessorCacheable:
+    """
+    A mixin for designating custom classes as being able to be cached in a 
+    :class:`PythonProcessor`'s cache.
+    """
+    pass
+
+@dataclass(repr=False)
+class PythonProcessorName:
+    """
+    A wrapper for strings to indicate that they represent direct text to be
+    inserted.
+    """
+    wrapped: str
+    
+    def __repr__(self):
+        return self.wrapped
+    
 class PythonProcessor(Processor, ProcessorSubroutineMixin):
     """
     A processor capable of executing Python commands. For this 
     :class:`Processor`, compiling consists of generating strings containing
     Python code and assembly consists of calling the Python compiler on it.
     """
-    
-    # A dictionary indicating which types of arguments may be cached for 
-    # retrieval at runtime. The keys are the types, and the 
-    # values are strings indicating any post-processing needed at runtime to
-    # extract the relevant argument data (such as extracting the value of a 
-    # Symbol). This string is formatted with the key "obj" whose value is 
-    # assigned as the object at runtime.
-    cacheable_types = {Symbol       : "{obj}.value",
-                       range        : "{obj}",
-                       list         : "{obj}",
-                       FunctionType : "{obj}",
-                       bytes        : "{obj}",
-                      }
     
     def __init__(self):
         super().__init__()
@@ -42,13 +48,14 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             self(Operation("import", lib_name))
             
         def import_getattr(import_self, attr):
-            return Operation("getattr", import_self._lib_name, attr)
+            return Operation("getattr", 
+                             PythonProcessorName(import_self._lib_name), 
+                             attr)
                 
         self.Import = ManagedResource("Import", 
                                       (), 
                                       {"__init__": import_init, 
-                                       "__getattr__": import_getattr,
-                                       "SUPPORT_HANDLED_OPERATORS": False})
+                                       "__getattr__": import_getattr})
                 
         # Keep track of loops so that we can give the iteration variables
         # unique names, otherwise nested loops will get messed up
@@ -82,12 +89,12 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         :type instruction_resource: :class:`Instruction`
         """
         
-        if len(instruction_resource["args"]) == 0:
+        if len(instruction_resource.args) == 0:
             raise ValueError("At least one positional argument must be supplied"
                              " in order to specify the operation being performed.")
             
-        op = instruction_resource["args"][0]
-        compiled_kwargs = {k: self.compile_arg(v) for k,v in instruction_resource["kwargs"].items()}
+        op = instruction_resource.args[0]
+        compiled_kwargs = {k: self.compile_arg(v) for k,v in instruction_resource.kwargs.items()}
         
         # Create a list containing the lines of Python
         if isinstance(op, str):
@@ -99,14 +106,14 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             raise TypeError(f"Operation of incompatible type ({type(op)}): {op}")
         
         # Indent the lines while formatting the lines with any kwargs
-        indent = "    "*instruction_resource["inline_block_level"]
+        indent = "    "*instruction_resource.inline_block_level
         if len(compiled_kwargs) > 0:
             indented_lines = [indent + line.format(**compiled_kwargs) for line in line_list]
         else:
             indented_lines = [indent + line for line in line_list]
             
         # Assign the compiled lines to the instruction resource
-        instruction_resource["compiled_instructions"] = indented_lines
+        instruction_resource.compiled = indented_lines
         
     def call(self, *args, **kwargs):
         """
@@ -120,7 +127,7 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         :class:`PythonProcessor` instance at runtime, along with the arguments.
         """
         instruction_instance = f"self.Instruction.instances[{instruction_resource._resource_id}]"
-        code_string = (f"self._subroutines[{instruction_resource['instruction']}]"
+        code_string = (f"self._subroutines[{instruction_resource.name}]"
                        f"(*({instruction_instance}[\'args\']), "
                        f"**({instruction_instance}[\'kwargs\']))")
         return [code_string]
@@ -129,15 +136,28 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
         
     def compile_cached_object(self, obj):
         """
-        Stores an object in this instance's data cache and returns a compiled statement that will retrieve it at runtime. The provided argument must have an entry in this class' `cacheable_types` dictionary.
+        Stores an object in this instance's data cache and returns a compiled
+        statement that will retrieve it at runtime. The provided argument must
+        have an entry in this class' `cacheable_types` dictionary.
         """
-        if type(obj) not in self.cacheable_types:
-            raise TypeError(f"Unable to cache object of type {type(obj)}: {obj}")
-            
         cache_key = f"_cached_object{len(self._data)}"
-        self._data[cache_key] = obj
-        object_retrieval_string = f"self._data['{cache_key}']"
-        return self.cacheable_types[type(obj)].format(obj=object_retrieval_string)
+        
+        if isinstance(obj, Symbol):
+            object_retrieval_string = f"self._data['{cache_key}'].value"            
+        elif (isinstance(obj, range) 
+              or isinstance(obj, list) 
+              or isinstance(obj, FunctionType) 
+              or isinstance(obj, bytes) 
+              or isinstance(obj, slice) 
+              or isinstance(obj, type)
+              or isinstance(obj, PythonProcessorCacheable)
+              or isinstance(type(obj), ManagedResource)):
+            object_retrieval_string = f"self._data['{cache_key}']"
+        else:
+            raise TypeError(f"Unable to cache object {obj} (type {type(obj)}).")
+            
+        self._data[cache_key] = obj    
+        return object_retrieval_string
         
     def compile_arg(self, obj):
         """
@@ -157,6 +177,10 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
             # A constant or literal, just return it since it should be able
             # to be directly converted into a string
             return str(obj)
+        
+        if isinstance(obj, PythonProcessorName):
+            # A name to be directly inserted
+            return f"{obj}"
         
         if isinstance(obj, str):
             # A literal string, we just need to add quotes for it to be valid

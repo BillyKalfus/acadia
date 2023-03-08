@@ -5,15 +5,20 @@ from contextlib import contextmanager
 
 from .compiler import Processor, Symbol, Operation
 
-@dataclass
+@dataclass(eq=False)
 class Descriptor:
     """
     An analog of machine instructions for direct memory access (DMA) modules,
     descriptors define a single transfer to be carried out by a DMA.
     """
-    trace_length: 'int or Symbol or Operation' = 0
-    trace_address: 'int or Symbol or Operation' = 0
-    decimate: 'int or Symbol' = 0
+    trace_length: [int, Symbol, Operation] = 0
+    trace_address: [int, Symbol, Operation] = 0
+    decimate: [int, Symbol] = 0
+    
+    def __eq__(self, other):
+        return (hasattr(other, "decimate") and self.decimate is other.decimate
+            and hasattr(other, "trace_length") and self.trace_length is other.trace_length
+            and hasattr(other, "trace_address") and self.trace_address is other.trace_address)
     
     def assemble(self):
         tmp = 0
@@ -40,44 +45,37 @@ class DMA(Processor):
     An abstraction of the real-time direct memory access (DMA) modules used for
     streaming data in and out of the Acadia hardware.
     """
-    
-    @Processor.instruction()
-    def stream(self, instruction_resource):
+    def request_descriptor(self, trace_address, trace_length, decimate=0):
         """
-        Instructs the DMA to stream a trace. The length of the trace is found
-        by calling :meth:`len` on the first (and only allowed) positional
-        argument. Two additional optional keyword arguments are detailed below.
-        
+        Request the DMA to stream a trace. All existing descriptors will be 
+        checked to determine whether one exists that is equal to the one
+        requested, and if so, it is returned. Otherwise, a new descriptor is
+        allocated.
         :param trace_address: The trace to be streamed from the DMA.
         :type trace_address: Address of the trace in trace memory
         :param trace_length:
         :param decimate: The decimation factor to set in the DMA
         :type decimate: `int`, :class:`Symbol`, or :class:`Operation`, optional
-        :param hold: If `True`, decimated samples are considered valid for the
-        entire length of the decimation period, rather than just in the first
-        cycle.
-        :type hold: `bool`, optional
         """
-        fields = {}
-        fields["decimate"] = 0
+        request_descriptor = Descriptor(trace_address=trace_address, 
+                                        trace_length=trace_length, 
+                                        decimate=decimate)
         
-        if len(instruction_resource["args"]) == 1:
-            arg = instruction_resource["args"][0]
-            fields["trace_address"] = arg.address() if hasattr(arg, "address") else None
-            fields["trace_length"] = len(arg) if hasattr(arg, "__len__") else None
-        elif len(instruction_resource["args"]) == 0:
-            fields["trace_address"] = None
-            fields["trace_length"] = None
-        else:
-            raise ValueError("Stream instruction should have one or zero"
-                             " positional arguments; received"
-                             f" args={instruction_resource['args']}")
+        for instruction in self.Instruction.instances:
+            cmp_descriptor = Descriptor(**instruction_resource.kwargs)
+            if cmp_descriptor == request_descriptor:
+                return instruction_resource.address
             
-        for key in instruction_resource["kwargs"].keys():
-            if key in ["decimate", "trace_length", "trace_address"]:
-                fields[key] = instruction_resource["kwargs"][key]
-            else:
-                raise KeyError(f"Unrecognized keyword argument {key}.")
-            
-        descriptor = Descriptor(**fields)
-        instruction_resource["compiled_instructions"] = [descriptor]
+        return self.add_descriptor(trace_address=trace_address, 
+                                    trace_length=trace_length, 
+                                    decimate=decimate).address
+    
+    @Processor.instruction()
+    def add_descriptor(self, instruction_resource):
+        """
+        Instructs the DMA to stream a trace. The length of the trace is found
+        by calling :meth:`len` on the first (and only allowed) positional
+        argument. Two additional optional keyword arguments are detailed below.
+        """
+        descriptor = Descriptor(**instruction_resource.kwargs)
+        instruction_resource.compiled = [descriptor]

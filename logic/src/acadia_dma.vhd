@@ -60,13 +60,13 @@ entity acadia_dma is
         running        : out std_logic
     );
 
-    attribute USE_DSP : string;
+    -- attribute USE_DSP : string;
 
 end acadia_dma;
 
 architecture rtl of acadia_dma is 
     
-    attribute USE_DSP of rtl : architecture is "YES";
+    -- attribute USE_DSP of rtl : architecture is "YES";
 
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;
@@ -105,6 +105,8 @@ architecture rtl of acadia_dma is
     signal descriptor_lm1   : unsigned(31 downto 0);
     signal descriptor_addr  : unsigned(15 downto 0);
     signal descriptor_dec   : unsigned(7 downto 0);
+    signal descriptor_blank : std_logic;
+    signal descriptor_fixed : std_logic;
     
     -- Progress counters
     signal decimation_count : unsigned(7 downto 0);
@@ -121,52 +123,17 @@ begin
     
     -- Control the interface to descriptor memory
     descriptor_mem_clk  <= clk;
-
-    descriptor_address_fifo_inst : xpm_fifo_sync
-        generic map (
-            DOUT_RESET_VALUE    => "0",      -- String
-            ECC_MODE            => "no_ecc", -- String
-            FIFO_MEMORY_TYPE    => "auto",   -- String
-            FIFO_READ_LATENCY   => 0,        -- DECIMAL
-            FIFO_WRITE_DEPTH    => DESCRIPTOR_FIFO_DEPTH,       -- DECIMAL
-            FULL_RESET_VALUE    => 0,        -- DECIMAL
-            PROG_EMPTY_THRESH   => 10,       -- DECIMAL
-            PROG_FULL_THRESH    => 10,       -- DECIMAL
-            RD_DATA_COUNT_WIDTH => 1,        -- DECIMAL
-            READ_DATA_WIDTH     => 16,       -- DECIMAL
-            READ_MODE           => "fwft",   -- String
-            SIM_ASSERT_CHK      => 0,        -- DECIMAL; 0=disable simulation messages, 1=enable simulation messages
-            USE_ADV_FEATURES    => "0800",   -- String -- Enable almost_empty, and nothing else. This is bit 11
-            WAKEUP_TIME         => 0,        -- DECIMAL
-            WRITE_DATA_WIDTH    => 16,       -- DECIMAL
-            WR_DATA_COUNT_WIDTH => 1         -- DECIMAL
-        )
-        port map (
-            wr_clk => clk, 
-            rst    => rst,
-            
-            -- The write interface is exposed to the module's port map
-            din   => descriptor_address_fifo_in,
-            wr_en => descriptor_address_fifo_wr,
-            
-            -- The output connects directly to the descriptor memory
-            dout  => descriptor_mem_addr,
-            rd_en => fifo_rd_en_int, 
-            
-            -- We'll use the empty signal to determine when to stop,
-            -- but we don't need the full signal because writing to 
-            -- a full FIFO is nondestructive
-            empty        => fifo_empty_int, 
-            almost_empty => descriptor_address_fifo_almost_empty,
-            full         => open,                  
-            
-            -- These ports are unused for our purposes
-            rd_rst_busy => open,     
-            wr_rst_busy => open,
-            injectdbiterr => '0',
-            injectsbiterr => '0', 
-            sleep => '0'
-        );
+    
+    descriptor_address_fifo_inst: entity work.acadia_dma_fifo
+        port map(
+            clk          => clk, 
+            nrst         => nrst, 
+            din          => descriptor_address_fifo_in,
+            wr_en        => descriptor_address_fifo_wr,
+            dout         => descriptor_mem_addr,
+            rd_en        => fifo_rd_en_int,
+            empty        => fifo_empty_int,
+            almost_empty => descriptor_address_fifo_almost_empty);
         
     -- Because the FIFO is FWFT, we can pulse the FIFO read enable
     -- once we've already started the descriptor
@@ -201,9 +168,11 @@ begin
     descriptor_field_load_proc: process(clk) begin
         if rising_edge(clk) then
             if(trigger = '1' or descriptor_done = '1') then
-                descriptor_lm1  <= unsigned(descriptor_mem_dout(31 downto 0));
-                descriptor_addr <= unsigned(descriptor_mem_dout(47 downto 32));
-                descriptor_dec  <= unsigned(descriptor_mem_dout(55 downto 48));
+                descriptor_lm1   <= unsigned(descriptor_mem_dout(31 downto 0));
+                descriptor_addr  <= unsigned(descriptor_mem_dout(47 downto 32));
+                descriptor_dec   <= unsigned(descriptor_mem_dout(55 downto 48));
+                descriptor_blank <= descriptor_mem_dout(56);
+                descriptor_fixed <= descriptor_mem_dout(57);
             end if;
         end if;
     end process descriptor_field_load_proc;
@@ -238,16 +207,24 @@ begin
             -- Stream the address out of the AXI-stream port
             -- Data present on the stream is considered valid when its NOT during decimation
             addr_tvalid <= running_int and decimation_done;
-            addr_tdata  <= std_logic_vector(descriptor_point + descriptor_addr);
-            addr_tlast  <= running_int and descriptor_done;
+            addr_tlast  <= descriptor_done;
+            
+            if(descriptor_fixed = '1') then
+                addr_tdata <= std_logic_vector(descriptor_addr);
+            else
+                addr_tdata <= std_logic_vector(descriptor_point + descriptor_addr);
+            end if;
             
             -- Control the memory master port
-            -- Memory will be accessed at the beginning of decimation, after which the enable
-            -- pin will be deasserted
-            -- The memory interface will be reset either when de-triggered, or when the sequence is complete 
-            mem_control_addr <= std_logic_vector(descriptor_point + descriptor_addr);
-            mem_control_rst  <= not running_int;
-            mem_control_en   <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
+            mem_control_rst <= not running_int or descriptor_blank;
+            mem_control_en  <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
+        
+            if(descriptor_fixed = '1') then
+                mem_control_addr <= std_logic_vector(descriptor_addr);
+            else
+                mem_control_addr <= std_logic_vector(descriptor_point + descriptor_addr);
+            end if;
+            
         end if;
     end process output_proc;
     

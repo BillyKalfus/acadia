@@ -170,6 +170,7 @@ set files [list \
  [file normalize "${origin_dir}/acadia_axi_bram_ctrl_addr_slice.vhd" ]\
  [file normalize "${origin_dir}/acadia_fast_complex_macc.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma.vhd" ]\
+ [file normalize "${origin_dir}/acadia_dma_fifo.vhd" ]\
  [file normalize "${origin_dir}/acadia_sysref_capture.vhd" ]\
  [file normalize "${origin_dir}/acadia_bram_write_pipeline.vhd" ]\
 ]
@@ -243,6 +244,17 @@ set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
 set file "acadia_dma.vhd"
+set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
+set_property -name "file_type" -value "VHDL" -objects $file_obj
+set_property -name "is_enabled" -value "1" -objects $file_obj
+set_property -name "is_global_include" -value "0" -objects $file_obj
+set_property -name "library" -value "xil_defaultlib" -objects $file_obj
+set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
+set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
+set_property -name "used_in_simulation" -value "1" -objects $file_obj
+set_property -name "used_in_synthesis" -value "1" -objects $file_obj
+
+set file "acadia_dma_fifo.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj

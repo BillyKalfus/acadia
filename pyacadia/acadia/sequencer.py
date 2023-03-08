@@ -1,13 +1,14 @@
 __all__ = ["Sequencer", "DSPConfiguration", "DSP_MODES"]
 
+import re
 from collections import namedtuple
 from enum import Enum
+from typing import get_type_hints
 from itertools import permutations
 from dataclasses import dataclass
 from contextlib import contextmanager
-import re
 
-from .compiler import ManagedResource, Symbol, Operation, Processor, Operable
+from .compiler import ManagedResource, Symbol, Operation, Processor, Operable, ProcessorInstruction
 
 def is_numeric(obj):
     """
@@ -34,7 +35,7 @@ def is_numeric(obj):
         return True
     return False    
 
-class InstructionField(type):
+class SequencerDatapathPort(type):
 
     def __new__(meta_cls, name, bases, dct):
         
@@ -70,9 +71,9 @@ class InstructionField(type):
         dct["__repr__"] = field_repr
         meta_cls.__getattr__ = field_getattr
 
-        return super(InstructionField, meta_cls).__new__(meta_cls, name, bases, dct)
+        return super(SequencerDatapathPort, meta_cls).__new__(meta_cls, name, bases, dct)
     
-class Source(metaclass=InstructionField):
+class Source(metaclass=SequencerDatapathPort):
     class Major(Enum):
         REG = 0
         PC = 8
@@ -83,7 +84,7 @@ class Source(metaclass=InstructionField):
         DSP_PATTERN = 56
         DSP_DATA = 64
             
-class Destination(metaclass=InstructionField):
+class Destination(metaclass=SequencerDatapathPort):
     class Major(Enum):
         REG = 0
         PC = 8
@@ -96,177 +97,6 @@ class Destination(metaclass=InstructionField):
         DSP_AB = 72
         DSP_C = 80
 
-# Create dataclasses for abstracting machine code
-@dataclass
-class STP:
-    src1: 'Source or int' = Source.REG
-    src2: 'Source or int' = Source.REG
-    dest1: 'Destination or int' = Destination.REG
-    dest2: 'Destination or int' = Destination.REG
-    imm1: 'int or bool or Symbol or Operation or DSPMode' = 0
-    imm2: 'int or bool or Symbol or Operation or DSPMode' = 0
-    dsp_cep: 'InstructionField' = None
-    push_return: 'bool or int' = False
-
-    def __post_init__(self):
-        # Check types
-        if is_numeric(self.src1):
-            self.imm1 = self.src1
-            self.src1 = Source.IMM
-        if not isinstance(self.src1, Source):
-            raise TypeError(f"STP field src1 must be of type Source;"
-                            f" received {self.src1}.")
-        
-        if is_numeric(self.src2):
-            self.imm2 = self.src2
-            self.src2 = Source.IMM
-        if not isinstance(self.src2, Source):
-            raise TypeError(f"STP field src2 must be of type Source;"
-                            f" received {self.src2}.")
-
-        if not isinstance(self.dest1, Destination):
-            raise TypeError(f"STP field dest1 must be of type Destination;"
-                            f" received {self.dest1}.")
-            
-        if not isinstance(self.dest2, Destination):
-            raise TypeError(f"STP field dest2 must be of type Destination;"
-                            f" received {self.dest2}.")
-            
-        if not is_numeric(self.imm1):
-            raise TypeError(f"STP field imm1 must be numeric or DSPConfiguration;"
-                            f" received {self.imm1}.")
-            
-        if not is_numeric(self.imm2):
-            raise TypeError(f"STP field imm2 must be numeric or DSPConfiguration;"
-                            f" received {self.imm2}.")
-            
-        if self.dsp_cep is not None and not (isinstance(self.dsp_cep, InstructionField) 
-                                             or "DSP" not in self.dsp_cep.major.name):
-            raise TypeError(f"STP field dsp_cep must be an InstructionField"
-                            f" with \"DSP\" in the major member name;"
-                            f" received {self.dsp_cep}.")
-            
-        if not (isinstance(self.push_return, int) or isinstance(self.push_return, bool)):
-            raise TypeError(f"STP field push_return must be of type int or bool;"
-                            f" received {self.push_return}.")
-
-    def assemble(self):
-        """
-        Assembles the instruction into a binary word.
-        :return: A binary word representing the machine instruction.
-        :rtype: int
-        """
-        tmp = 0
-        # Opcode = 0 for STP
-        tmp |= self.push_return << 104
-        tmp |= self.src1.value() << 96
-        tmp |= self.src2.value() << 88
-        tmp |= self.dest1.value() << 80
-        tmp |= self.dest2.value() << 72
-        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
-
-        if (isinstance(self.imm1, Symbol) 
-            or isinstance(self.imm1, Operation)
-            or isinstance(self.imm1, DSPConfiguration)):
-            tmp |= self.imm1.value() << 32
-        else:
-            tmp |= self.imm1 << 32
-
-        if (isinstance(self.imm2, Symbol) 
-            or isinstance(self.imm2, Operation)
-            or isinstance(self.imm2, DSPConfiguration)):
-            tmp |= self.imm2.value()
-        else:
-            tmp |= self.imm2
-
-        return tmp
-
-@dataclass
-class STC:
-    src_stval: 'Source' = Source.REG
-    src_tval: 'Source' = Source.REG
-    dest_stval: 'Destination' = Destination.REG
-    op: 'int' = 0
-    imm_stval: 'int or bool or Symbol or Operation' = 0
-    imm_tval: 'int or bool or Symbol or Operation' = 0
-    dsp_cep: 'InstructionField' = None
-    push_return: 'bool or int' = False
-
-    def __post_init__(self):
-        # Check types
-        if is_numeric(self.src_stval):
-            self.imm_stval = self.src_stval
-            self.src_stval = Source.IMM
-        if not isinstance(self.src_stval, Source):
-            raise TypeError(f"STP field src_stval must be of type Source;"
-                            f" received {self.src_stval}.")
-        
-        if is_numeric(self.src_tval):
-            self.imm_tval = self.src_tval
-            self.src_tval = Source.IMM
-        if not isinstance(self.src_tval, Source):
-            raise TypeError(f"STP field src_tval must be of type Source;"
-                            f" received {self.src_tval}.")
-            
-        if not isinstance(self.dest_stval, Destination):
-            raise TypeError(f"STP field dest_stval must be of type Destination;"
-                            f" received {self.dest_stval}.")
-            
-        if not is_numeric(self.op):
-            raise TypeError(f"STP field op must be numeric;"
-                            f" received {self.op}.")
-            
-        if not is_numeric(self.imm_stval):
-            raise TypeError(f"STP field imm_stval must be of type int, bool, Symbol,"
-                            f" Operation, or DSPConfiguration;"
-                            f" received {self.imm_stval}.")
-            
-        if not is_numeric(self.imm_tval):
-            raise TypeError(f"STP field imm_tval must be of type int, bool, Symbol,"
-                            f" Operation, or DSPConfiguration;"
-                            f" received {self.imm_tval}.")
-            
-        if self.dsp_cep is not None and not (isinstance(self.dsp_cep, InstructionField) 
-                                             or "DSP" not in self.dsp_cep.major.name):
-            raise TypeError(f"STP field dsp_cep must be an InstructionField"
-                            f" with \"DSP\" in the major member name;"
-                            f" received {self.dsp_cep}.")
-            
-        if not (isinstance(self.push_return, int) or isinstance(self.push_return, bool)):
-            raise TypeError(f"STP field push_return must be of type int or bool;"
-                            f" received {self.push_return}.")
-
-    def assemble(self):
-        """
-        Assembles the instruction into a binary word.
-        :return: A binary word representing the machine instruction.
-        :rtype: int
-        """
-        tmp = 0
-        tmp |= 1 << 112 # Opcode for STC
-        tmp |= self.push_return << 104
-        tmp |= self.src_stval.value() << 96
-        tmp |= self.src_tval.value() << 88
-        tmp |= self.dest_stval.value() << 80
-        tmp |= self.op << 72
-        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
-
-        if (isinstance(self.imm_stval, Symbol) 
-            or isinstance(self.imm_stval, Operation)
-            or isinstance(self.imm_stval, DSPConfiguration)):
-            tmp |= self.imm_stval.value() << 32
-        else:
-            tmp |= self.imm_stval << 32
-
-        if (isinstance(self.imm_tval, Symbol)
-            or isinstance(self.imm_tval, Operation)
-            or isinstance(self.imm_tval, DSPConfiguration)):
-            tmp |= self.imm_tval.value()
-        else:
-            tmp |= self.imm_tval
-
-        return tmp
-    
 # DSP operating modes
 # All constants come from Xilinx UG579
 @dataclass
@@ -406,26 +236,9 @@ class DSPConfiguration:
     :class:`Sequencer.DSP`
     :param mode: Mode in which to operate the DSP slice at the next clock cycle
     :type mode: :class:`DSPMode` or `str`
-    :param rst_a: If `True`, the RST pin of the A register is pulsed when 
-    the configuration register is written.
-    :type rst_a: `bool`, optional
-    :param rst_b: If `True`, the RST pin of the B register is pulsed when 
-    the configuration register is written.
-    :type rst_b: `bool`, optional
-    :param rst_c: If `True`, the RST pin of the C register is pulsed when
-    the configuration register is written.
-    :type rst_c: `bool`, optional
     :param rst_p: If `True`, the RST pin of the P register is pulsed when
     the configuration register is written.
     :type rst_p: `bool`, optional
-    :param dsp_data_register_load: Indicates which DSP register should be 
-    written, if the DSP_DATA destination is simultaneously written. Value
-    should be "AB" or "C".
-    :type dsp_data_register_load: `str`, optional
-    :param dsp_data_signed: Indicates whether data loaded into a DSP 
-    register is signed (and therefore, whether it should be sign-extended).
-    If so, the sign is extended for the fill 48-bit width of the register.
-    :type dsp_data_signed: `bool`, optional
     :param dsp_cep: Indicates how the clock enable for the DSP P register
     should be driven. If "pulse", the P register will be pulsed for one
     cycle immediately following the configuration. If "set", the input
@@ -434,9 +247,9 @@ class DSPConfiguration:
     in its current state.
     :type dsp_cep: str, optional
     """
-    mode: "DSPMode or str" = "P" # By default do nothing by loading P -> P
-    rst_p: "bool" = False
-    dsp_cep: "'pulse' or 'set' or 'reset'" = None
+    mode: [DSPMode, str] = "P" # By default do nothing by loading P -> P
+    rst_p: bool = False
+    dsp_cep: str = None
     
     def __post_init__(self):
         """
@@ -470,6 +283,156 @@ class DSPConfiguration:
     def value(self):
         return self._value
     
+# Create dataclasses for abstracting machine code
+@dataclass
+class STP:
+    src1: Source = Source.REG
+    src2: Source = Source.REG
+    dest1: Destination = Destination.REG
+    dest2: Destination = Destination.REG
+    imm1: [int, bool, Symbol, Operation, DSPConfiguration] = 0
+    imm2: [int, bool, Symbol, Operation, DSPConfiguration] = 0
+    dsp_cep: [Source, Destination, Symbol, Operation] = None
+    push_return: [bool, int] = False
+
+    def __post_init__(self):
+        # Check types
+        self.name = "STP"
+        if is_numeric(self.src1):
+            self.imm1 = self.src1
+            self.src1 = Source.IMM
+        if not isinstance(self.src1, Source):
+            raise TypeError(f"STP field src1 must be of type Source;"
+                            f" received {self.src1}.")
+        
+        if is_numeric(self.src2):
+            self.imm2 = self.src2
+            self.src2 = Source.IMM
+            
+        # Do basic type-checking
+        for field,field_type in get_type_hints(self).items(): 
+            field_value = getattr(self, field)
+            if field_value is not None:
+                if isinstance(field_type, list):
+                    found = False
+                    for t in field_type:
+                        if isinstance(field_value, t):
+                            found = True
+                            break
+                    if not found:
+                        raise TypeError(f"The type of field {field} must be one of"
+                                        f" {field_type}; received {field_value}.")
+                elif not isinstance(field_value, field_type):
+                    raise TypeError(f"Field {field} must be of type {field_type};"
+                                    f" received {field_value}.")
+
+    def assemble(self):
+        """
+        Assembles the instruction into a binary word.
+        :return: A binary word representing the machine instruction.
+        :rtype: int
+        """
+        tmp = 0
+        # Opcode = 0 for STP
+        tmp |= self.push_return << 104
+        tmp |= self.src1.value() << 96
+        tmp |= self.src2.value() << 88
+        tmp |= self.dest1.value() << 80
+        tmp |= self.dest2.value() << 72
+        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
+
+        if (isinstance(self.imm1, Symbol) 
+            or isinstance(self.imm1, Operation)
+            or isinstance(self.imm1, DSPConfiguration)):
+            tmp |= self.imm1.value() << 32
+        else:
+            tmp |= self.imm1 << 32
+
+        if (isinstance(self.imm2, Symbol) 
+            or isinstance(self.imm2, Operation)
+            or isinstance(self.imm2, DSPConfiguration)):
+            tmp |= self.imm2.value()
+        else:
+            tmp |= self.imm2
+
+        return tmp
+
+@dataclass
+class STC:
+    src_stval: Source = Source.REG
+    src_tval: Source = Source.REG
+    dest_stval: Destination = Destination.REG
+    op: int = 0
+    imm_stval: [int, bool, Symbol, Operation, DSPConfiguration] = 0
+    imm_tval: [int, bool, Symbol, Operation, DSPConfiguration] = 0
+    dsp_cep: [Source, Destination, Symbol, Operation] = None
+    push_return: bool = False
+
+    def __post_init__(self):
+        self.name = "STC"
+        # Check types
+        if is_numeric(self.src_stval):
+            self.imm_stval = self.src_stval
+            self.src_stval = Source.IMM
+        if not isinstance(self.src_stval, Source):
+            raise TypeError(f"STP field src_stval must be of type Source;"
+                            f" received {self.src_stval}.")
+        
+        if is_numeric(self.src_tval):
+            self.imm_tval = self.src_tval
+            self.src_tval = Source.IMM
+        if not isinstance(self.src_tval, Source):
+            raise TypeError(f"STP field src_tval must be of type Source;"
+                            f" received {self.src_tval}.")
+            
+        # Do basic type-checking
+        for field,field_type in get_type_hints(self).items(): 
+            field_value = getattr(self, field)
+            if field_value is not None:
+                if isinstance(field_type, list):
+                    found = False
+                    for t in field_type:
+                        if isinstance(field_value, t):
+                            found = True
+                            break
+                    if not found:
+                        raise TypeError(f"The type of field {field} must be one of"
+                                        f" {field_type}; received {field_value}.")
+                elif not isinstance(field_value, field_type):
+                    raise TypeError(f"Field {field} must be of type {field_type};"
+                                    f" received {field_value}.")
+
+    def assemble(self):
+        """
+        Assembles the instruction into a binary word.
+        :return: A binary word representing the machine instruction.
+        :rtype: int
+        """
+        tmp = 0
+        tmp |= 1 << 112 # Opcode for STC
+        tmp |= self.push_return << 104
+        tmp |= self.src_stval.value() << 96
+        tmp |= self.src_tval.value() << 88
+        tmp |= self.dest_stval.value() << 80
+        tmp |= self.op << 72
+        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
+
+        if (isinstance(self.imm_stval, Symbol) 
+            or isinstance(self.imm_stval, Operation)
+            or isinstance(self.imm_stval, DSPConfiguration)):
+            tmp |= self.imm_stval.value() << 32
+        else:
+            tmp |= self.imm_stval << 32
+
+        if (isinstance(self.imm_tval, Symbol)
+            or isinstance(self.imm_tval, Operation)
+            or isinstance(self.imm_tval, DSPConfiguration)):
+            tmp |= self.imm_tval.value()
+        else:
+            tmp |= self.imm_tval
+
+        return tmp
+    
 class Sequencer(Processor):
     """
     A :class:`Processor` for the sequencer embedded in the Acadia control 
@@ -490,14 +453,24 @@ class Sequencer(Processor):
                         
         def register_str(reg_self):
             return f"REG{reg_self._resource_id}"
+        
+        def register_source(reg_self):
+            return Source(Source.REG, reg_self._resource_id)
+        
+        def register_destination(reg_self):
+            return Destination(Destination.REG, reg_self._resource_id)
             
-        self.Register = ManagedResource(
+        OperableResource = type("OperableResource", (ManagedResource, Operable), {})
+            
+        self.Register = OperableResource(
             "Register", 
             (), 
             {"operator_handler": resource_load,
              "__str__": register_str,
              "__repr__": register_str,
              "load": resource_load,
+             "source": register_source,
+             "destination": register_destination,
              "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
@@ -510,7 +483,10 @@ class Sequencer(Processor):
             
         def dsp_getitem(dsp_self, key):
             return Operation("getitem", dsp_self, key)
-                
+        
+        def dsp_source(dsp_self):
+            return Source(Source.DSP_DATA, dsp_self._resource_id)
+        
         def dsp_setitem(dsp_self, key, value):
             if key == "AB":
                 self.store(src=value, 
@@ -559,10 +535,10 @@ class Sequencer(Processor):
             start_idx = len(self.Instruction.instances)
             yield
             for instruction in self.Instruction.instances[start_idx:]:
-                if "dsp_cep" not in instruction["kwargs"]:
-                    instruction["kwargs"]["dsp_cep"] = dsp_self
+                if "dsp_cep" not in instruction.kwargs:
+                    instruction.kwargs["dsp_cep"] = dsp_self
             
-        self.DSP = ManagedResource(
+        self.DSP = OperableResource(
             "DSP", 
             (), 
             {"__str__": dsp_str,
@@ -574,6 +550,7 @@ class Sequencer(Processor):
              "start_count": dsp_start_count,
              "stop_count": dsp_stop_count,
              "enabled": dsp_enabled,
+             "source": dsp_source,
              "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
@@ -592,12 +569,12 @@ class Sequencer(Processor):
         """
         Writes a value to the bus.
         """
-        if len(instruction_resource["args"]) > 0:
+        if len(instruction_resource.args) > 0:
             raise ValueError("Positional arguments not supported for store;"
                              f" received {instruction_resource._args}.")
     
-        data = instruction_resource["kwargs"]["data"]
-        address = instruction_resource["kwargs"]["address"]
+        data = instruction_resource.kwargs["data"]
+        address = instruction_resource.kwargs["address"]
         
         compiled_addr,addr_instructions,addr_resources = self.compile_source(address)
         compiled_data,data_instructions,data_resources = self.compile_source(data)
@@ -612,39 +589,14 @@ class Sequencer(Processor):
         for res in addr_resources + data_resources:
             res._released = True
             
-        instruction_resource["compiled_instructions"] = instructions
+        instruction_resource.compiled = instructions
         
     def goto(self, target):
         self.store(src=target, dest=Destination.PC)
         
     def nop(self):
         self.store(src=Source.REG, dest=Destination.REG)
-        
-    def __call__(self, op):
-        """
-        Execute an operation on the sequencer specified by an instance of 
-        :class:`Operation`. The only supported operators are `getitem` and 
-        `setitem`, which will translate to performing reads and writes on the
-        bus (respectively).
-        """
-        if op._op == "getitem":
-            # The first argument will be the object to get an item from, and
-            # the second will be the key. We'll assume that the object to get
-            # the item from is able to be compiled as a source
-            if len(op._args) != 2 or len(op._kwargs) != 0:
-                raise ValueError("`getitem` Operations called on a Sequencer"
-                                 " must have exactly two positional arguments.")
-            return self.bus_read(Operation("add", op._args[0], op._args[1]))
-        if op._op == "setitem":
-            if len(op._args) != 3 or len(op._kwargs) != 0:
-                raise ValueError("`setitem` Operations called on a Sequencer"
-                                 " must have exactly three positional arguments.")
-            return self.bus_write(address=Operation("add", op._args[0], op._args[1]), 
-                                  data=op._args[2])
-        
-        raise ValueError("Operations called on a Sequencer must either be"
-                         " `getitem` or `setitem`.")
-        
+
     def compile_all(self):
         """
         Calls `Processor.compile_all()` and updates the compiled instructions 
@@ -652,26 +604,16 @@ class Sequencer(Processor):
         """
         super().compile_all()
         for instruction in self.Instruction.instances:
-            if "dsp_cep_enable" in instruction["kwargs"]:
-                for compiled_instruction in instruction["compiled_instructions"]:
-                    compiled_instruction["dsp_cep"] = instruction["kwargs"]["dsp_cep"]
+            if "dsp_cep" in instruction.kwargs:
+                for compiled_instruction in instruction.compiled:
+                    compiled_instruction["dsp_cep"] = instruction.kwargs["dsp_cep"].source()
             
     @Processor.instruction()
     def STP(self, instruction_resource):
         """
         A direct abstraction of the STP instruction.
         """
-        kwargs = instruction_resource["kwargs"]
-        compiled_kwargs = {}
-        compiled_kwargs["src1"] = kwargs["src1"] if "src1" in kwargs else Source.REG
-        compiled_kwargs["src2"] = kwargs["src2"] if "src2" in kwargs else Source.REG
-        compiled_kwargs["dest1"] = kwargs["dest1"] if "dest1" in kwargs else Destination.REG
-        compiled_kwargs["dest2"] = kwargs["dest2"] if "dest2" in kwargs else Destination.REG
-        compiled_kwargs["imm1"] = kwargs["imm1"] if "imm1" in kwargs else 0
-        compiled_kwargs["imm2"] = kwargs["imm2"] if "imm2" in kwargs else 0
-        compiled_kwargs["dsp_cep"] = kwargs["dsp_cep"] if "dsp_cep" in kwargs else None
-        compiled_kwargs["push_return"] = kwargs["push_return"] if "push_return" in kwargs else False
-        instruction_resource["compiled_instructions"] = [STP(**compiled_kwargs)]
+        instruction_resource.compiled = [STP(**instruction_resource.kwargs)]
         
     @Processor.instruction()
     def store(self, instruction_resource):
@@ -689,14 +631,14 @@ class Sequencer(Processor):
         :param mask: Specifies the value to load into the mask register.
         """
         
-        if len(instruction_resource["args"]) > 0:
+        if len(instruction_resource.args) > 0:
             raise ValueError("Positional arguments not supported for store;"
                              f" received {instruction_resource._args}.")
             
         # We need src and dest; these will throw KeyError if they aren't 
         # present, which is basically our desired behavior so no need to 
         # manually add key checking for this
-        kwargs = instruction_resource["kwargs"]
+        kwargs = instruction_resource.kwargs
         src = kwargs["src"]
         dest = kwargs["dest"]
                 
@@ -713,6 +655,9 @@ class Sequencer(Processor):
                 elif dest._args[1] == "P":
                     # Handle below by replacing dest with the resource itself
                     dest = dest._args[0]
+                elif dest._args[1] == "CFG":
+                    dest = Destination(major=Destination.Major.DSP_CFG,
+                                       minor=dsp_self._resource_id)
                 else:
                     raise ValueError(f"Invalid DSP key {dest._args[1]}.")
             else:
@@ -728,6 +673,9 @@ class Sequencer(Processor):
         dsp_cep = kwargs["dsp_cep"] if "dsp_cep" in kwargs else None
         push_return = kwargs["push_return"] if "push_return" in kwargs else False
         allow_hold = kwargs["allow_hold"] if "allow_hold" in kwargs else False
+                                                                        
+        if isinstance(dsp_cep, self.DSP):
+            dsp_cep = dsp_cep.source()
         
         instructions = []
         if when is not None:
@@ -792,7 +740,7 @@ class Sequencer(Processor):
             for res in condition_resources:
                 res._released = True
                 
-        instruction_resource["compiled_instructions"] = instructions
+        instruction_resource.compiled = instructions
     
     def compile_source(self, obj, dsp=None):
         """
@@ -1197,7 +1145,7 @@ class Sequencer(Processor):
 
         self.block_start(inline=speculation)
         num_before = self.Instruction.usage()
-        yield Source.TEST_VALUE
+        yield
         self.block_end(inline=speculation)
         
         # TODO
@@ -1210,7 +1158,7 @@ class Sequencer(Processor):
             # Return from the block
             self.store(src=Source.STACK, dest=Destination.PC)
  
-        jump["kwargs"]["src"] = jump_target
+        jump.kwargs["src"] = jump_target
         
     @contextmanager
     def wait_until(self, condition, mask=None):
@@ -1242,7 +1190,7 @@ class Sequencer(Processor):
                 
                 # Call next_instance() again because store() will mean that
                 # return_instruction will not have the value we want
-                hold_instruction["kwargs"]["src"] = self.Instruction.next_instance()
+                hold_instruction.kwargs["src"] = self.Instruction.next_instance()
                 
             # TODO
                 # Alternatively, if we added only one DSP augmenting operation
@@ -1262,7 +1210,6 @@ class Sequencer(Processor):
                              f" condition {condition}.")
             
         
-                
     @contextmanager
     def loop(self, *args):
         """
@@ -1278,23 +1225,45 @@ class Sequencer(Processor):
         this function is the allocated DSP object (which will inherently 
         contain the iteration variable)
         """
+        dsp = self.DSP()
         if len(args) == 1:
             start = 0
             stop = args[0]
             step = 1
+            self.store(dsp["CFG"], DSPConfiguration("P+1", rst_p=True))
         elif len(args) == 2:
             start = args[0]
             stop = args[1]
             step = 1
+            # We have to insert an instruction to load P with the start value,
+            # since it requires one store to load the start value into a DSP 
+            # register and another to configure the DSP to load P with it
+            dsp.load(start)
+            self.store(dsp["CFG"], DSPConfiguration("P+1"))
         elif len(args) == 3:
             start = args[0]
             stop = args[1]
             step = args[2]
+            dsp.load(start)
+            self.STP(src1=Source.IMM1, 
+                     dest1=Destination(Destination.Major.DSP_CFG,
+                                        dsp._resource_id), 
+                     imm1=DSPConfiguration("P+AB"),
+                     src2=step,
+                     dest2=Destination(Destination.Major.DSP_AB,
+                                        dsp._resource_id))
         else:
             raise ValueError(f"Unrecognized call signature for loop;"
                              f" receieved {args}.")
-        dsp = self.DSP()
         
-        # TODO
-        # If the start value is 0, we don't need a separate instruction to load
-        # P first, since we can reset it when 
+        loop_block_start = self.Instruction.next_instance()
+            
+        yield dsp
+            
+        block_empty = not self.Instruction.next_instance_assigned()
+        if not block_empty:
+            loop_block_start.kwargs["dsp_cep"] = dsp.source()
+            
+        stc = self.store(src=loop_block_start, dest=Destination.PC, when=(dsp != stop))
+        if block_empty:
+            stc.kwargs["dsp_cep"] = dsp.source()

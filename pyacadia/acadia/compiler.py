@@ -11,9 +11,11 @@ __all__ = ["Operable",
            "ProcessorSubroutineMixin",
            "Synchronizer"]
 
+import operator
+from dataclasses import dataclass
+from typing import get_type_hints
 from types import MethodType
 from abc import ABC, abstractmethod
-import operator
 
 class Operable(type):
     """
@@ -79,7 +81,7 @@ class Operable(type):
         
         return op_func
      
-    def __new__(cls, name, bases, dct):
+    def __new__(cls, name, bases, dct, *args, **kwargs):
         """
         Creates a new :class:`Operable` type. Certain keyword arguments
         provided to this constructor will augment the behavior of the operator
@@ -120,7 +122,7 @@ class Operable(type):
             else:
                 dct[f"__{op}__"] = Operable.make_op_func(op)
                 
-        return super(Operable, cls).__new__(cls, name, bases, dct)
+        return super().__new__(cls, name, bases, dct)
     
 class Operation(metaclass=Operable):
     """
@@ -267,7 +269,7 @@ class Symbol(metaclass=Operable):
         raise ValueError(f"Symbol object {self} acted upon by augmenting"
                          f" operator with operation {operation}.")
         
-class ManagedResource(Operable):
+class ManagedResource(type):
     """
     Metaclass for creating autonomous hardware resource factories. This 
     metaclass implements resource allocation by assigning unique IDs to
@@ -296,113 +298,86 @@ class ManagedResource(Operable):
     keyword.
     :type use_instance_size: bool, optional
     """
-    def __new__(
-        cls_meta_new,
-        name_meta_new,
-        bases_meta_new,
-        dct_meta_new,
-        allocation_limit=None,
-        required_parameters=None,
-        use_instance_size=False):
-        
-        def cls_new(cls, *inst_args, **inst_kwargs):
-            """
-            Create a new instance representing a hardware resource. If a 
-            resource limit has been provided and reached, existing 
-            allocations will be checked to see if they were released, and if so,
-            may be returned.
-            
-            :param resource_id: The ID of resource, which may be any type and 
-            whose interpretation is left to the owning class. If not provided,
-            a new :class:`Symbol` will be instantiated.
-            """
-            if (allocation_limit is not None 
-                and cls._allocation_index >= allocation_limit):
-                # Find a free instance we can use, as indicated by noting that
-                # it is released
-                for instance in cls.instances:
-                    if instance._released:
-                        instance._released = False
-                        return instance
-                    
-                raise ValueError(f"Unable to allocate resource;"
-                                 f" instance limit reached for {cls} with no"
-                                 f" released instance found.")
-            
-            instance = super(cls, cls).__new__(cls)
-            instance._released = False
-            instance._resource_id = cls._allocation_index
-            
-            if required_parameters is not None:
-                for param in required_parameters:
-                    if param not in inst_kwargs:
-                        raise ValueError(f"{name_meta_new} instances must be"
-                                         f" instantiated with parameter `{param}`.")
-                    setattr(instance, param, inst_kwargs[param])
-            
-            instance._size = inst_kwargs["size"] if "size" in inst_kwargs and use_instance_size else 1
-            
-            if hasattr(cls, "_next_instance_symbol") and not cls.next_instance_assigned():
-                cls._next_instance_symbol.assign(instance)            
-            cls.instances.append(instance)
-            cls._allocation_index += instance._size
-            
-            return instance
-        
-        def usage(cls):
-            """
-            :return: The number of instances created.
-            :rtype: int
-            """
-            return len(cls.instances)
-        
-        def next_instance(cls):
-            """
-            :return: A :class:`Symbol` that will be populated with the next instance of
-            the resource once generated. 
-            """
-            if not hasattr(cls, "_next_instance_symbol") or cls.next_instance_assigned():
-                cls._next_instance_symbol = Symbol(value_type=cls)
-            
-            return cls._next_instance_symbol
-        
-        def next_instance_assigned(cls):
-            """
-            :return: A :class:`Symbol` that will be populated with the next instance of
-            the resource once generated. 
-            """
-            if not hasattr(cls, "_next_instance_symbol"):
-                return False
-            
-            return cls._next_instance_symbol.assigned()
-        
-        attrs = {"instances": [],
-                 "__new__": cls_new,
-                 "_allocation_index": 0,
-                 "next_instance": classmethod(next_instance),
-                 "next_instance_assigned": classmethod(next_instance_assigned),
-                 "usage": classmethod(usage),
-                **dct_meta_new}
+    def __call__(type_self, *args, **kwargs):
+        if (type_self._allocation_limit is not None 
+            and type_self._allocation_index >= type_self._allocation_limit):
+            # Find a free instance we can use, as indicated by noting that
+            # it is released
+            for instance in type_self.instances:
+                if instance._released:
+                    instance._released = False
+                    return instance
 
-        new_cls = super().__new__(cls_meta_new, name_meta_new, bases_meta_new, attrs)
-        return new_cls
+            raise ValueError(f"Unable to allocate resource;"
+                             f" instance limit reached for {type_self} with no"
+                             f" released instance found.")
+        
+        size = kwargs.pop("size", 1)
+        instance = super().__call__(*args, **kwargs)
+        instance._released = False
+        instance._resource_id = type_self._allocation_index
+        instance.size = size
+            
+        if hasattr(type_self, "_next_instance_symbol") and not type_self.next_instance_assigned():
+            type_self._next_instance_symbol.assign(instance)            
+        type_self.instances.append(instance)
+        type_self._allocation_index += instance.size
+                
+        return instance
+    
+    def usage(type_self):
+        """
+        :return: The number of instances created.
+        :rtype: int
+        """
+        return len(type_self.instances)
+
+    def next_instance(type_self):
+        """
+        :return: A :class:`Symbol` that will be populated with the next instance of
+        the resource once generated. 
+        """
+        if not hasattr(type_self, "_next_instance_symbol") or type_self.next_instance_assigned():
+            type_self._next_instance_symbol = Symbol(value_type=type_self)
+
+        return type_self._next_instance_symbol
+
+    def next_instance_assigned(type_self):
+        """
+        :return: A :class:`Symbol` that will be populated with the next instance of
+        the resource once generated.
+        """
+        if not hasattr(type_self, "_next_instance_symbol"):
+            return False
+
+        return type_self._next_instance_symbol.assigned()
+        
+    def __new__(type_self, 
+                 type_name, 
+                 type_bases, 
+                 type_dct, 
+                 allocation_limit=None):
+        type_instance = super().__new__(type_self, type_name, type_bases, type_dct)
+        
+        type_instance._allocation_limit = allocation_limit
+        type_instance.instances = []
+        type_instance._allocation_index = 0
+        
+        return type_instance
     
 class ManagedMemory(ManagedResource):
     """
     A class implementing additional common utilities for managing memory.
     """
     
-    def __new__(cls_meta_new,
-                name_meta_new,
-                bases_meta_new,
-                dct_meta_new,
-                pool_size,
-                word_width,
-                required_parameters=None,
-                base_word_address=None,
-                base_byte_address=None,
-                getitem_handler=None,
-                setitem_handler=None):
+    def __new__(type_self, 
+                 type_name, 
+                 type_bases, 
+                 type_dct, 
+                 pool_size,
+                 word_width,
+                 base_word_address=None,
+                 base_byte_address=None):
         """
         Creates a new type of managed memory. The total region of memory
         (also referred to as the "pool") is comprised of a finite number of 
@@ -421,85 +396,143 @@ class ManagedMemory(ManagedResource):
         the word-addressed space.
         :param base_byte_address: The starting address of the memory region in
         the byte-addressed space.
-        :param getitem_handler: A function to be called with an instance of 
-        :class:`Operation` when `getitem` is invoked on the resource instance.
-        :type getitem_handler: callable
-        :param setitem_handler: A function to be called with an instance of 
-        :class:`Operation` when `setitem` is invoked on the resource instance.
-        :type setitem_handler: callable
         """
+        type_instance = super().__new__(type_self, 
+                                        type_name, 
+                                        type_bases, 
+                                        type_dct)
+        
+        type_instance.pool_size = pool_size
+        type_instance.word_width = word_width
+        type_instance.base_word_address = base_word_address
+        type_instance.base_byte_address = base_byte_address
         
         def res_word_length(self):
             """
             :return: The length of the array in words
             :rtype int:
             """
-            return self._size
-        
+            return self.size
+
         def res_byte_length(self):
             """
             :return: The length of the array in bytes
             :rtype: int
             """
-            return self.word_length() * (word_width // 8)
-        
+            return self.word_length() * (self.word_width // 8)
+
         def res_word_address(self):
             """
             :return: The address of the array within the word-indexed address 
             space
             :rtype: int
             """
-            return base_word_address + self._resource_id
-        
+            return self.base_word_address + self._resource_id
+
         def res_byte_address(self):
             """
             :return: The address of the array within the byte-indexed address 
             space
             :rtype: int
             """
-            return base_byte_address + (self._resource_id * (word_width // 8))
+            return self.base_byte_address + (self._resource_id * (self.word_width // 8))
         
-        # Add the new address methods                
-        dct_meta_new["word_address"] = res_word_address
-        dct_meta_new["byte_address"] = res_byte_address
-        dct_meta_new["word_length"] = res_word_length
-        dct_meta_new["byte_length"] = res_byte_length
+        type_instance.word_length = res_word_length
+        type_instance.byte_length = res_byte_length
+        type_instance.word_address = res_word_address
+        type_instance.byte_address = res_byte_address
         
-        # Add the handlers for getitem and setitem
-        operators = dct_meta_new["OPERATORS"] if "OPERATORS" in dct_meta_new else []
-        handlers = dct_meta_new["handlers"] if "handlers" in dct_meta_new else {}
-        
-        if ("getitem" not in operators 
-                and "getitem" not in handlers 
-                and getitem_handler is not None):
-            operators.append("getitem")
-            handlers["getitem"] = getitem_handler
+        return type_instance
+    
+@dataclass
+class ProcessorInstruction:
+    """
+    Stores the fields required for an instruction call for a generic processor.
+    These fields are as follows:
+    
+    * `instruction`: The name of the instruction to execute, which 
+        is used to look up the translation function in the dictionary 
+        defining the class' instruction set.
+
+    * `args`: Positional arguments provided to the instruction.
+
+    * `kwargs`: Keywords arguments provided to the instruction.
+
+    * `block_start`: If `True`, indicates that this instruction 
+    is the first in a non-inlined block.
+
+    * `block_end`: If `True`, indicates that this instruction is 
+    the last in a non-inlined block.
+
+    * `inline_block_start`: If `True`, indicates that this 
+    instruction is the first in an inlined block. This is primarily
+    used for bookkeeping and keeping track of indentation.
+
+    * `inline_block_end`: If `True`, indicates that this 
+    instruction is the first in an inlined block. This is primarily
+    used for bookkeeping and keeping track of indentation.
+
+    * `inline_block_level`: The nesting level of the inline block
+    to which this instruction belongs. This is primarily used for 
+    bookkeeping and keeping track of indentation. This field is 
+    automatically populated during compilation and should not be
+    manually manipulated.
+
+    * `address`: When this instruction is compiled, it will be assigned
+    an "address" whose value may carry different meanings depending on the
+    :class:`Processor` type. This :class:`Symbol` will be automatically 
+    populated during compilation and should not be manually manipulated.
+
+    * `compiled_instructions`: The output of compiling this
+    instruction, which is a list list of any object with an `assemble`
+    method that returns a bytes-like object (or an object that can be 
+    converted to bytes). This field is automatically populated during
+    compilation and should not be manually manipulated.
+    """
+    name: str = None
+    args: [list, tuple] = None
+    kwargs: dict = None
+    block_start: bool = False
+    block_end: bool = False
+    inline_block_start: bool = False 
+    inline_block_end: bool = False
+    inline_block_level: bool = False
+    address: [Symbol, int] = None
+    compiled: list = None
+    
+    def __post_init__(self):
+        # Do basic type-checking
+        for field,field_type in get_type_hints(ProcessorInstruction).items(): 
+            field_value = getattr(self, field)
+            if field_value is not None:
+                if isinstance(field_type, list):
+                    found = False
+                    for t in field_type:
+                        if isinstance(field_value, t):
+                            found = True
+                            break
+                    if not found:
+                        raise TypeError(f"The type of field {field} must be one of"
+                                        f" {field_type}; received {field_value}.")
+                elif not isinstance(field_value, field_type):
+                    raise TypeError(f"Field {field} must be of type {field_type};"
+                                    f" received {field_value}.")
                 
-        if ("setitem" not in operators 
-                and "setitem" not in handlers 
-                and setitem_handler is not None):
-            operators.append("setitem")
-            handlers["setitem"] = setitem_handler    
-                
-        dct_meta_new["OPERATORS"] = operators
-        dct_meta_new["handlers"] = handlers
+        # We'll enforce the name field to be required
+        if not self.name:
+            raise ValueError("Name field is required.")
+            
+        # Populate address with a default value if it's not populated,
+        # and if it is, enforce it to encapsulate an integer
+        if self.address is not None:
+            if self.address.value_type() is not int:
+                raise TypeError("Address symbols must have `int` as their"
+                                f" value type;"
+                                f" found {self.address.value_type()}.")
+        else:
+            self.address = Symbol(value_type=int)
         
-        # Store some parameters
-        dct_meta_new["pool_size"] = pool_size
-        dct_meta_new["word_width"] = word_width
-        dct_meta_new["required_parameters"] = required_parameters
-        dct_meta_new["base_word_address"] = base_word_address
-        dct_meta_new["base_byte_address"] = base_byte_address
-        
-        return super().__new__(cls_meta_new,
-                                name_meta_new,
-                                bases_meta_new,
-                                dct_meta_new,
-                                use_instance_size=True,
-                                required_parameters=required_parameters,
-                                allocation_limit=pool_size)
-        
-class Processor(ABC):
+class Processor:
     """
     A base class for objects that represent entities capable of being commanded
     by a set of callable "instructions". These instructions are defined in 
@@ -637,59 +670,17 @@ class Processor(ABC):
         program list. The `dict` encapsulated by the 
         :class:`ManagedResource` contains a few dedicated fields:
 
-        * `instruction`: The name of the instruction to execute, which 
-        is used to look up the translation function in the dictionary 
-        defining the class' instruction set.
-
-        * `args`: Positional arguments provided to the instruction.
-
-        * `kwargs`: Keywords arguments provided to the instruction.
-
-        * `block_start`: If `True`, indicates that this instruction 
-        is the first in a non-inlined block.
-
-        * `block_end`: If `True`, indicates that this instruction is 
-        the last in a non-inlined block.
-
-        * `inline_block_start`: If `True`, indicates that this 
-        instruction is the first in an inlined block. This is primarily
-        used for bookkeeping and keeping track of indentation.
-
-        * `inline_block_end`: If `True`, indicates that this 
-        instruction is the first in an inlined block. This is primarily
-        used for bookkeeping and keeping track of indentation.
-
-        * `inline_block_level`: The nesting level of the inline block
-        to which this instruction belongs. This is primarily used for 
-        bookkeeping and keeping track of indentation. This field is 
-        automatically populated during compilation and should not be
-        manually manipulated.
-
-        * `compiled_address`: When this instruction is compiled, it 
-        will result in one or more native instructions in the resulting
-        flattened program list. The value of this field is the 
-        index within this list of the first new entry produced by this 
-        instruction. This field is automatically populated during 
-        compilation and should not be manually manipulated.
-
-        * `compiled_instructions`: The output of compiling this
-        instruction. This field is automatically populated during
-        compilation and should not be manually manipulated.
-
         """
         def append_instruction(self, *args, **kwargs):
-            instruction_resource = self.Instruction({
-                "instruction": name, 
-                "args": args, 
-                "kwargs": kwargs, 
-                "block_start": self._block_start_next, 
-                "block_end": self._block_end_next,
-                "inline_block_start": self._inline_block_start_next, 
-                "inline_block_end": self._inline_block_end_next,
-                "inline_block_level": None,
-                "compiled_address": Symbol(value_type=int),
-                "compiled_instructions": None,
-            })
+            instruction_resource = self.Instruction(
+                name=name, 
+                args=args, 
+                kwargs=kwargs, 
+                block_start=self._block_start_next, 
+                block_end=self._block_end_next,
+                inline_block_start=self._inline_block_start_next, 
+                inline_block_end=self._inline_block_end_next,
+            )
 
             self._block_start_next = False
             self._block_end_next = False
@@ -768,31 +759,16 @@ class Processor(ABC):
         # of instructions. The only reason we choose to make the instruction
         # type an instance member is so that its instances created for a 
         # particular Processor object can be tracked
-        def instruction_address(instruction_self):
-            return instruction_self["compiled_address"]
-        
-        self.Instruction = ManagedResource(
-                                f"Instruction", 
-                                (dict,), 
-                                {"OPERATORS": [],
-                                 "address": instruction_address})
+        self.Instruction = ManagedResource(f"Instruction", 
+                                           (ProcessorInstruction,), 
+                                           {})
         
     def __enter__(self):
-        self._processor_contexts.append(self)
+        Processor._processor_contexts.append(self)
+        return self
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         self._processor_contexts.pop()
-    
-    def operation_handler(self):
-        """
-        :return: A function which may be called with an operation as its sole
-        argument. Calling the returned function is understood to represent
-        executing an instruction abstracted by the operation.
-        :rtype: callable
-        """
-        def _handler(op):
-            return self(op)
-        return _handler
         
     @classmethod
     def active_processor(cls):
@@ -820,7 +796,10 @@ class Processor(ABC):
         :type previous_instruction: `bool`, optional
         """
         if previous_instruction:
-            self.Instruction.instances[-1]["inline_block_start" if inline else "block_start"] = True
+            if inline:
+                self.Instruction.instances[-1].inline_block_start = True
+            else:
+                self.Instruction.instances[-1].block_start = True
         else:
             if inline:
                 self._inline_block_start_next = True
@@ -844,7 +823,10 @@ class Processor(ABC):
             else:
                 self._block_end_next = True
         else:
-            self.Instruction.instances[-1]["inline_block_end" if inline else "block_end"] = True
+            if inline:
+                self.Instruction.instances[-1].inline_block_end = True
+            else:
+                self.Instruction.instances[-1].block_end = True
         
     def compile_all(self, overwrite=False):
         """
@@ -879,32 +861,32 @@ class Processor(ABC):
                 
         # Compile every instruction and arrange blocks as necessary
         for instruction in self.Instruction.instances:
-            compilation_func = self._instruction_set[instruction["instruction"]]
             
             # Create a new block if necessary
-            if instruction["block_start"]:
+            if instruction.block_start:
                 block_prev = block_current
                 block_current = len(blocks)
                 blocks.append([])
                 inline_block_level.append(0)
             
             # Start the inline block, making sure to do this after starting the full block
-            if instruction["inline_block_start"]:
+            if instruction.inline_block_start:
                 inline_block_level[block_current] += 1
                 
             # Assign the block level
-            instruction["inline_block_level"] = inline_block_level[block_current]
+            instruction.inline_block_level = inline_block_level[block_current]
             
-            if instruction["compiled_instructions"] and not overwrite:
+            if instruction.compiled is not None and not overwrite:
                 raise ValueError("Instruction compilation is non-empty;"
                                  " set overwrite=True to overwrite.")
             
             # Run the actual compilation
+            compilation_func = self._instruction_set[instruction.name]
             compilation_func(self, instruction)
             
             # Run some checks before continuing
-            if len(instruction["compiled_instructions"]) == 0:
-                raise ValueError(f"Instruction resulted in empty compilation:"
+            if not instruction.compiled:
+                raise ValueError(f"Instruction resulted in invalid compilation:"
                                  f" {instruction}")
                 
             
@@ -913,26 +895,25 @@ class Processor(ABC):
             
             # End the inline block if necessary, making sure to do this before 
             # ending the full block
-            if instruction["inline_block_end"]:
+            if instruction.inline_block_end:
                 inline_block_level[block_current] -= 1
             
             # End the block if necessary
-            if instruction["block_end"]:
+            if instruction.block_end:
                 block_current = block_prev
                                 
         # Flatten the compiled program and assign compiled instruction addresses
         self._compiled_program = []
         for block in blocks:
             for idx_instruction,instruction in enumerate(block):
-                instruction["compiled_address"].assign(len(self._compiled_program))
-                self._compiled_program.extend(instruction["compiled_instructions"])
-                                    
-    def assemble(self):
+                instruction.address.assign(len(self._compiled_program))
+                self._compiled_program.extend(instruction.compiled)
+        
+    def __eq__(self, other):
         """
-        Assembles a complete program into machine code appropriate for the 
-        hardware executing the program.
+        Wrap the "is" operator.
         """
-        return [instr.assemble() for instr in self._compiled_program]
+        return self is other
     
 class ProcessorSubroutineMixin(ABC):
     """
@@ -963,7 +944,6 @@ class ProcessorSubroutineMixin(ABC):
         def dummy(*args, **kwargs): pass
         return dummy
     
-    @classmethod
     @abstractmethod
     def call_subroutine(self, instruction_resource):
         """
@@ -985,15 +965,15 @@ class SynchronizedFunction:
         self._func = func
         
     def __get__(self, obj, objtype=None):
-        self._processor = obj
+        self._parent = obj
         return self
     
     def __call__(self, *args, **kwargs):            
         self._synchronizer.add({"function": self._func.__name__, 
-                                "processor": self._processor, 
+                                "parent": self._parent, 
                                 "args": args, 
                                 "kwargs": kwargs})
-        self._func(self._processor, *args, **kwargs)
+        self._func(self._parent, *args, **kwargs)
     
 class Synchronizer:
     """
@@ -1093,7 +1073,7 @@ class Synchronizer:
         self._active = True
         self._calls = []
                 
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         self._active = False
         self._kwargs = {}
 
