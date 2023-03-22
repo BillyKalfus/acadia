@@ -437,13 +437,20 @@ class PythonProcessor(Processor, ProcessorSubroutineMixin):
     def assemble(self):
         self._assembled_program = compile("\n".join(self._compiled_program), "", "exec")
     
-    def run(self):
+    def run(self, assembled=True):
         """
         This function executes the internally-stored program. This is expected 
         to be called on the hardware running the Python environment that the 
         program targets.
+        :param assembled: If `True`, runs the pre-assembled program. Otherwise,
+        the compiled program is run line by line.
+        :type assembled: bool, optional
         """
-        exec(self._assembled_program)
+        if assembled:
+            exec(self._assembled_program)
+        else:
+            for line in self._compiled_program:
+                exec(line)
         
             
     

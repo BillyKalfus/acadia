@@ -1,9 +1,11 @@
 __all__ = ["HDLModule", "BusDevice", "BusDataport", "BusDecoder", "BusDatamoverController"]
 
+import os
+
 from .compiler import Symbol
 from .utils import next_highest_power_of_2
 
-class HDLModule(object):
+class HDLModule:
     """
     An object representing a custom HDL module.
     """
@@ -20,7 +22,7 @@ class HDLModule(object):
         """
         pass
 
-class BusDevice():
+class BusDevice:
     def __init__(self, name, size=0, bus_data_bits=32, bus_addr_bits=32):
         """
         A device which can be added to a memory bus.
@@ -726,3 +728,332 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'end rtl;\n\n'
         
         return hdl
+    
+class AXIBRAMController(HDLModule):
+    """
+    Creates a wrapper for AXI BRAM controllers with the correct address slicing
+    and avoids strange behavior of the controller in the IP Integrator.
+    """
+    
+    def __init__(self, module_name, width, depth, axi_frequency, axi4_lite=False, read_latency=1, read_cmd_optimization=True, synth_jobs=16):
+        """
+        :param module_name: The name of the module
+        :type module_name: str
+        :param width: The width of the data port
+        :type width: int
+        :param depth: The depth of the memory in words
+        :type depth: int
+        :param axi_frequency: Frequency of the AXI bus in Hz, needed for the
+        `FREQ_HZ` parameter of the AXI interface.
+        :type axi_frequency: int
+        :param axi4_lite: If `True`, the BRAM controller will be implemented
+        with an AXI4-Lite interface instead of full AXI4.
+        :type axi4_lite: bool
+        :param read_latency: The latency of retrieving a word from memory, 
+        in number of cycles.
+        :type read_latency: int
+        :param read_cmd_optimization: If `True`, the read command optimization 
+        setting of the IP is enabled.
+        :type read_cmd_optimization: bool
+        :param synth_jobs: Number of processor jobs to use for synthesizing the
+        IP
+        :type synth_jobs: int
+        """
+        self._width = width
+        self._depth = depth
+        self._read_latency = read_latency
+        self._axi_frequency = axi_frequency
+        self._axi4_lite = axi4_lite
+        self._read_cmd_optimization = read_cmd_optimization
+        self._synth_jobs = synth_jobs
+        super().__init__(module_name)
+        
+    def generate_hdl(self):
+        """
+        Generates an HDL file for the controller.
+        """
+        
+        width_bytes = self._width // 8
+        byte_depth = self._depth * width_bytes
+        byte_depth_bits = next_highest_power_of_2(byte_depth, log=True)
+        depth_bits = next_highest_power_of_2(self._depth, log=True)
+        
+        
+        hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\n\n'
+        hdl += f'entity {self._module_name} is\n'
+        hdl += f'    port (\n'
+        hdl += f'        s_axi_aclk    : in  std_logic;\n'
+        hdl += f'        s_axi_aresetn : in  std_logic;\n\n'
+        
+        hdl += f'        s_axi_awaddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'        s_axi_awvalid : in  std_logic;\n'
+        hdl += f'        s_axi_awready : out std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_awlen   : in  std_logic_vector(7 downto 0);\n'
+            hdl += f'        s_axi_awsize  : in  std_logic_vector(2 downto 0);\n'
+            hdl += f'        s_axi_awburst : in  std_logic_vector(1 downto 0);\n'
+        
+        hdl += f'        s_axi_wdata   : in  std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'        s_axi_wstrb   : in  std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'        s_axi_wvalid  : in  std_logic;\n'
+        hdl += f'        s_axi_wready  : out std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_wlast   : in  std_logic;\n'
+        
+        hdl += f'        s_axi_bresp   : out std_logic_vector(1 downto 0);\n'
+        hdl += f'        s_axi_bvalid  : out std_logic;\n'
+        hdl += f'        s_axi_bready  : in  std_logic;\n'
+        
+        hdl += f'        s_axi_araddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'        s_axi_arvalid : in  std_logic;\n'
+        hdl += f'        s_axi_arready : out std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_arlen   : in  std_logic_vector(7 downto 0);\n'
+            hdl += f'        s_axi_arsize  : in  std_logic_vector(2 downto 0);\n'
+            hdl += f'        s_axi_arburst : in  std_logic_vector(1 downto 0);\n'
+        
+        hdl += f'        s_axi_rdata   : out std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'        s_axi_rresp   : out std_logic_vector(1 downto 0);\n'
+        hdl += f'        s_axi_rvalid  : out std_logic;\n'
+        hdl += f'        s_axi_rready  : in  std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_rlast   : out  std_logic;\n'
+        
+        hdl += f'\n'
+        hdl += f'        mem_din     : out std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'        mem_dout    : in  std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'        mem_addr    : out std_logic_vector({depth_bits-1} downto 0);\n'
+        hdl += f'        mem_wr      : out std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'        mem_en      : out std_logic;\n'
+        hdl += f'        mem_clk     : out std_logic\n'
+        
+        hdl += f"\n    );\n"
+        hdl += f'end {self._module_name};\n\n'
+
+        hdl += f'architecture rtl of {self._module_name} is\n\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n' 
+        hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n\n'
+        
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awaddr  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWADDR";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awvalid : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWVALID";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awready : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWREADY";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_wdata   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI WDATA";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_wstrb   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI WSTRB";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_wvalid  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI WVALID";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_wready  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI WREADY";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_bresp   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI BRESP";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_bvalid  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI BVALID";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_bready  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI BREADY";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_araddr  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARADDR";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arvalid : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARVALID";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arready : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARREADY";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rdata   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RDATA";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rresp   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RRESP";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rvalid  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RVALID";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rready  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RREADY";\n'
+        
+        if not self._axi4_lite:
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awlen   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWLEN";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awsize  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWSIZE";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awburst : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWBURST";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_wlast   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI WLAST";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arlen   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARLEN";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arsize  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARSIZE";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arburst : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARBURST";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rlast   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RLAST";\n'
+        
+        hdl += f'\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;\n'
+        hdl += (f'    ATTRIBUTE X_INTERFACE_PARAMETER of s_axi_awaddr : SIGNAL is "'
+                        f'MAX_BURST_LENGTH 256,'
+                        f'SUPPORTS_NARROW_BURST 1,'
+                        f'READ_WRITE_MODE READ_WRITE,'
+                        f'BUSER_WIDTH 0,'
+                        f'RUSER_WIDTH 0,'
+                        f'WUSER_WIDTH 0,'
+                        f'ARUSER_WIDTH 0,'
+                        f'AWUSER_WIDTH 0,'
+                        f'ADDR_WIDTH {byte_depth_bits},'
+                        f'ID_WIDTH 0,'
+                        f'FREQ_HZ {int(self._axi_frequency)},'
+                        f'PROTOCOL {"AXI4LITE" if self._axi4_lite else "AXI4"},'
+                        f'DATA_WIDTH {self._width},'
+                        f'HAS_BURST {1 if self._axi4_lite else 0},'
+                        f'HAS_CACHE 0,'
+                        f'HAS_LOCK 0,'
+                        f'HAS_PROT 0,'
+                        f'HAS_QOS 0,'
+                        f'HAS_REGION 0,'
+                        f'HAS_WSTRB 1,'
+                        f'HAS_BRESP 1,'
+                        f'HAS_RRESP 1'
+                        f'";\n')
+
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_din  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem DIN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_dout : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem DOUT";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_wr   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem WE";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_en   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem EN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem ADDR";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem CLK";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_MODE of mem_din  : SIGNAL is "Master";\n\n'
+        
+        hdl += f'    component {self._module_name}_ip\n'
+        hdl += f'        port (\n'
+        hdl += f'            s_axi_aclk    : in  std_logic;\n'
+        hdl += f'            s_axi_aresetn : in  std_logic;\n\n'
+        
+        hdl += f'            s_axi_awaddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'            s_axi_awvalid : in  std_logic;\n'
+        hdl += f'            s_axi_awready : out std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'            s_axi_awlen   : in  std_logic_vector(7 downto 0);\n'
+            hdl += f'            s_axi_awsize  : in  std_logic_vector(2 downto 0);\n'
+            hdl += f'            s_axi_awburst : in  std_logic_vector(1 downto 0);\n'
+        
+        hdl += f'            s_axi_wdata   : in  std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'            s_axi_wstrb   : in  std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'            s_axi_wvalid  : in  std_logic;\n'
+        hdl += f'            s_axi_wready  : out std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'            s_axi_wlast   : in  std_logic;\n'
+        
+        hdl += f'            s_axi_bresp   : out std_logic_vector(1 downto 0);\n'
+        hdl += f'            s_axi_bvalid  : out std_logic;\n'
+        hdl += f'            s_axi_bready  : in  std_logic;\n'
+        
+        hdl += f'            s_axi_araddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'            s_axi_arvalid : in  std_logic;\n'
+        hdl += f'            s_axi_arready : out std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'            s_axi_arlen   : in  std_logic_vector(7 downto 0);\n'
+            hdl += f'            s_axi_arsize  : in  std_logic_vector(2 downto 0);\n'
+            hdl += f'            s_axi_arburst : in  std_logic_vector(1 downto 0);\n'
+        
+        hdl += f'            s_axi_rdata   : out std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'            s_axi_rresp   : out std_logic_vector(1 downto 0);\n'
+        hdl += f'            s_axi_rvalid  : out std_logic;\n'
+        hdl += f'            s_axi_rready  : in  std_logic;\n'
+        if not self._axi4_lite:
+            hdl += f'            s_axi_rlast   : out std_logic;\n'
+            
+        hdl += f'\n'
+        
+        # The critical issue with the BRAM controller - the width of the address port
+        # is determined by the number of bytes in the BRAM, rather than the number of words
+        hdl += f'            bram_addr_a   : out std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'            bram_wrdata_a : out std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'            bram_rddata_a : in  std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'            bram_we_a     : out std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'            bram_en_a     : out std_logic;\n'
+        hdl += f'            bram_clk_a    : out std_logic\n'
+        
+        hdl += f"\n        );\n"
+        hdl += f"    end component;\n"
+        
+        hdl += f'begin\n\n'
+    
+        hdl += f'    bram_ctrl_inst: {self._module_name}_ip\n'
+        hdl += f'        port map (\n'
+        
+        
+        hdl += f'        s_axi_aclk    => s_axi_aclk,\n'
+        hdl += f'        s_axi_aresetn => s_axi_aresetn,\n\n'
+        
+        hdl += f'        s_axi_awaddr  => s_axi_awaddr,\n'
+        hdl += f'        s_axi_awvalid => s_axi_awvalid,\n'
+        hdl += f'        s_axi_awready => s_axi_awready,\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_awlen   => s_axi_awlen,\n'
+            hdl += f'        s_axi_awsize  => s_axi_awsize,\n'
+            hdl += f'        s_axi_awburst => s_axi_awburst,\n'
+        
+        hdl += f'        s_axi_wdata   => s_axi_wdata,\n'
+        hdl += f'        s_axi_wstrb   => s_axi_wstrb,\n'
+        hdl += f'        s_axi_wvalid  => s_axi_wvalid,\n'
+        hdl += f'        s_axi_wready  => s_axi_wready,\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_wlast   => s_axi_wlast,\n'
+        
+        hdl += f'        s_axi_bresp   => s_axi_bresp,\n'
+        hdl += f'        s_axi_bvalid  => s_axi_bvalid,\n'
+        hdl += f'        s_axi_bready  => s_axi_bready,\n'
+        
+        hdl += f'        s_axi_araddr  => s_axi_araddr,\n'
+        hdl += f'        s_axi_arvalid => s_axi_arvalid,\n'
+        hdl += f'        s_axi_arready => s_axi_arready,\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_arlen   => s_axi_arlen,\n'
+            hdl += f'        s_axi_arsize  => s_axi_arsize,\n'
+            hdl += f'        s_axi_arburst => s_axi_arburst,\n'
+        
+        hdl += f'        s_axi_rdata   => s_axi_rdata,\n'
+        hdl += f'        s_axi_rresp   => s_axi_rresp,\n'
+        hdl += f'        s_axi_rvalid  => s_axi_rvalid,\n'
+        hdl += f'        s_axi_rready  => s_axi_rready,\n'
+        if not self._axi4_lite:
+            hdl += f'        s_axi_rlast   => s_axi_rlast,\n'
+            
+        hdl += f'\n'
+        
+        hdl += f'        bram_addr_a({byte_depth_bits-1} downto {byte_depth_bits-depth_bits})   => mem_addr,\n'
+        hdl += f'        bram_addr_a({byte_depth_bits-depth_bits-1} downto 0)   => open,\n'
+
+        hdl += f'        bram_clk_a    => mem_clk,\n'
+        hdl += f'        bram_en_a     => mem_en,\n'
+        hdl += f'        bram_we_a     => mem_wr,\n'
+        hdl += f'        bram_wrdata_a => mem_din,\n'
+        hdl += f'        bram_rddata_a => mem_dout\n'
+        
+        hdl += f'    );\n\n'
+    
+        hdl += f'end rtl;\n\n'
+        
+        return hdl
+    
+    def generate_ip_tcl(self, project_dir):
+        """
+        Generate TCL commands to create the IP and add it to the project.
+        :param project_dir: The directory in which the project is located,
+        needed for generating IP files into the correct locations.
+        :type project_dir: str
+        """
+        ip_name = self._module_name + "_ip"
+        s = ''
+        s += (f'create_ip'
+                f' -name axi_bram_ctrl'
+                f' -vendor xilinx.com'
+                f' -library ip'
+                f' -version 4.1'
+                f' -module_name'
+                f' {ip_name}\n')
+        s += ('set_property -dict [list'
+                f' CONFIG.DATA_WIDTH {{{self._width}}}'
+                f' CONFIG.MEM_DEPTH {{{self._depth}}}'
+                f' CONFIG.SINGLE_PORT_BRAM {{1}}'
+                f' CONFIG.ECC_TYPE {{0}}'
+                f' CONFIG.Component_Name {{{ip_name}}}'
+                f' CONFIG.READ_LATENCY {{{self._read_latency}}}'
+                f' CONFIG.RD_CMD_OPTIMIZATION {{{int(self._read_cmd_optimization)}}}]'
+                f' [get_ips {ip_name}]\n')
+        xci_path = os.path.join(project_dir, f"acadia.srcs/sources_1/ip/{ip_name}/{ip_name}.xci") 
+        simlib_path = os.path.join(project_dir, "acadia.cache/compile_simlib")
+        
+        s += f'generate_target {{instantiation_template}} [get_files {xci_path}]\n'
+        s += f'generate_target all [get_files {xci_path}]\n'
+        s += f'catch {{ config_ip_cache -export [get_ips -all {ip_name}] }}\n'
+        s += f'export_ip_user_files -of_objects [get_files {xci_path}] -no_script -sync -force -quiet\n'
+        s += f'set_property GENERATE_SYNTH_CHECKPOINT 0 [get_files {xci_path}]\n'
+        
+        # s += f'create_ip_run [get_files -of_objects [get_fileset sources_1] {xci_path}] -force\n'
+        # s += f'launch_runs {ip_name}_synth_1 -jobs {self._synth_jobs}\n'
+        s += (f'export_simulation'
+                f' -of_objects [get_files {xci_path}]'
+                f' -directory {os.path.join(project_dir, "acadia.ip_user_files/sim_scripts")}'
+                f' -ip_user_files_dir {os.path.join(project_dir, "acadia.ip_user_files")}'
+                f' -ipstatic_source_dir {os.path.join(project_dir, "acadia.ip_user_files/ipstatic")}')
+        s += f' -lib_map_path [list'
+        for lib in ["modelsim", "questa", "ies", "xcelium", "vcs", "riviera"]:
+            s += f' {{{lib}={os.path.join(simlib_path, lib)}}}'
+        s += f'] -use_ip_compiled_libs -force -quiet\n'
+        
+        return s

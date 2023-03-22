@@ -84,7 +84,7 @@ begin
     slave_addr     <= bram_ctrl_addr(LOG2_SLAVE_SIZE_BYTES-1 downto LOG2_DATA_WIDTH_BYTES);
     slave_clk      <= bram_ctrl_clk;
     slave_we       <= bram_ctrl_we;
-    slave_en       <= bram_ctrl_en;
+    slave_en       <= '1';
     slave_rst      <= bram_ctrl_rst;
     
 end rtl;

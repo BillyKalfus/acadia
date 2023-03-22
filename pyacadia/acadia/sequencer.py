@@ -591,6 +591,13 @@ class Sequencer(Processor):
             
         instruction_resource.compiled = instructions
         
+    def halt(self):
+        """
+        Halts the sequencer. The reset pin must be toggled in order for the
+        sequencer to execute any further instructions.
+        """
+        self.store(src=0, dest=Destination.HOLD)
+        
     def goto(self, target):
         self.store(src=target, dest=Destination.PC)
         

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import wraps
 from abc import ABC, abstractmethod
 
-from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController
+from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController, AXIBRAMController
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Symbol, Operation
 from .firmware import Firmware
 from .pythonprocessor import PythonProcessor, PythonProcessorCacheable
@@ -261,6 +261,15 @@ class StandardFirmware(Firmware):
         # Create cache and connect it to the sequencer bus
         cache = BusDevice("cache", size=StandardFirmware.CACHE_SIZE_BITS // 32)
         sequencer_bus_decoder.add(cache)
+        
+        # Create an AXI BRAM Controller wrapper for the cache
+        self.cache_controller = AXIBRAMController("cache_controller", 
+                                                  width=32, 
+                                                  depth=8192,#StandardFirmware.CACHE_SIZE_BITS // 128,
+                                                  axi_frequency=300e6,
+                                                  axi4_lite=True,
+                                                  read_latency=3)
+        self.add(self.cache_controller)
 
         datamover_controller = BusDataMoverController("datamover_controller", 
                                                       [f"adc_dm{i}" for i in range(4)] + 
@@ -297,7 +306,7 @@ class StandardFirmware(Firmware):
         # Use a separate decoder for DAC wave memory so that it can be synchronous to the sequencer when using ultraram
         # It will have a base address of the AXI BRAM controller, so that the resulting Symbols
         # will correspond to the AXI addresses of the individual DAC memories
-        dac_mem_decoder = BusDecoder("dac_mem_decoder", bus_data_bits=128, pipeline_miso=True)
+        dac_mem_decoder = BusDecoder("dac_mem_decoder", bus_data_bits=128, pipeline_miso=True, byte_write=True)
         self.add(dac_mem_decoder)
         
         for i in range(16):
@@ -333,7 +342,7 @@ class StandardFirmware(Firmware):
             create_ip(f, name="hedgehog/rfdc", vlnv="xilinx.com:ip:usp_rf_data_converter:2.4")
             
             # Auto-generated config string by Vivado
-            rfdc_config_string = "CONFIG.ADC0_Clock_Source {6} CONFIG.ADC0_Fabric_Freq {300.000} CONFIG.ADC0_Outclk_Freq {150.000} CONFIG.ADC0_PLL_Enable {true} CONFIG.ADC0_Refclk_Freq {300.000} CONFIG.ADC0_Sampling_Rate {1.2} CONFIG.ADC1_Clock_Source {6} CONFIG.ADC1_Enable {1} CONFIG.ADC1_Fabric_Freq {300.000} CONFIG.ADC1_Outclk_Freq {300.000} CONFIG.ADC1_PLL_Enable {true} CONFIG.ADC1_Refclk_Freq {300.000} CONFIG.ADC1_Sampling_Rate {2.4} CONFIG.ADC2_Clock_Dist {0} CONFIG.ADC2_Clock_Source {6} CONFIG.ADC2_Enable {1} CONFIG.ADC2_Fabric_Freq {300.000} CONFIG.ADC2_Outclk_Freq {300.000} CONFIG.ADC2_PLL_Enable {true} CONFIG.ADC2_Refclk_Freq {300.000} CONFIG.ADC2_Sampling_Rate {2.4} CONFIG.ADC3_Clock_Source {6} CONFIG.ADC3_Enable {1} CONFIG.ADC3_Fabric_Freq {30.000} CONFIG.ADC3_Outclk_Freq {300.000} CONFIG.ADC3_PLL_Enable {true} CONFIG.ADC3_Refclk_Freq {300.000} CONFIG.ADC3_Sampling_Rate {2.4} CONFIG.ADC_Coarse_Mixer_Freq00 {0} CONFIG.ADC_Coarse_Mixer_Freq01 {0} CONFIG.ADC_Coarse_Mixer_Freq02 {0} CONFIG.ADC_Coarse_Mixer_Freq03 {0} CONFIG.ADC_Coarse_Mixer_Freq10 {0} CONFIG.ADC_Coarse_Mixer_Freq11 {0} CONFIG.ADC_Coarse_Mixer_Freq12 {0} CONFIG.ADC_Coarse_Mixer_Freq13 {0} CONFIG.ADC_Coarse_Mixer_Freq20 {0} CONFIG.ADC_Coarse_Mixer_Freq21 {0} CONFIG.ADC_Coarse_Mixer_Freq22 {0} CONFIG.ADC_Coarse_Mixer_Freq23 {0} CONFIG.ADC_Coarse_Mixer_Freq30 {0} CONFIG.ADC_Coarse_Mixer_Freq31 {0} CONFIG.ADC_Coarse_Mixer_Freq32 {0} CONFIG.ADC_Coarse_Mixer_Freq33 {0} CONFIG.ADC_DSA_RTS {false} CONFIG.ADC_Data_Type00 {1} CONFIG.ADC_Data_Type01 {1} CONFIG.ADC_Data_Type02 {1} CONFIG.ADC_Data_Type03 {1} CONFIG.ADC_Data_Type10 {1} CONFIG.ADC_Data_Type11 {1} CONFIG.ADC_Data_Type12 {1} CONFIG.ADC_Data_Type13 {1} CONFIG.ADC_Data_Type20 {1} CONFIG.ADC_Data_Type21 {1} CONFIG.ADC_Data_Type22 {1} CONFIG.ADC_Data_Type23 {1} CONFIG.ADC_Data_Type30 {1} CONFIG.ADC_Data_Type31 {1} CONFIG.ADC_Data_Type32 {1} CONFIG.ADC_Data_Type33 {1} CONFIG.ADC_Data_Width00 {8} CONFIG.ADC_Decimation_Mode01 {1} CONFIG.ADC_Decimation_Mode02 {1} CONFIG.ADC_Decimation_Mode03 {1} CONFIG.ADC_Decimation_Mode10 {2} CONFIG.ADC_Decimation_Mode11 {2} CONFIG.ADC_Decimation_Mode12 {2} CONFIG.ADC_Decimation_Mode13 {2} CONFIG.ADC_Decimation_Mode20 {2} CONFIG.ADC_Decimation_Mode21 {2} CONFIG.ADC_Decimation_Mode22 {2} CONFIG.ADC_Decimation_Mode23 {2} CONFIG.ADC_Decimation_Mode30 {20} CONFIG.ADC_Decimation_Mode31 {20} CONFIG.ADC_Decimation_Mode32 {20} CONFIG.ADC_Decimation_Mode33 {20} CONFIG.ADC_Dither00 {false} CONFIG.ADC_Dither01 {false} CONFIG.ADC_Dither02 {false} CONFIG.ADC_Dither03 {false} CONFIG.ADC_Dither10 {false} CONFIG.ADC_Dither11 {false} CONFIG.ADC_Dither12 {false} CONFIG.ADC_Dither13 {false} CONFIG.ADC_Dither20 {false} CONFIG.ADC_Dither21 {false} CONFIG.ADC_Dither22 {false} CONFIG.ADC_Dither23 {false} CONFIG.ADC_Dither30 {false} CONFIG.ADC_Dither31 {false} CONFIG.ADC_Dither32 {false} CONFIG.ADC_Dither33 {false} CONFIG.ADC_Mixer_Mode00 {0} CONFIG.ADC_Mixer_Mode01 {0} CONFIG.ADC_Mixer_Mode02 {0} CONFIG.ADC_Mixer_Mode03 {0} CONFIG.ADC_Mixer_Mode10 {0} CONFIG.ADC_Mixer_Mode11 {0} CONFIG.ADC_Mixer_Mode12 {0} CONFIG.ADC_Mixer_Mode13 {0} CONFIG.ADC_Mixer_Mode20 {0} CONFIG.ADC_Mixer_Mode21 {0} CONFIG.ADC_Mixer_Mode22 {0} CONFIG.ADC_Mixer_Mode23 {0} CONFIG.ADC_Mixer_Mode30 {0} CONFIG.ADC_Mixer_Mode31 {0} CONFIG.ADC_Mixer_Mode32 {0} CONFIG.ADC_Mixer_Mode33 {0} CONFIG.ADC_Mixer_Type00 {2} CONFIG.ADC_Mixer_Type01 {2} CONFIG.ADC_Mixer_Type02 {2} CONFIG.ADC_Mixer_Type03 {2} CONFIG.ADC_Mixer_Type10 {2} CONFIG.ADC_Mixer_Type11 {2} CONFIG.ADC_Mixer_Type12 {2} CONFIG.ADC_Mixer_Type13 {2} CONFIG.ADC_Mixer_Type20 {2} CONFIG.ADC_Mixer_Type21 {2} CONFIG.ADC_Mixer_Type22 {2} CONFIG.ADC_Mixer_Type23 {2} CONFIG.ADC_Mixer_Type30 {2} CONFIG.ADC_Mixer_Type31 {2} CONFIG.ADC_Mixer_Type32 {2} CONFIG.ADC_Mixer_Type33 {2} CONFIG.ADC_NCO_RTS {true} CONFIG.ADC_OBS03 {false} CONFIG.ADC_OBS11 {false} CONFIG.ADC_OBS12 {false} CONFIG.ADC_OBS13 {false} CONFIG.ADC_OBS21 {false} CONFIG.ADC_OBS22 {false} CONFIG.ADC_OBS23 {false} CONFIG.ADC_OBS31 {false} CONFIG.ADC_OBS32 {false} CONFIG.ADC_OBS33 {false} CONFIG.ADC_RESERVED_1_00 {false} CONFIG.ADC_RESERVED_1_01 {false} CONFIG.ADC_RESERVED_1_02 {false} CONFIG.ADC_RESERVED_1_03 {false} CONFIG.ADC_RESERVED_1_10 {false} CONFIG.ADC_RESERVED_1_11 {false} CONFIG.ADC_RESERVED_1_12 {false} CONFIG.ADC_RESERVED_1_13 {false} CONFIG.ADC_RESERVED_1_20 {false} CONFIG.ADC_RESERVED_1_21 {false} CONFIG.ADC_RESERVED_1_22 {false} CONFIG.ADC_RESERVED_1_23 {false} CONFIG.ADC_RESERVED_1_30 {false} CONFIG.ADC_RESERVED_1_31 {false} CONFIG.ADC_RESERVED_1_32 {false} CONFIG.ADC_RESERVED_1_33 {false} CONFIG.ADC_RTS {false} CONFIG.ADC_Slice01_Enable {true} CONFIG.ADC_Slice02_Enable {true} CONFIG.ADC_Slice03_Enable {true} CONFIG.ADC_Slice10_Enable {true} CONFIG.ADC_Slice11_Enable {true} CONFIG.ADC_Slice12_Enable {true} CONFIG.ADC_Slice13_Enable {true} CONFIG.ADC_Slice20_Enable {true} CONFIG.ADC_Slice21_Enable {true} CONFIG.ADC_Slice22_Enable {true} CONFIG.ADC_Slice23_Enable {true} CONFIG.ADC_Slice30_Enable {true} CONFIG.ADC_Slice31_Enable {true} CONFIG.ADC_Slice32_Enable {true} CONFIG.ADC_Slice33_Enable {true} CONFIG.Axiclk_Freq {250} CONFIG.DAC0_Clock_Source {6} CONFIG.DAC0_Enable {1} CONFIG.DAC0_Fabric_Freq {300.000} CONFIG.DAC0_Outclk_Freq {300.000} CONFIG.DAC0_PLL_Enable {true} CONFIG.DAC0_Refclk_Freq {300.000} CONFIG.DAC0_Sampling_Rate {4.8} CONFIG.DAC1_Clock_Source {6} CONFIG.DAC1_Enable {1} CONFIG.DAC1_Fabric_Freq {300.000} CONFIG.DAC1_Outclk_Freq {300.000} CONFIG.DAC1_PLL_Enable {true} CONFIG.DAC1_Refclk_Freq {300.000} CONFIG.DAC1_Sampling_Rate {4.8} CONFIG.DAC2_Clock_Dist {1} CONFIG.DAC2_Enable {1} CONFIG.DAC2_Fabric_Freq {300.000} CONFIG.DAC2_Outclk_Freq {300.000} CONFIG.DAC2_PLL_Enable {true} CONFIG.DAC2_Refclk_Freq {300.000} CONFIG.DAC2_Sampling_Rate {9.6} CONFIG.DAC2_VOP {40.0} CONFIG.DAC3_Clock_Source {6} CONFIG.DAC3_Enable {1} CONFIG.DAC3_Fabric_Freq {300.000} CONFIG.DAC3_Outclk_Freq {300.000} CONFIG.DAC3_PLL_Enable {true} CONFIG.DAC3_Refclk_Freq {300.000} CONFIG.DAC3_Sampling_Rate {9.6} CONFIG.DAC3_VOP {40.0} CONFIG.DAC_Coarse_Mixer_Freq00 {3} CONFIG.DAC_Coarse_Mixer_Freq01 {3} CONFIG.DAC_Coarse_Mixer_Freq02 {3} CONFIG.DAC_Coarse_Mixer_Freq03 {3} CONFIG.DAC_Coarse_Mixer_Freq10 {3} CONFIG.DAC_Coarse_Mixer_Freq11 {3} CONFIG.DAC_Coarse_Mixer_Freq12 {3} CONFIG.DAC_Coarse_Mixer_Freq13 {3} CONFIG.DAC_Coarse_Mixer_Freq20 {3} CONFIG.DAC_Coarse_Mixer_Freq21 {3} CONFIG.DAC_Coarse_Mixer_Freq22 {3} CONFIG.DAC_Coarse_Mixer_Freq23 {3} CONFIG.DAC_Coarse_Mixer_Freq30 {3} CONFIG.DAC_Coarse_Mixer_Freq31 {3} CONFIG.DAC_Coarse_Mixer_Freq32 {3} CONFIG.DAC_Coarse_Mixer_Freq33 {3} CONFIG.DAC_Data_Width00 {8} CONFIG.DAC_Data_Width01 {8} CONFIG.DAC_Data_Width02 {8} CONFIG.DAC_Data_Width03 {8} CONFIG.DAC_Data_Width10 {8} CONFIG.DAC_Data_Width11 {8} CONFIG.DAC_Data_Width12 {8} CONFIG.DAC_Data_Width13 {8} CONFIG.DAC_Data_Width20 {8} CONFIG.DAC_Data_Width21 {8} CONFIG.DAC_Data_Width22 {8} CONFIG.DAC_Data_Width23 {8} CONFIG.DAC_Data_Width30 {8} CONFIG.DAC_Data_Width31 {8} CONFIG.DAC_Data_Width32 {8} CONFIG.DAC_Data_Width33 {8} CONFIG.DAC_Interpolation_Mode00 {4} CONFIG.DAC_Interpolation_Mode01 {4} CONFIG.DAC_Interpolation_Mode02 {4} CONFIG.DAC_Interpolation_Mode03 {4} CONFIG.DAC_Interpolation_Mode10 {4} CONFIG.DAC_Interpolation_Mode11 {4} CONFIG.DAC_Interpolation_Mode12 {4} CONFIG.DAC_Interpolation_Mode13 {4} CONFIG.DAC_Interpolation_Mode20 {4} CONFIG.DAC_Interpolation_Mode21 {4} CONFIG.DAC_Interpolation_Mode22 {4} CONFIG.DAC_Interpolation_Mode23 {4} CONFIG.DAC_Interpolation_Mode30 {4} CONFIG.DAC_Interpolation_Mode31 {4} CONFIG.DAC_Interpolation_Mode32 {4} CONFIG.DAC_Interpolation_Mode33 {4} CONFIG.DAC_Mixer_Mode00 {0} CONFIG.DAC_Mixer_Mode01 {0} CONFIG.DAC_Mixer_Mode02 {0} CONFIG.DAC_Mixer_Mode03 {0} CONFIG.DAC_Mixer_Mode10 {0} CONFIG.DAC_Mixer_Mode11 {0} CONFIG.DAC_Mixer_Mode12 {0} CONFIG.DAC_Mixer_Mode13 {0} CONFIG.DAC_Mixer_Mode20 {0} CONFIG.DAC_Mixer_Mode21 {0} CONFIG.DAC_Mixer_Mode22 {0} CONFIG.DAC_Mixer_Mode23 {0} CONFIG.DAC_Mixer_Mode30 {0} CONFIG.DAC_Mixer_Mode31 {0} CONFIG.DAC_Mixer_Mode32 {0} CONFIG.DAC_Mixer_Mode33 {0} CONFIG.DAC_Mixer_Type00 {2} CONFIG.DAC_Mixer_Type01 {2} CONFIG.DAC_Mixer_Type02 {2} CONFIG.DAC_Mixer_Type03 {2} CONFIG.DAC_Mixer_Type10 {2} CONFIG.DAC_Mixer_Type11 {2} CONFIG.DAC_Mixer_Type12 {2} CONFIG.DAC_Mixer_Type13 {2} CONFIG.DAC_Mixer_Type20 {2} CONFIG.DAC_Mixer_Type21 {2} CONFIG.DAC_Mixer_Type22 {2} CONFIG.DAC_Mixer_Type23 {2} CONFIG.DAC_Mixer_Type30 {2} CONFIG.DAC_Mixer_Type31 {2} CONFIG.DAC_Mixer_Type32 {2} CONFIG.DAC_Mixer_Type33 {2} CONFIG.DAC_Mode00 {0} CONFIG.DAC_Mode01 {0} CONFIG.DAC_Mode02 {0} CONFIG.DAC_Mode03 {0} CONFIG.DAC_Mode10 {0} CONFIG.DAC_Mode11 {0} CONFIG.DAC_Mode12 {0} CONFIG.DAC_Mode13 {0} CONFIG.DAC_Mode20 {1} CONFIG.DAC_Mode21 {1} CONFIG.DAC_Mode22 {1} CONFIG.DAC_Mode23 {1} CONFIG.DAC_Mode30 {1} CONFIG.DAC_Mode31 {1} CONFIG.DAC_Mode32 {1} CONFIG.DAC_Mode33 {1} CONFIG.DAC_NCO_RTS {true} CONFIG.DAC_Nyquist20 {1} CONFIG.DAC_Nyquist21 {1} CONFIG.DAC_Nyquist22 {1} CONFIG.DAC_Nyquist23 {1} CONFIG.DAC_Nyquist30 {1} CONFIG.DAC_Nyquist31 {1} CONFIG.DAC_Nyquist32 {1} CONFIG.DAC_Nyquist33 {1} CONFIG.DAC_RESERVED_1_00 {false} CONFIG.DAC_RESERVED_1_01 {false} CONFIG.DAC_RESERVED_1_02 {false} CONFIG.DAC_RESERVED_1_03 {false} CONFIG.DAC_RESERVED_1_10 {false} CONFIG.DAC_RESERVED_1_11 {false} CONFIG.DAC_RESERVED_1_12 {false} CONFIG.DAC_RESERVED_1_13 {false} CONFIG.DAC_RESERVED_1_20 {false} CONFIG.DAC_RESERVED_1_21 {false} CONFIG.DAC_RESERVED_1_22 {false} CONFIG.DAC_RESERVED_1_23 {false} CONFIG.DAC_RESERVED_1_30 {false} CONFIG.DAC_RESERVED_1_31 {false} CONFIG.DAC_RESERVED_1_32 {false} CONFIG.DAC_RESERVED_1_33 {false} CONFIG.DAC_RTS {false} CONFIG.DAC_Slice00_Enable {true} CONFIG.DAC_Slice01_Enable {true} CONFIG.DAC_Slice02_Enable {true} CONFIG.DAC_Slice03_Enable {true} CONFIG.DAC_Slice10_Enable {true} CONFIG.DAC_Slice11_Enable {true} CONFIG.DAC_Slice12_Enable {true} CONFIG.DAC_Slice13_Enable {true} CONFIG.DAC_Slice20_Enable {true} CONFIG.DAC_Slice21_Enable {true} CONFIG.DAC_Slice22_Enable {true} CONFIG.DAC_Slice23_Enable {true} CONFIG.DAC_Slice30_Enable {true} CONFIG.DAC_Slice31_Enable {true} CONFIG.DAC_Slice32_Enable {true} CONFIG.DAC_Slice33_Enable {true} CONFIG.DAC_VOP_RTS {false} CONFIG.ADC0_Multi_Tile_Sync {true} CONFIG.DAC0_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS00 {1} CONFIG.DAC_TDD_RTS01 {1} CONFIG.DAC_TDD_RTS02 {1} CONFIG.DAC_TDD_RTS03 {1} CONFIG.DAC1_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS10 {1} CONFIG.DAC_TDD_RTS11 {1} CONFIG.DAC_TDD_RTS12 {1} CONFIG.DAC_TDD_RTS13 {1} CONFIG.DAC2_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS20 {1} CONFIG.DAC_TDD_RTS21 {1} CONFIG.DAC_TDD_RTS22 {1} CONFIG.DAC_TDD_RTS23 {1} CONFIG.DAC3_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS30 {1} CONFIG.DAC_TDD_RTS31 {1} CONFIG.DAC_TDD_RTS32 {1} CONFIG.DAC_TDD_RTS33 {1} CONFIG.ADC_RTS {true} CONFIG.DAC_RTS {true} CONFIG.DAC_VOP_RTS {true} CONFIG.ADC_DSA_RTS {true}"
+            rfdc_config_string = "CONFIG.ADC0_Clock_Source {2} CONFIG.ADC0_Fabric_Freq {300.000} CONFIG.ADC0_Outclk_Freq {150.000} CONFIG.ADC0_PLL_Enable {true} CONFIG.ADC0_Refclk_Freq {300.000} CONFIG.ADC0_Sampling_Rate {1.2} CONFIG.ADC1_Clock_Source {2} CONFIG.ADC1_Enable {1} CONFIG.ADC1_Fabric_Freq {300.000} CONFIG.ADC1_Outclk_Freq {300.000} CONFIG.ADC1_PLL_Enable {true} CONFIG.ADC1_Refclk_Freq {300.000} CONFIG.ADC1_Sampling_Rate {2.4} CONFIG.ADC2_Clock_Dist {1} CONFIG.ADC2_Clock_Source {2} CONFIG.ADC2_Enable {1} CONFIG.ADC2_Fabric_Freq {300.000} CONFIG.ADC2_Outclk_Freq {300.000} CONFIG.ADC2_PLL_Enable {true} CONFIG.ADC2_Refclk_Freq {300.000} CONFIG.ADC2_Sampling_Rate {2.4} CONFIG.ADC3_Clock_Source {2} CONFIG.ADC3_Enable {1} CONFIG.ADC3_Fabric_Freq {30.000} CONFIG.ADC3_Outclk_Freq {300.000} CONFIG.ADC3_PLL_Enable {true} CONFIG.ADC3_Refclk_Freq {300.000} CONFIG.ADC3_Sampling_Rate {2.4} CONFIG.ADC_Coarse_Mixer_Freq00 {0} CONFIG.ADC_Coarse_Mixer_Freq01 {0} CONFIG.ADC_Coarse_Mixer_Freq02 {0} CONFIG.ADC_Coarse_Mixer_Freq03 {0} CONFIG.ADC_Coarse_Mixer_Freq10 {0} CONFIG.ADC_Coarse_Mixer_Freq11 {0} CONFIG.ADC_Coarse_Mixer_Freq12 {0} CONFIG.ADC_Coarse_Mixer_Freq13 {0} CONFIG.ADC_Coarse_Mixer_Freq20 {0} CONFIG.ADC_Coarse_Mixer_Freq21 {0} CONFIG.ADC_Coarse_Mixer_Freq22 {0} CONFIG.ADC_Coarse_Mixer_Freq23 {0} CONFIG.ADC_Coarse_Mixer_Freq30 {0} CONFIG.ADC_Coarse_Mixer_Freq31 {0} CONFIG.ADC_Coarse_Mixer_Freq32 {0} CONFIG.ADC_Coarse_Mixer_Freq33 {0} CONFIG.ADC_DSA_RTS {false} CONFIG.ADC_Data_Type00 {1} CONFIG.ADC_Data_Type01 {1} CONFIG.ADC_Data_Type02 {1} CONFIG.ADC_Data_Type03 {1} CONFIG.ADC_Data_Type10 {1} CONFIG.ADC_Data_Type11 {1} CONFIG.ADC_Data_Type12 {1} CONFIG.ADC_Data_Type13 {1} CONFIG.ADC_Data_Type20 {1} CONFIG.ADC_Data_Type21 {1} CONFIG.ADC_Data_Type22 {1} CONFIG.ADC_Data_Type23 {1} CONFIG.ADC_Data_Type30 {1} CONFIG.ADC_Data_Type31 {1} CONFIG.ADC_Data_Type32 {1} CONFIG.ADC_Data_Type33 {1} CONFIG.ADC_Data_Width00 {8} CONFIG.ADC_Decimation_Mode01 {1} CONFIG.ADC_Decimation_Mode02 {1} CONFIG.ADC_Decimation_Mode03 {1} CONFIG.ADC_Decimation_Mode10 {2} CONFIG.ADC_Decimation_Mode11 {2} CONFIG.ADC_Decimation_Mode12 {2} CONFIG.ADC_Decimation_Mode13 {2} CONFIG.ADC_Decimation_Mode20 {2} CONFIG.ADC_Decimation_Mode21 {2} CONFIG.ADC_Decimation_Mode22 {2} CONFIG.ADC_Decimation_Mode23 {2} CONFIG.ADC_Decimation_Mode30 {20} CONFIG.ADC_Decimation_Mode31 {20} CONFIG.ADC_Decimation_Mode32 {20} CONFIG.ADC_Decimation_Mode33 {20} CONFIG.ADC_Dither00 {false} CONFIG.ADC_Dither01 {false} CONFIG.ADC_Dither02 {false} CONFIG.ADC_Dither03 {false} CONFIG.ADC_Dither10 {false} CONFIG.ADC_Dither11 {false} CONFIG.ADC_Dither12 {false} CONFIG.ADC_Dither13 {false} CONFIG.ADC_Dither20 {false} CONFIG.ADC_Dither21 {false} CONFIG.ADC_Dither22 {false} CONFIG.ADC_Dither23 {false} CONFIG.ADC_Dither30 {false} CONFIG.ADC_Dither31 {false} CONFIG.ADC_Dither32 {false} CONFIG.ADC_Dither33 {false} CONFIG.ADC_Mixer_Mode00 {0} CONFIG.ADC_Mixer_Mode01 {0} CONFIG.ADC_Mixer_Mode02 {0} CONFIG.ADC_Mixer_Mode03 {0} CONFIG.ADC_Mixer_Mode10 {0} CONFIG.ADC_Mixer_Mode11 {0} CONFIG.ADC_Mixer_Mode12 {0} CONFIG.ADC_Mixer_Mode13 {0} CONFIG.ADC_Mixer_Mode20 {0} CONFIG.ADC_Mixer_Mode21 {0} CONFIG.ADC_Mixer_Mode22 {0} CONFIG.ADC_Mixer_Mode23 {0} CONFIG.ADC_Mixer_Mode30 {0} CONFIG.ADC_Mixer_Mode31 {0} CONFIG.ADC_Mixer_Mode32 {0} CONFIG.ADC_Mixer_Mode33 {0} CONFIG.ADC_Mixer_Type00 {2} CONFIG.ADC_Mixer_Type01 {2} CONFIG.ADC_Mixer_Type02 {2} CONFIG.ADC_Mixer_Type03 {2} CONFIG.ADC_Mixer_Type10 {2} CONFIG.ADC_Mixer_Type11 {2} CONFIG.ADC_Mixer_Type12 {2} CONFIG.ADC_Mixer_Type13 {2} CONFIG.ADC_Mixer_Type20 {2} CONFIG.ADC_Mixer_Type21 {2} CONFIG.ADC_Mixer_Type22 {2} CONFIG.ADC_Mixer_Type23 {2} CONFIG.ADC_Mixer_Type30 {2} CONFIG.ADC_Mixer_Type31 {2} CONFIG.ADC_Mixer_Type32 {2} CONFIG.ADC_Mixer_Type33 {2} CONFIG.ADC_NCO_RTS {true} CONFIG.ADC_OBS03 {false} CONFIG.ADC_OBS11 {false} CONFIG.ADC_OBS12 {false} CONFIG.ADC_OBS13 {false} CONFIG.ADC_OBS21 {false} CONFIG.ADC_OBS22 {false} CONFIG.ADC_OBS23 {false} CONFIG.ADC_OBS31 {false} CONFIG.ADC_OBS32 {false} CONFIG.ADC_OBS33 {false} CONFIG.ADC_RESERVED_1_00 {false} CONFIG.ADC_RESERVED_1_01 {false} CONFIG.ADC_RESERVED_1_02 {false} CONFIG.ADC_RESERVED_1_03 {false} CONFIG.ADC_RESERVED_1_10 {false} CONFIG.ADC_RESERVED_1_11 {false} CONFIG.ADC_RESERVED_1_12 {false} CONFIG.ADC_RESERVED_1_13 {false} CONFIG.ADC_RESERVED_1_20 {false} CONFIG.ADC_RESERVED_1_21 {false} CONFIG.ADC_RESERVED_1_22 {false} CONFIG.ADC_RESERVED_1_23 {false} CONFIG.ADC_RESERVED_1_30 {false} CONFIG.ADC_RESERVED_1_31 {false} CONFIG.ADC_RESERVED_1_32 {false} CONFIG.ADC_RESERVED_1_33 {false} CONFIG.ADC_RTS {false} CONFIG.ADC_Slice01_Enable {true} CONFIG.ADC_Slice02_Enable {true} CONFIG.ADC_Slice03_Enable {true} CONFIG.ADC_Slice10_Enable {true} CONFIG.ADC_Slice11_Enable {true} CONFIG.ADC_Slice12_Enable {true} CONFIG.ADC_Slice13_Enable {true} CONFIG.ADC_Slice20_Enable {true} CONFIG.ADC_Slice21_Enable {true} CONFIG.ADC_Slice22_Enable {true} CONFIG.ADC_Slice23_Enable {true} CONFIG.ADC_Slice30_Enable {true} CONFIG.ADC_Slice31_Enable {true} CONFIG.ADC_Slice32_Enable {true} CONFIG.ADC_Slice33_Enable {true} CONFIG.Axiclk_Freq {250} CONFIG.DAC0_Clock_Source {6} CONFIG.DAC0_Enable {1} CONFIG.DAC0_Fabric_Freq {300.000} CONFIG.DAC0_Outclk_Freq {300.000} CONFIG.DAC0_PLL_Enable {true} CONFIG.DAC0_Refclk_Freq {300.000} CONFIG.DAC0_Sampling_Rate {4.8} CONFIG.DAC1_Clock_Source {6} CONFIG.DAC1_Enable {1} CONFIG.DAC1_Fabric_Freq {300.000} CONFIG.DAC1_Outclk_Freq {300.000} CONFIG.DAC1_PLL_Enable {true} CONFIG.DAC1_Refclk_Freq {300.000} CONFIG.DAC1_Sampling_Rate {4.8} CONFIG.DAC2_Clock_Dist {1} CONFIG.DAC2_Enable {1} CONFIG.DAC2_Fabric_Freq {300.000} CONFIG.DAC2_Outclk_Freq {300.000} CONFIG.DAC2_PLL_Enable {true} CONFIG.DAC2_Refclk_Freq {300.000} CONFIG.DAC2_Sampling_Rate {9.6} CONFIG.DAC2_VOP {40.0} CONFIG.DAC3_Clock_Source {6} CONFIG.DAC3_Enable {1} CONFIG.DAC3_Fabric_Freq {300.000} CONFIG.DAC3_Outclk_Freq {300.000} CONFIG.DAC3_PLL_Enable {true} CONFIG.DAC3_Refclk_Freq {300.000} CONFIG.DAC3_Sampling_Rate {9.6} CONFIG.DAC3_VOP {40.0} CONFIG.DAC_Coarse_Mixer_Freq00 {3} CONFIG.DAC_Coarse_Mixer_Freq01 {3} CONFIG.DAC_Coarse_Mixer_Freq02 {3} CONFIG.DAC_Coarse_Mixer_Freq03 {3} CONFIG.DAC_Coarse_Mixer_Freq10 {3} CONFIG.DAC_Coarse_Mixer_Freq11 {3} CONFIG.DAC_Coarse_Mixer_Freq12 {3} CONFIG.DAC_Coarse_Mixer_Freq13 {3} CONFIG.DAC_Coarse_Mixer_Freq20 {3} CONFIG.DAC_Coarse_Mixer_Freq21 {3} CONFIG.DAC_Coarse_Mixer_Freq22 {3} CONFIG.DAC_Coarse_Mixer_Freq23 {3} CONFIG.DAC_Coarse_Mixer_Freq30 {3} CONFIG.DAC_Coarse_Mixer_Freq31 {3} CONFIG.DAC_Coarse_Mixer_Freq32 {3} CONFIG.DAC_Coarse_Mixer_Freq33 {3} CONFIG.DAC_Data_Width00 {8} CONFIG.DAC_Data_Width01 {8} CONFIG.DAC_Data_Width02 {8} CONFIG.DAC_Data_Width03 {8} CONFIG.DAC_Data_Width10 {8} CONFIG.DAC_Data_Width11 {8} CONFIG.DAC_Data_Width12 {8} CONFIG.DAC_Data_Width13 {8} CONFIG.DAC_Data_Width20 {8} CONFIG.DAC_Data_Width21 {8} CONFIG.DAC_Data_Width22 {8} CONFIG.DAC_Data_Width23 {8} CONFIG.DAC_Data_Width30 {8} CONFIG.DAC_Data_Width31 {8} CONFIG.DAC_Data_Width32 {8} CONFIG.DAC_Data_Width33 {8} CONFIG.DAC_Interpolation_Mode00 {4} CONFIG.DAC_Interpolation_Mode01 {4} CONFIG.DAC_Interpolation_Mode02 {4} CONFIG.DAC_Interpolation_Mode03 {4} CONFIG.DAC_Interpolation_Mode10 {4} CONFIG.DAC_Interpolation_Mode11 {4} CONFIG.DAC_Interpolation_Mode12 {4} CONFIG.DAC_Interpolation_Mode13 {4} CONFIG.DAC_Interpolation_Mode20 {4} CONFIG.DAC_Interpolation_Mode21 {4} CONFIG.DAC_Interpolation_Mode22 {4} CONFIG.DAC_Interpolation_Mode23 {4} CONFIG.DAC_Interpolation_Mode30 {4} CONFIG.DAC_Interpolation_Mode31 {4} CONFIG.DAC_Interpolation_Mode32 {4} CONFIG.DAC_Interpolation_Mode33 {4} CONFIG.DAC_Mixer_Mode00 {0} CONFIG.DAC_Mixer_Mode01 {0} CONFIG.DAC_Mixer_Mode02 {0} CONFIG.DAC_Mixer_Mode03 {0} CONFIG.DAC_Mixer_Mode10 {0} CONFIG.DAC_Mixer_Mode11 {0} CONFIG.DAC_Mixer_Mode12 {0} CONFIG.DAC_Mixer_Mode13 {0} CONFIG.DAC_Mixer_Mode20 {0} CONFIG.DAC_Mixer_Mode21 {0} CONFIG.DAC_Mixer_Mode22 {0} CONFIG.DAC_Mixer_Mode23 {0} CONFIG.DAC_Mixer_Mode30 {0} CONFIG.DAC_Mixer_Mode31 {0} CONFIG.DAC_Mixer_Mode32 {0} CONFIG.DAC_Mixer_Mode33 {0} CONFIG.DAC_Mixer_Type00 {2} CONFIG.DAC_Mixer_Type01 {2} CONFIG.DAC_Mixer_Type02 {2} CONFIG.DAC_Mixer_Type03 {2} CONFIG.DAC_Mixer_Type10 {2} CONFIG.DAC_Mixer_Type11 {2} CONFIG.DAC_Mixer_Type12 {2} CONFIG.DAC_Mixer_Type13 {2} CONFIG.DAC_Mixer_Type20 {2} CONFIG.DAC_Mixer_Type21 {2} CONFIG.DAC_Mixer_Type22 {2} CONFIG.DAC_Mixer_Type23 {2} CONFIG.DAC_Mixer_Type30 {2} CONFIG.DAC_Mixer_Type31 {2} CONFIG.DAC_Mixer_Type32 {2} CONFIG.DAC_Mixer_Type33 {2} CONFIG.DAC_Mode00 {0} CONFIG.DAC_Mode01 {0} CONFIG.DAC_Mode02 {0} CONFIG.DAC_Mode03 {0} CONFIG.DAC_Mode10 {0} CONFIG.DAC_Mode11 {0} CONFIG.DAC_Mode12 {0} CONFIG.DAC_Mode13 {0} CONFIG.DAC_Mode20 {1} CONFIG.DAC_Mode21 {1} CONFIG.DAC_Mode22 {1} CONFIG.DAC_Mode23 {1} CONFIG.DAC_Mode30 {1} CONFIG.DAC_Mode31 {1} CONFIG.DAC_Mode32 {1} CONFIG.DAC_Mode33 {1} CONFIG.DAC_NCO_RTS {true} CONFIG.DAC_Nyquist20 {1} CONFIG.DAC_Nyquist21 {1} CONFIG.DAC_Nyquist22 {1} CONFIG.DAC_Nyquist23 {1} CONFIG.DAC_Nyquist30 {1} CONFIG.DAC_Nyquist31 {1} CONFIG.DAC_Nyquist32 {1} CONFIG.DAC_Nyquist33 {1} CONFIG.DAC_RESERVED_1_00 {false} CONFIG.DAC_RESERVED_1_01 {false} CONFIG.DAC_RESERVED_1_02 {false} CONFIG.DAC_RESERVED_1_03 {false} CONFIG.DAC_RESERVED_1_10 {false} CONFIG.DAC_RESERVED_1_11 {false} CONFIG.DAC_RESERVED_1_12 {false} CONFIG.DAC_RESERVED_1_13 {false} CONFIG.DAC_RESERVED_1_20 {false} CONFIG.DAC_RESERVED_1_21 {false} CONFIG.DAC_RESERVED_1_22 {false} CONFIG.DAC_RESERVED_1_23 {false} CONFIG.DAC_RESERVED_1_30 {false} CONFIG.DAC_RESERVED_1_31 {false} CONFIG.DAC_RESERVED_1_32 {false} CONFIG.DAC_RESERVED_1_33 {false} CONFIG.DAC_RTS {false} CONFIG.DAC_Slice00_Enable {true} CONFIG.DAC_Slice01_Enable {true} CONFIG.DAC_Slice02_Enable {true} CONFIG.DAC_Slice03_Enable {true} CONFIG.DAC_Slice10_Enable {true} CONFIG.DAC_Slice11_Enable {true} CONFIG.DAC_Slice12_Enable {true} CONFIG.DAC_Slice13_Enable {true} CONFIG.DAC_Slice20_Enable {true} CONFIG.DAC_Slice21_Enable {true} CONFIG.DAC_Slice22_Enable {true} CONFIG.DAC_Slice23_Enable {true} CONFIG.DAC_Slice30_Enable {true} CONFIG.DAC_Slice31_Enable {true} CONFIG.DAC_Slice32_Enable {true} CONFIG.DAC_Slice33_Enable {true} CONFIG.DAC_VOP_RTS {false} CONFIG.ADC0_Multi_Tile_Sync {true} CONFIG.DAC0_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS00 {1} CONFIG.DAC_TDD_RTS01 {1} CONFIG.DAC_TDD_RTS02 {1} CONFIG.DAC_TDD_RTS03 {1} CONFIG.DAC1_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS10 {1} CONFIG.DAC_TDD_RTS11 {1} CONFIG.DAC_TDD_RTS12 {1} CONFIG.DAC_TDD_RTS13 {1} CONFIG.DAC2_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS20 {1} CONFIG.DAC_TDD_RTS21 {1} CONFIG.DAC_TDD_RTS22 {1} CONFIG.DAC_TDD_RTS23 {1} CONFIG.DAC3_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS30 {1} CONFIG.DAC_TDD_RTS31 {1} CONFIG.DAC_TDD_RTS32 {1} CONFIG.DAC_TDD_RTS33 {1} CONFIG.ADC_RTS {true} CONFIG.DAC_RTS {true} CONFIG.DAC_VOP_RTS {true} CONFIG.ADC_DSA_RTS {true}"
             
             set_property(f, name="hedgehog/rfdc", properties=rfdc_config_string)
 
@@ -343,7 +352,7 @@ class StandardFirmware(Firmware):
                     for block in range(4):
                         connect_bd_intf_net(f, f"hedgehog/rfdc/v{d}{tile}{block}", f"hedgehog/v{d}{tile}{block}")
 
-            # connect_bd_intf_net(f, f"hedgehog/rfdc/adc2_clk", f"hedgehog/adc2_clk")
+            connect_bd_intf_net(f, f"hedgehog/rfdc/adc2_clk", f"hedgehog/adc2_clk")
             connect_bd_intf_net(f, f"hedgehog/rfdc/dac2_clk", f"hedgehog/dac2_clk")
             connect_bd_intf_net(f, f"hedgehog/rfdc/sysref_in", f"hedgehog/sysref_in")
 
@@ -599,7 +608,7 @@ class StandardFirmware(Firmware):
             set_property(f, name=f"hedgehog/axi_bram_ctrl_dac_mem_decoder_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(self["dac_mem_decoder"].words(bus_data_bits=8), log=True)})
             assign_bd_address(f, addr_seg=f"hedgehog/axi_bram_ctrl_dac_mem_decoder/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_DAC_MEM_DECODER_ADDR, range=next_highest_power_of_2(self["dac_mem_decoder"].words(bus_data_bits=8)))
 
-             # ------------------- Sequencer cache -------------------- #
+            # ------------------- Sequencer cache -------------------- #
 
             # Add cache memory and connect it to the sequencer bus decoder
             create_ip(f, name="hedgehog/cache_mem", vlnv="xilinx.com:ip:blk_mem_gen:8.4")
@@ -643,20 +652,22 @@ class StandardFirmware(Firmware):
                 connect_bd_net(f, f"hedgehog/xlconcat_cache_we/In{i}", f"hedgehog/sequencer_bus_decoder/cache_wr")
             
             # Create an AXI BRAM controller for the cache
-            create_ip(f, name="hedgehog/axi_bram_ctrl_cache", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
-            set_property(f, name=f"hedgehog/axi_bram_ctrl_cache", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0, "READ_LATENCY": 3})
-            connect_bd_net(f, f"hedgehog/axi_bram_ctrl_cache/s_axi_aclk", f"hedgehog/clk_wiz/clk_300")
-            connect_bd_net(f, f"hedgehog/axi_bram_ctrl_cache/s_axi_aresetn", f"hedgehog/seq_peripheral_aresetn")
+#             create_ip(f, name="hedgehog/axi_bram_ctrl_cache", vlnv="xilinx.com:ip:axi_bram_ctrl:4.1")
+#             set_property(f, name=f"hedgehog/axi_bram_ctrl_cache", properties="CONFIG.SUPPORTS_NARROW_BURST.VALUE_SRC USER")
+#             set_property(f, name=f"hedgehog/axi_bram_ctrl_cache", properties={"DATA_WIDTH": 128, "SINGLE_PORT_BRAM": 1, "ECC_TYPE": 0, "READ_LATENCY": 3, "SUPPORTS_NARROW_BURST": 1})
+#             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_cache/s_axi_aclk", f"hedgehog/clk_wiz/clk_300")
+#             connect_bd_net(f, f"hedgehog/axi_bram_ctrl_cache/s_axi_aresetn", f"hedgehog/seq_peripheral_aresetn")
 
-            # Connect the cache to the BRAM controller through a slice
-            create_module(f, f"hedgehog/axi_bram_cache_ctrl_addr_slice", "acadia_axi_bram_ctrl_addr_slice")
-            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_cache/BRAM_PORTA", f"hedgehog/axi_bram_cache_ctrl_addr_slice/BRAM_CTRL")
-            connect_bd_intf_net(f, f"hedgehog/axi_bram_cache_ctrl_addr_slice/SLAVE", f"hedgehog/cache_mem/BRAM_PORTA")
+#             # Connect the cache to the BRAM controller through a slice
+#             create_module(f, f"hedgehog/axi_bram_cache_ctrl_addr_slice", "acadia_axi_bram_ctrl_addr_slice")
+#             connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_cache/BRAM_PORTA", f"hedgehog/axi_bram_cache_ctrl_addr_slice/BRAM_CTRL")
+#             connect_bd_intf_net(f, f"hedgehog/axi_bram_cache_ctrl_addr_slice/SLAVE", f"hedgehog/cache_mem/BRAM_PORTA")
+            f.write(self.cache_controller.generate_ip_tcl(self._project_dir))
 
             # Connect the cache BRAM controller to the smartconnect and assign it address space
-            connect_bd_intf_net(f, f"hedgehog/axi_bram_ctrl_cache/S_AXI", f"hedgehog/config_smartconnect/M04_AXI")
-            set_property(f, name=f"hedgehog/axi_bram_cache_ctrl_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8, log=True)})
-            assign_bd_address(f, addr_seg="hedgehog/axi_bram_ctrl_cache/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8))
+            connect_bd_intf_net(f, f"hedgehog/cache_controller/S_AXI", f"hedgehog/config_smartconnect/M04_AXI")
+            # set_property(f, name=f"hedgehog/axi_bram_cache_ctrl_addr_slice", properties={"DATA_WIDTH": 128, "LOG2_DATA_WIDTH_BYTES": 4, "LOG2_SLAVE_SIZE_BYTES": next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8, log=True)})
+            assign_bd_address(f, addr_seg="hedgehog/cache_conttoller/S_AXI/Mem0", target_address_space="/ps/Data", offset=StandardFirmware.BRAM_CTRL_CACHE_ADDR, range=next_highest_power_of_2(StandardFirmware.CACHE_SIZE_BITS // 8))
 
              # ------------------- Sequencer Instruction Memory -------------------- #
 
@@ -1374,11 +1385,11 @@ class NCOSynchronizer(Synchronizer):
             # Set the event sources
             for call in self._calls:
                 function,channel,args,kwargs = call.values()
-                channel.set_nco_event_source(self._event_source)
+                channel.set_nco_update_event_source(self._event_source)
                 
                 if self._event_source == "immediate":
                     offset = channel.RFDC_def(f"XRFDC_{'DAC' if channel.is_dac else 'ADC'}_UPDATE_DYN_OFFSET")
-                    channel.RFDC_call("ClrSetReg", 
+                    channel.RFDC_voidcall("ClrSetReg", 
                                    channel.register_base_address(), 
                                    offset, 
                                    channel.RFDC_def(f"XRFDC_UPDT_EVNT_MASK"),
@@ -1634,6 +1645,22 @@ class Channel(PythonProcessorCacheable):
             raise ValueError(f"XRFdc_{func_name} failed.")
             
     @classmethod
+    @livecallable()
+    def RFDC_voidcall(cls, func_name, *args, **kwargs):
+        """
+        Call a function in the XRFDC driver. If no Processor is active, it is
+        assumed that the code is being run live on hardware and should be 
+        executed immediately.
+        :param func_name: Name of RFDC function to execute. Omit any "XRFdc_"
+        prefix.
+        :type func_name: str
+        """
+        if not hasattr(cls, "_rfdc"):
+            raise ValueError("RFDC driver not initialized.")
+            
+        getattr(xrfdc.lib, f"XRFdc_{func_name}")(cls._rfdc, *args, **kwargs)
+            
+    @classmethod
     @livecallable(imperative=False)
     def RFDC_def(cls, name):
         """
@@ -1678,6 +1705,24 @@ class Channel(PythonProcessorCacheable):
                    block_status)
         return block_status            
     
+    @livecallable()
+    def startup(self):
+        self.RFDC_call("StartUp", self.converter_type(), self.tile)
+        
+    @livecallable()
+    def shutdown(self):
+        self.RFDC_call("Shutdown", self.converter_type(), self.tile)
+        
+    @livecallable()
+    def reset(self):
+        self.RFDC_call("Reset", self.converter_type(), self.tile)
+        
+    @classmethod
+    @livecallable()
+    def reset_all(cls):
+        cls.RFDC_call("Reset", cls.RFDC_def("XRFDC_DAC_TILE"), -1)
+        cls.RFDC_call("Reset", cls.RFDC_def("XRFDC_ADC_TILE"), -1)
+    
     @nco_synchronizer.synchronized
     def set_nco_frequency(self, frequency, low=True, mid=True, high=True):
         """
@@ -1699,17 +1744,17 @@ class Channel(PythonProcessorCacheable):
         proc = Processor.active_processor()
         if proc is None or isinstance(proc, PythonProcessor):
             if low:
-                self.RFDC_call("WriteReg16Wrapper", 
+                self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_ADC_NCO_FQWD_LOW_OFFSET"), 
                                frequency & 0xFFFF)
             if mid:
-                self.RFDC_call("WriteReg16Wrapper", 
+                self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_ADC_NCO_FQWD_MID_OFFSET"), 
                                (frequency >> 16) & 0xFFFF)
             if high:
-                self.RFDC_call("WriteReg16Wrapper", 
+                self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
                                (frequency >> 32) & 0xFFFF)
@@ -1730,9 +1775,10 @@ class Channel(PythonProcessorCacheable):
             if low:
                 proc.bus_write(address=frequency_base_reg+1, 
                                data=frequency & 0xFFFF)
-            
-        raise TypeError("NCO frequency can only be set in"
-                        " `PythonProcessor` or `Sequencer` contexts.")
+        
+        else:
+            raise TypeError("NCO frequency can only be set in"
+                            " `PythonProcessor` or `Sequencer` contexts.")
     
     @nco_synchronizer.synchronized
     def set_nco_phase(self, phase, low=True, high=True):
@@ -1748,13 +1794,13 @@ class Channel(PythonProcessorCacheable):
         proc = Processor.active_processor()
         if proc is None or isinstance(proc, PythonProcessor):
             if low:
-                self.RFDC_call("WriteReg16Wrapper", 
+                self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_NCO_PHASE_LOW_OFFSET"), 
                                phase & 0xFFFF)
 
             if high:
-                self.RFDC_call("WriteReg16Wrapper", 
+                self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_NCO_PHASE_UPP_OFFSET"),
                                (phase >> 16) & 0x3)
@@ -1767,9 +1813,10 @@ class Channel(PythonProcessorCacheable):
                 
             proc.bus_write(address=phase_reg, data=phase & 0x0003FFFF)
             
-        raise TypeError("NCO phase can only be set in"
-                        " `PythonProcessor` or `Sequencer` contexts.")
-            
+        else:
+            raise TypeError("NCO phase can only be set in"
+                            " `PythonProcessor` or `Sequencer` contexts.")
+
     @nco_synchronizer.synchronized
     def reset_nco_phase(self):
         """
@@ -1784,8 +1831,9 @@ class Channel(PythonProcessorCacheable):
             # Do nothing, the synchronizer will set the bit in the register
             pass
             
-        raise TypeError("NCO accumulator phase can only be reset in"
-                        " `PythonProcessor` or `Sequencer` contexts.")
+        else:
+            raise TypeError("NCO accumulator phase can only be reset in"
+                            " `PythonProcessor` or `Sequencer` contexts.")
         
     def set_nco_update_event_source(self, source="immediate"):
         """
@@ -1798,11 +1846,11 @@ class Channel(PythonProcessorCacheable):
         if source not in ["immediate", "slice", "tile", "sysref", "marker", "pl"]:
             raise ValueError(f"Invalid source {source}.")
         
-        self.RFDC_call("ClrSetReg", 
+        self.RFDC_voidcall("ClrSetReg", 
                        self.register_base_address(), 
                        self.RFDC_def("XRFDC_NCO_UPDT_OFFSET"), 
                        self.RFDC_def("XRFDC_NCO_UPDT_MODE_MASK"),
-                       self.RFDC_def("XRFDC_EVNT_SRC_{source.upper()}"))
+                       self.RFDC_def(f"XRFDC_EVNT_SRC_{source.upper()}"))
     
     @livecallable
     def nco_update_event(self):
@@ -2035,6 +2083,11 @@ class RFClk:
     A wrapper for the Xilinx XRFClk driver.
     """
     FIRMWARE_SPI_GPIO_ADDRESS = 0x80000000
+    
+    @staticmethod
+    def call(name, *args, **kwargs):
+        if getattr(xrfclk.lib, f"XRFClk_{name}")(*args, **kwargs) != xrfclk.lib.XST_SUCCESS:
+            raise ValueError(f"Call to {name} failed.")
         
     @classmethod
     @livecallable()
@@ -2042,7 +2095,7 @@ class RFClk:
         """
         Initialize the xrfclk driver.
         """
-        xrfclk.lib.XRFClk_Init(Acadia._get_gpio_base(FIRMWARE_SPI_GPIO_ADDRESS))
+        RFClk.call("Init", Acadia._get_gpio_base(RFClk.FIRMWARE_SPI_GPIO_ADDRESS))
         
     class RFClkChip(ABC):
         """
@@ -2059,7 +2112,7 @@ class RFClk:
         @classmethod
         @livecallable()
         def reset(cls):
-            xrfclk.lib.XRFClk_ResetChip(cls.chip_id())
+            RFClk.call("ResetChip", cls.chip_id())
             
         @classmethod
         @livecallable()
@@ -2067,7 +2120,7 @@ class RFClk:
             """
             Set a configuration present in the driver on the chip.
             """
-            xrfclk.lib.XRFClk_SetConfigOnOneChipFromConfigId(cls.chip_id(), config_id)
+            RFClk.call("SetConfigOnOneChipFromConfigId", cls.chip_id(), config_id)
             
         @classmethod
         @livecallable(imperative=False)
@@ -2076,7 +2129,7 @@ class RFClk:
             Read a register on the chip.
             """
             value = xrfclk.ffi.new("unsigned int*", address << 8)
-            xrfclk.lib.XRFClk_ReadReg(cls.chip_id(), value)
+            RFClk.call("ReadReg", cls.chip_id(), value)
             return value[0]
         
         @classmethod
@@ -2085,7 +2138,7 @@ class RFClk:
             """
             Write a register on the chip.
             """
-            xrfclk.lib.XRFClk_WriteReg(cls.chip_id(), (address << 8) | data)
+            RFClk.call("WriteReg", cls.chip_id(), (address << 8) | (data & 0xFF))
         
     class LMK(RFClkChip):
         DCLK_LMX_ADC = 0
@@ -2116,8 +2169,8 @@ class RFClk:
             """
             Write a big-endian 16-bit number.
             """
-            cls.write_reg(address, (R >> 8) & (mask >> 8) & 0xFF)
-            cls.write_reg(address, R & mask & 0xFF)
+            cls.write_reg(address, (data >> 8) & (mask >> 8) & 0xFF)
+            cls.write_reg(address, data & mask & 0xFF)
         
         @classmethod
         @livecallable()
@@ -2125,7 +2178,7 @@ class RFClk:
             """
             Set the value of an output divider on a DCLK output.
             """
-            cls.write_reg(0x100 + 8*output, div & 0x1F)
+            cls.write_reg(0x100 + 4*output, div & 0x1F)
             
         @classmethod
         @livecallable(imperative=False)
@@ -2133,7 +2186,7 @@ class RFClk:
             """
             Set the value of an output divider on a DCLK output.
             """
-            reg = cls.read_reg(0x100 + 8*output) & 0x1F
+            reg = cls.read_reg(0x100 + 4*output) & 0x1F
             if reg == 0:
                 return 32
             return reg
@@ -2148,7 +2201,7 @@ class RFClk:
             
         @classmethod
         @livecallable(imperative=False)
-        def get_input(cls, clkin):
+        def get_input(cls):
             """
             Get the setting of the clock input mux.
             """
@@ -2163,7 +2216,7 @@ class RFClk:
         @classmethod
         @livecallable(imperative=False)
         def get_input_R(cls, clkin):
-            return read_reg16(0x153 + 2*clkin) & 0x3FFF
+            return cls.read_reg16(0x153 + 2*clkin) & 0x3FFF
         
         @classmethod
         @livecallable()
@@ -2173,7 +2226,7 @@ class RFClk:
         @classmethod
         @livecallable(imperative=False)
         def get_PLL2_R(cls):
-            return read_reg16(0x160) & 0x0FFF
+            return cls.read_reg16(0x160) & 0x0FFF
         
         @classmethod
         @livecallable()
@@ -2183,7 +2236,7 @@ class RFClk:
         @classmethod
         @livecallable(imperative=False)
         def get_PLL1_N(cls):
-            return read_reg16(0x159) & 0x3FFF
+            return cls.read_reg16(0x159) & 0x3FFF
         
         @classmethod
         @livecallable()
@@ -2193,12 +2246,12 @@ class RFClk:
         @classmethod
         @livecallable(imperative=False)
         def get_PLL2_N(cls):
-            return read_reg16(0x167)
+            return cls.read_reg16(0x167)
         
         @classmethod
         @livecallable(imperative=False)
         def get_PLL2_P(cls):
-            reg = read_reg16(0x162)
+            reg = cls.read_reg(0x162)
             reg = (reg >> 5) & 0x7
             
             # This register has a weird encoding, decode it
@@ -2595,10 +2648,10 @@ class Acadia(PythonProcessorCacheable):
             mem_cast='Q') for i in range(4)]
             
         for dac_mem in self.DACArray:
-            self._attach_resource(dac_mem, mem_cast="h")
+            self._attach_resource(dac_mem)
             
         for cmacc_kernel_mem in self.CMACCKernelArray:
-            self._attach_resource(cmacc_kernel_mem, mem_cast="h")
+            self._attach_resource(cmacc_kernel_mem)
                 
         self._attach_resource(self.PLDDR0Array)
         self._attach_resource(self.PLDDR1Array)
@@ -2620,6 +2673,9 @@ class Acadia(PythonProcessorCacheable):
             
         # Connect to the GPIO registers
         PSGPIO.attach(self._attach_memory(0xFF0A0000, 0x400))
+        
+        # Connect to the clock wizard
+        self.clk_wiz = self._attach_memory(address=self.firmware.CLK_WIZ_ADDR, size=2**18)  
             
         # Configure and connect to the sysfs interface for the GPIO driving
         # the sequencer run and reset pins
@@ -2633,6 +2689,18 @@ class Acadia(PythonProcessorCacheable):
             f.write(f"out\n")
             
         with open(f"/sys/class/gpio/gpio{self._sequencer_gpio_base}/value", "w") as f:
+            f.write(f"0\n")
+            
+        self._ddr_gpio_base = Acadia._get_gpio_base(0x8002_0000)
+        
+        if f"gpio{self._ddr_gpio_base}" not in os.listdir("/sys/class/gpio"):
+            with open(f"/sys/class/gpio/export", "w") as f:
+                f.write(f"{self._ddr_gpio_base}\n")
+            
+        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/direction", "w") as f:
+            f.write(f"out\n")
+            
+        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/value", "w") as f:
             f.write(f"0\n")
         
             
@@ -2910,7 +2978,7 @@ class Acadia(PythonProcessorCacheable):
         return self.sequencer.bus_write(address=fifo_device.address().value(),
                                          data=descriptor)
     
-    def run(self):
+    def run(self, assembled=True):
         """
         Run the encapsulated program on Acadia hardware. 
         """
@@ -2924,7 +2992,7 @@ class Acadia(PythonProcessorCacheable):
             if dma.Instruction.usage() > 0:
                 self._ADC_AXIS_switch.connect(dma._resource_id+4, dma.physical_channel.num)
 
-        self.PS.run()
+        self.PS.run(assembled)
         
     @livecallable()
     def sequencer_run(self):
@@ -2941,6 +3009,16 @@ class Acadia(PythonProcessorCacheable):
         """
         with open(f"/sys/class/gpio/gpio{self._sequencer_gpio_base}/value", "w") as f:
             f.write(f"0\n")
+            
+    @livecallable()
+    def reset_plddr0(self):
+        import time
+        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/value", "w") as f:
+            f.write(f"1\n")
+        time.sleep(0.2)
+        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/value", "w") as f:
+            f.write(f"0\n")
+        time.sleep(0.2)
         
     def dma_trigger(self, mask):
         """
@@ -2978,15 +3056,15 @@ class Acadia(PythonProcessorCacheable):
         """
         # Make sure that the requested duration is an integer number of samples
         sample_rate = clock_speed * samples_per_cycle
-        duration_samples = int(duration * sample_rate)
-        if duration_samples != duration * sample_rate:
+        duration_samples = int(round(duration * sample_rate))
+        if abs(duration * sample_rate - duration_samples) > 1e-6:
             raise ValueError("Duration must be equivalent to an integer number of"
                              f" samples; found {duration * sample_rate} samples.")
 
         # Make sure that the number of samples in the pulse results in a valid 
         # number of cycles
-        duration_cycles = int(duration * clock_speed)
-        if duration_cycles != duration * clock_speed:
+        duration_cycles = int(round(duration * clock_speed))
+        if abs(duration * clock_speed - duration_cycles) > 1e-6:
             raise ValueError("Array must be an integer number of cycles;"
                              f" found {duration * clock_speed} cycles"
                              f" ({duration_samples} samples).")
@@ -3023,7 +3101,7 @@ class Acadia(PythonProcessorCacheable):
         array = array.round().view(numpy.float32).astype(numpy.int16)
         array <<= 2
         
-        return array
+        return array.view(dtype=numpy.uint8)
     
     ########################### HELPER METHODS #############################
         
@@ -3141,7 +3219,7 @@ class Acadia(PythonProcessorCacheable):
             resource_manager.base_byte_address)
         
         self._mem_maps.append(m)
-        resource_manager._memory = m
+        resource_manager._pool_memory = m
         
         for instance in resource_manager.instances:
             start_byte = instance.byte_address() - resource_manager.base_byte_address

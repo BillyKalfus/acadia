@@ -1,7 +1,8 @@
 __all__ = ["Firmware"]
 
 import os
-from . import hdl
+
+from .hdl import BusDevice, HDLModule
 from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg, next_highest_power_of_2
 
 class Firmware(object):
@@ -47,8 +48,12 @@ class Firmware(object):
             
     def __getitem__(self, key):
         for m in self._modules:
-            if m.name == key:
-                return m
+            if isinstance(m, BusDevice):
+                if m.name == key:
+                    return m
+            elif isinstance(m, HDLModule):
+                if m._module_name == key:
+                    return m
             
         raise KeyError(f"No module found in AcadiaFirmware object with name {key}.")
             
@@ -56,8 +61,8 @@ class Firmware(object):
         """
         Adds an HDL module to the firmware image.
         """
-        if not isinstance(value, hdl.HDLModule):
-            raise TypeError("Only hdl.HDLModules can be added to the firmware.")
+        if not isinstance(value, HDLModule):
+            raise TypeError("Only HDLModules can be added to the firmware.")
             
         self._modules.append(value)
             
@@ -76,7 +81,7 @@ class Firmware(object):
     
     def write_hedgehog_tcl(self, filename="hedgehog.tcl"):
         """
-        Writes a TCL script to populate the HEDGEHOG logic.
+        Writes a TCL script to populate the HEDGEHOG logic
         Child classes should override this function to implement unique functionality.
         :param filename: The name of the file in the project directory in which to write the file.
         :type filename: str, optional

@@ -41,7 +41,7 @@ struct metal_device {
 * @param    StatusEvent indicates one or more interrupt occurred.
 */
 typedef void (*XRFdc_StatusHandler)(void *CallBackRef, u32 Type, u32 Tile_Id, u32 Block_Id, u32 StatusEvent);
-#pragma pack(1)
+// #pragma pack(1)
 typedef struct {
 	u32 Enabled; /* PLL Enables status (not a setter) */
 	double RefClkFreq;
@@ -3088,6 +3088,17 @@ typedef struct {
 // #define XRFDC_BLOCK_ADDR_OFFSET(X) (X * 0x400U)
 #define XRFDC_TILE_DRP_OFFSET 0x2000U
 
+enum metal_log_level {
+	METAL_LOG_EMERGENCY,	/**< system is unusable.               */
+	METAL_LOG_ALERT,	/**< action must be taken immediately. */
+	METAL_LOG_CRITICAL,	/**< critical conditions.              */
+	METAL_LOG_ERROR,	/**< error conditions.                 */
+	METAL_LOG_WARNING,	/**< warning conditions.               */
+	METAL_LOG_NOTICE,	/**< normal but significant condition. */
+	METAL_LOG_INFO,		/**< informational messages.           */
+	METAL_LOG_DEBUG,	/**< debug-level messages.             */
+};
+
 /*****************************************************************************/
 /************************** Function Prototypes ******************************/
 
@@ -3096,6 +3107,7 @@ typedef struct {
 u32 metal_init_METAL_INIT_DEFAULTS(void);
 u32 def_XRFDC_BLOCK_BASE(u32, u32, u32);
 void XRFdc_WriteReg16Wrapper(XRFdc*, u32, u32, u32);
+void metal_set_log_level(enum metal_log_level);
 
 XRFdc_Config *XRFdc_LookupConfig(u16 DeviceId);
 u32 XRFdc_RegisterMetal(XRFdc *InstancePtr, u16 DeviceId, struct metal_device **DevicePtr);
