@@ -729,63 +729,101 @@ class BusDataMoverController(BusDevice, HDLModule):
         
         return hdl
     
-class AXIBRAMController(HDLModule):
+class AXIMemoryArray(HDLModule):
     """
-    Creates a wrapper for AXI BRAM controllers with the correct address slicing
-    and avoids strange behavior of the controller in the IP Integrator.
+    Creates a wrapper for an AXI BRAM controller connected to a memory.
     """
     
-    def __init__(self, module_name, width, depth, axi_frequency, axi4_lite=False, read_latency=1, read_cmd_optimization=True, synth_jobs=16):
+    def __init__(self, module_name, size_bits, width, axi_frequency, controller_width=None, controller_pipeline=1, elements=1, primitive="auto", axi4_lite=False, read_only=False, use_rst=True, read_data_pipeline=0, synth_jobs=16):
         """
         :param module_name: The name of the module
         :type module_name: str
-        :param width: The width of the data port
+        :param width: The width of the exposed data port NOT connected to the
+        controller.
         :type width: int
-        :param depth: The depth of the memory in words
+        :param size_bits: The size of a single memory element in bits
         :type depth: int
         :param axi_frequency: Frequency of the AXI bus in Hz, needed for the
         `FREQ_HZ` parameter of the AXI interface.
         :type axi_frequency: int
+        :param controller_width: The width of the memory port connected to 
+        the controller (and correspondingly, the width of the AXI interface)
+        :type controller_width: int, optional
+        :param controller_pipeline: The number of pipeline stages to add to 
+        the interface between the AXI BRAM controller and the memories.
+        :type controller_pipeline: int, optional
+        :param elements: Number of memory elements to create
+        :type elements: int, optional
+        :param primitive: The memory primitive to use. One of "auto", "block", 
+        "distributed", "mixed", "ultra"
+        :type primitive: str, optional
         :param axi4_lite: If `True`, the BRAM controller will be implemented
         with an AXI4-Lite interface instead of full AXI4.
-        :type axi4_lite: bool
-        :param read_latency: The latency of retrieving a word from memory, 
-        in number of cycles.
-        :type read_latency: int
-        :param read_cmd_optimization: If `True`, the read command optimization 
-        setting of the IP is enabled.
-        :type read_cmd_optimization: bool
+        :type axi4_lite: bool, optional
+        :param read_only: If `True`, the write enable of the user port will be 
+        tied low.
+        :type read_only: bool, optional
+        :param use_rst: If `False`, the reset signal of the exposed port will 
+        be tied low.
+        :type use_rst: bool, optional
+        :param read_data_pipeline: The number of additional pipeline stages to
+        add to the data output of the memory.
+        :type read_data_pipeline: int, optional
         :param synth_jobs: Number of processor jobs to use for synthesizing the
-        IP
-        :type synth_jobs: int
+        BRAM controller IP
+        :type synth_jobs: int, optional
         """
+        self._size_bits = size_bits
         self._width = width
-        self._depth = depth
-        self._read_latency = read_latency
         self._axi_frequency = axi_frequency
+        self._controller_width = controller_width if controller_width is not None else width
+        
+        if controller_pipeline <= 0:
+            raise ValueError("Controller pipeline must be a positive number.")
+        self._controller_pipeline = controller_pipeline
+        
+        if elements <= 0:
+            raise ValueError("Number of memory elements must be a positive number")
+        self._elements = elements
+        
+        if primitive not in ["auto", "block", "distributed", "ultra"]:
+            raise ValueError("Primitive must be one of 'auto', 'block', 'distributed', or 'ultra'.")
+        self._primitive = primitive
+        
         self._axi4_lite = axi4_lite
-        self._read_cmd_optimization = read_cmd_optimization
+        self._read_only = read_only
+        self._use_rst = use_rst
+        self._read_data_pipeline = read_data_pipeline
         self._synth_jobs = synth_jobs
         super().__init__(module_name)
         
     def generate_hdl(self):
         """
         Generates an HDL file for the controller.
-        """
+        """        
         
-        width_bytes = self._width // 8
-        byte_depth = self._depth * width_bytes
-        byte_depth_bits = next_highest_power_of_2(byte_depth, log=True)
-        depth_bits = next_highest_power_of_2(self._depth, log=True)
+        # Make some constants that we'll use later
+        mem_width = max(self._width, self._controller_width)
+        mem_depth = self._size_bits // mem_width
         
+        log2_elements = next_highest_power_of_2(self._elements, log=True) 
+        log2_mem_depth = next_highest_power_of_2(mem_depth, log=True) 
         
-        hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\n\n'
-        hdl += f'entity {self._module_name} is\n'
+        controller_address_bits = next_highest_power_of_2((self._size_bits // 8)*self._elements, log=True) 
+        log2_controller_word_depth = next_highest_power_of_2(self._size_bits // self._controller_width, log=True)
+        controller_unused_bits = next_highest_power_of_2(self._controller_width // 8, log=True)
+        log2_controller_words_per_mem_word = next_highest_power_of_2(mem_width // self._controller_width, log=True)
+        
+        log2_user_word_depth = next_highest_power_of_2(self._size_bits // self._width, log=True)
+        log2_user_words_per_mem_word = next_highest_power_of_2(mem_width // self._width, log=True)
+        
+        hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\nlibrary xpm;\nuse xpm.vcomponents.all;\n\n'
+        hdl += f'entity {self._module_name}_axi_memory is\n'
         hdl += f'    port (\n'
         hdl += f'        s_axi_aclk    : in  std_logic;\n'
         hdl += f'        s_axi_aresetn : in  std_logic;\n\n'
         
-        hdl += f'        s_axi_awaddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'        s_axi_awaddr  : in  std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'        s_axi_awvalid : in  std_logic;\n'
         hdl += f'        s_axi_awready : out std_logic;\n'
         if not self._axi4_lite:
@@ -793,8 +831,8 @@ class AXIBRAMController(HDLModule):
             hdl += f'        s_axi_awsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'        s_axi_awburst : in  std_logic_vector(1 downto 0);\n'
         
-        hdl += f'        s_axi_wdata   : in  std_logic_vector({self._width-1} downto 0);\n'
-        hdl += f'        s_axi_wstrb   : in  std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'        s_axi_wdata   : in  std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'        s_axi_wstrb   : in  std_logic_vector({(self._controller_width // 8) - 1} downto 0);\n'
         hdl += f'        s_axi_wvalid  : in  std_logic;\n'
         hdl += f'        s_axi_wready  : out std_logic;\n'
         if not self._axi4_lite:
@@ -804,7 +842,7 @@ class AXIBRAMController(HDLModule):
         hdl += f'        s_axi_bvalid  : out std_logic;\n'
         hdl += f'        s_axi_bready  : in  std_logic;\n'
         
-        hdl += f'        s_axi_araddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'        s_axi_araddr  : in  std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'        s_axi_arvalid : in  std_logic;\n'
         hdl += f'        s_axi_arready : out std_logic;\n'
         if not self._axi4_lite:
@@ -812,25 +850,30 @@ class AXIBRAMController(HDLModule):
             hdl += f'        s_axi_arsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'        s_axi_arburst : in  std_logic_vector(1 downto 0);\n'
         
-        hdl += f'        s_axi_rdata   : out std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'        s_axi_rdata   : out std_logic_vector({self._controller_width-1} downto 0);\n'
         hdl += f'        s_axi_rresp   : out std_logic_vector(1 downto 0);\n'
         hdl += f'        s_axi_rvalid  : out std_logic;\n'
         hdl += f'        s_axi_rready  : in  std_logic;\n'
         if not self._axi4_lite:
-            hdl += f'        s_axi_rlast   : out  std_logic;\n'
+            hdl += f'        s_axi_rlast   : out std_logic;\n'
         
-        hdl += f'\n'
-        hdl += f'        mem_din     : out std_logic_vector({self._width-1} downto 0);\n'
-        hdl += f'        mem_dout    : in  std_logic_vector({self._width-1} downto 0);\n'
-        hdl += f'        mem_addr    : out std_logic_vector({depth_bits-1} downto 0);\n'
-        hdl += f'        mem_wr      : out std_logic_vector({width_bytes-1} downto 0);\n'
-        hdl += f'        mem_en      : out std_logic;\n'
-        hdl += f'        mem_clk     : out std_logic\n'
+        for i in range(self._elements):
+            hdl += f'\n'
+            if not self._read_only:
+                hdl += f'        mem{i}_din     : in  std_logic_vector({self._width-1} downto 0);\n'
+            hdl += f'        mem{i}_dout    : out std_logic_vector({self._width-1} downto 0);\n'
+            hdl += f'        mem{i}_addr    : in  std_logic_vector({log2_user_word_depth-1} downto 0);\n'
+            # hdl += f'        mem{i}_clk     : in  std_logic;\n'
+            if not self._read_only:
+                hdl += f'        mem{i}_wr      : in  std_logic;\n'
+            if self._use_rst:
+                hdl += f'        mem{i}_rst     : in  std_logic;\n'
+            
         
-        hdl += f"\n    );\n"
-        hdl += f'end {self._module_name};\n\n'
+        hdl = hdl[:-2] + f"\n    );\n"
+        hdl += f'end {self._module_name}_axi_memory;\n\n'
 
-        hdl += f'architecture rtl of {self._module_name} is\n\n'
+        hdl += f'architecture rtl of {self._module_name}_axi_memory is\n\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n' 
         hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n\n'
         
@@ -865,19 +908,19 @@ class AXIBRAMController(HDLModule):
         hdl += f'\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;\n'
         hdl += (f'    ATTRIBUTE X_INTERFACE_PARAMETER of s_axi_awaddr : SIGNAL is "'
-                        f'MAX_BURST_LENGTH 256,'
-                        f'SUPPORTS_NARROW_BURST 1,'
+                        f'MAX_BURST_LENGTH {1 if self._axi4_lite else 256},'
+                        f'SUPPORTS_NARROW_BURST {0 if self._axi4_lite else 1},'
                         f'READ_WRITE_MODE READ_WRITE,'
                         f'BUSER_WIDTH 0,'
                         f'RUSER_WIDTH 0,'
                         f'WUSER_WIDTH 0,'
                         f'ARUSER_WIDTH 0,'
                         f'AWUSER_WIDTH 0,'
-                        f'ADDR_WIDTH {byte_depth_bits},'
+                        f'ADDR_WIDTH {controller_address_bits},'
                         f'ID_WIDTH 0,'
                         f'FREQ_HZ {int(self._axi_frequency)},'
                         f'PROTOCOL {"AXI4LITE" if self._axi4_lite else "AXI4"},'
-                        f'DATA_WIDTH {self._width},'
+                        f'DATA_WIDTH {self._controller_width},'
                         f'HAS_BURST {1 if self._axi4_lite else 0},'
                         f'HAS_CACHE 0,'
                         f'HAS_LOCK 0,'
@@ -889,20 +932,24 @@ class AXIBRAMController(HDLModule):
                         f'HAS_RRESP 1'
                         f'";\n')
 
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_din  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem DIN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_dout : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem DOUT";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_wr   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem WE";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_en   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem EN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem ADDR";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem CLK";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_MODE of mem_din  : SIGNAL is "Master";\n\n'
+        for i in range(self._elements):
+            if not self._read_only:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_din  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} DIN";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_dout : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} DOUT";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} ADDR";\n'
+            # hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} CLK";\n'
+            if not self._read_only:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_wr   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} WE";\n'
+            if self._use_rst:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_rst  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} RST";\n'
         
+        hdl += "\n"
         hdl += f'    component {self._module_name}_ip\n'
         hdl += f'        port (\n'
         hdl += f'            s_axi_aclk    : in  std_logic;\n'
         hdl += f'            s_axi_aresetn : in  std_logic;\n\n'
         
-        hdl += f'            s_axi_awaddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'            s_axi_awaddr  : in  std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'            s_axi_awvalid : in  std_logic;\n'
         hdl += f'            s_axi_awready : out std_logic;\n'
         if not self._axi4_lite:
@@ -910,8 +957,8 @@ class AXIBRAMController(HDLModule):
             hdl += f'            s_axi_awsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'            s_axi_awburst : in  std_logic_vector(1 downto 0);\n'
         
-        hdl += f'            s_axi_wdata   : in  std_logic_vector({self._width-1} downto 0);\n'
-        hdl += f'            s_axi_wstrb   : in  std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'            s_axi_wdata   : in  std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'            s_axi_wstrb   : in  std_logic_vector({(self._controller_width // 8) - 1} downto 0);\n'
         hdl += f'            s_axi_wvalid  : in  std_logic;\n'
         hdl += f'            s_axi_wready  : out std_logic;\n'
         if not self._axi4_lite:
@@ -921,7 +968,7 @@ class AXIBRAMController(HDLModule):
         hdl += f'            s_axi_bvalid  : out std_logic;\n'
         hdl += f'            s_axi_bready  : in  std_logic;\n'
         
-        hdl += f'            s_axi_araddr  : in  std_logic_vector({byte_depth_bits-1} downto 0);\n'
+        hdl += f'            s_axi_araddr  : in  std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'            s_axi_arvalid : in  std_logic;\n'
         hdl += f'            s_axi_arready : out std_logic;\n'
         if not self._axi4_lite:
@@ -929,7 +976,7 @@ class AXIBRAMController(HDLModule):
             hdl += f'            s_axi_arsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'            s_axi_arburst : in  std_logic_vector(1 downto 0);\n'
         
-        hdl += f'            s_axi_rdata   : out std_logic_vector({self._width-1} downto 0);\n'
+        hdl += f'            s_axi_rdata   : out std_logic_vector({self._controller_width-1} downto 0);\n'
         hdl += f'            s_axi_rresp   : out std_logic_vector(1 downto 0);\n'
         hdl += f'            s_axi_rvalid  : out std_logic;\n'
         hdl += f'            s_axi_rready  : in  std_logic;\n'
@@ -940,15 +987,49 @@ class AXIBRAMController(HDLModule):
         
         # The critical issue with the BRAM controller - the width of the address port
         # is determined by the number of bytes in the BRAM, rather than the number of words
-        hdl += f'            bram_addr_a   : out std_logic_vector({byte_depth_bits-1} downto 0);\n'
-        hdl += f'            bram_wrdata_a : out std_logic_vector({self._width-1} downto 0);\n'
-        hdl += f'            bram_rddata_a : in  std_logic_vector({self._width-1} downto 0);\n'
-        hdl += f'            bram_we_a     : out std_logic_vector({width_bytes-1} downto 0);\n'
+        hdl += f'            bram_addr_a   : out std_logic_vector({controller_address_bits-1} downto 0);\n'
+        hdl += f'            bram_wrdata_a : out std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'            bram_rddata_a : in  std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'            bram_we_a     : out std_logic_vector({(self._controller_width // 8)-1} downto 0);\n'
         hdl += f'            bram_en_a     : out std_logic;\n'
         hdl += f'            bram_clk_a    : out std_logic\n'
         
-        hdl += f"\n        );\n"
-        hdl += f"    end component;\n"
+        hdl += f"        );\n"
+        hdl += f"    end component;\n\n"
+        
+        hdl += f'    signal controller_addr   : std_logic_vector({controller_address_bits-1} downto 0);\n'
+        hdl += f'    signal controller_wrdata : std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'    signal controller_rddata : std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'    signal controller_we     : std_logic_vector({(self._controller_width // 8)-1} downto 0);\n'
+        hdl += f'    signal controller_en     : std_logic;\n'
+        hdl += f'    signal controller_clk    : std_logic;\n\n'
+        
+        hdl += f'    signal controller_wrdata_d : std_logic_vector({self._controller_width-1} downto 0);\n'
+        hdl += f'    signal controller_we_d     : std_logic_vector({(self._controller_width // 8)-1} downto 0);\n\n'
+        
+        hdl += f"    type mem_type is array (natural range <>) of std_logic_vector({mem_width-1} downto 0);\n"
+        for i in range(self._elements):
+            hdl += f'    signal mem{i} : mem_type(0 to {mem_depth-1});\n' 
+        hdl += "\n"
+        
+        hdl += f'    ATTRIBUTE RAM_STYLE : STRING;\n' 
+        for i in range(self._elements):
+            hdl += f'    ATTRIBUTE RAM_STYLE of mem{i} : signal is "{self._primitive}";\n' 
+        hdl += "\n"
+            
+        hdl += f'    signal controller_mem_index    : std_logic_vector({log2_mem_depth-1} downto 0);\n'
+        if self._controller_width != mem_width:
+            hdl += f'    signal controller_mem_subindex : std_logic_vector({log2_controller_words_per_mem_word-1} downto 0);\n'
+        if self._elements != 1:
+            hdl += f'    signal controller_element_sel  : std_logic_vector({log2_elements-1} downto 0);\n'
+            
+        hdl += "\n"
+        
+        if self._read_data_pipeline != 0:
+            for i in range(self._elements):
+                for j in range(self._read_data_pipeline):
+                    hdl += f'    signal mem{i}_dout_{"p"*(j+1)} : std_logic_vector({self._width-1} downto 0);\n'
+                hdl += "\n"
         
         hdl += f'begin\n\n'
     
@@ -956,56 +1037,198 @@ class AXIBRAMController(HDLModule):
         hdl += f'        port map (\n'
         
         
-        hdl += f'        s_axi_aclk    => s_axi_aclk,\n'
-        hdl += f'        s_axi_aresetn => s_axi_aresetn,\n\n'
+        hdl += f'            s_axi_aclk    => s_axi_aclk,\n'
+        hdl += f'            s_axi_aresetn => s_axi_aresetn,\n\n'
         
-        hdl += f'        s_axi_awaddr  => s_axi_awaddr,\n'
-        hdl += f'        s_axi_awvalid => s_axi_awvalid,\n'
-        hdl += f'        s_axi_awready => s_axi_awready,\n'
+        hdl += f'            s_axi_awaddr  => s_axi_awaddr,\n'
+        hdl += f'            s_axi_awvalid => s_axi_awvalid,\n'
+        hdl += f'            s_axi_awready => s_axi_awready,\n'
         if not self._axi4_lite:
-            hdl += f'        s_axi_awlen   => s_axi_awlen,\n'
-            hdl += f'        s_axi_awsize  => s_axi_awsize,\n'
-            hdl += f'        s_axi_awburst => s_axi_awburst,\n'
+            hdl += f'            s_axi_awlen   => s_axi_awlen,\n'
+            hdl += f'            s_axi_awsize  => s_axi_awsize,\n'
+            hdl += f'            s_axi_awburst => s_axi_awburst,\n'
         
-        hdl += f'        s_axi_wdata   => s_axi_wdata,\n'
-        hdl += f'        s_axi_wstrb   => s_axi_wstrb,\n'
-        hdl += f'        s_axi_wvalid  => s_axi_wvalid,\n'
-        hdl += f'        s_axi_wready  => s_axi_wready,\n'
+        hdl += f'            s_axi_wdata   => s_axi_wdata,\n'
+        hdl += f'            s_axi_wstrb   => s_axi_wstrb,\n'
+        hdl += f'            s_axi_wvalid  => s_axi_wvalid,\n'
+        hdl += f'            s_axi_wready  => s_axi_wready,\n'
         if not self._axi4_lite:
-            hdl += f'        s_axi_wlast   => s_axi_wlast,\n'
+            hdl += f'            s_axi_wlast   => s_axi_wlast,\n'
         
-        hdl += f'        s_axi_bresp   => s_axi_bresp,\n'
-        hdl += f'        s_axi_bvalid  => s_axi_bvalid,\n'
-        hdl += f'        s_axi_bready  => s_axi_bready,\n'
+        hdl += f'            s_axi_bresp   => s_axi_bresp,\n'
+        hdl += f'            s_axi_bvalid  => s_axi_bvalid,\n'
+        hdl += f'            s_axi_bready  => s_axi_bready,\n'
         
-        hdl += f'        s_axi_araddr  => s_axi_araddr,\n'
-        hdl += f'        s_axi_arvalid => s_axi_arvalid,\n'
-        hdl += f'        s_axi_arready => s_axi_arready,\n'
+        hdl += f'            s_axi_araddr  => s_axi_araddr,\n'
+        hdl += f'            s_axi_arvalid => s_axi_arvalid,\n'
+        hdl += f'            s_axi_arready => s_axi_arready,\n'
         if not self._axi4_lite:
-            hdl += f'        s_axi_arlen   => s_axi_arlen,\n'
-            hdl += f'        s_axi_arsize  => s_axi_arsize,\n'
-            hdl += f'        s_axi_arburst => s_axi_arburst,\n'
+            hdl += f'            s_axi_arlen   => s_axi_arlen,\n'
+            hdl += f'            s_axi_arsize  => s_axi_arsize,\n'
+            hdl += f'            s_axi_arburst => s_axi_arburst,\n'
         
-        hdl += f'        s_axi_rdata   => s_axi_rdata,\n'
-        hdl += f'        s_axi_rresp   => s_axi_rresp,\n'
-        hdl += f'        s_axi_rvalid  => s_axi_rvalid,\n'
-        hdl += f'        s_axi_rready  => s_axi_rready,\n'
+        hdl += f'            s_axi_rdata   => s_axi_rdata,\n'
+        hdl += f'            s_axi_rresp   => s_axi_rresp,\n'
+        hdl += f'            s_axi_rvalid  => s_axi_rvalid,\n'
+        hdl += f'            s_axi_rready  => s_axi_rready,\n'
         if not self._axi4_lite:
-            hdl += f'        s_axi_rlast   => s_axi_rlast,\n'
+            hdl += f'            s_axi_rlast   => s_axi_rlast,\n'
             
         hdl += f'\n'
         
-        hdl += f'        bram_addr_a({byte_depth_bits-1} downto {byte_depth_bits-depth_bits})   => mem_addr,\n'
-        hdl += f'        bram_addr_a({byte_depth_bits-depth_bits-1} downto 0)   => open,\n'
-
-        hdl += f'        bram_clk_a    => mem_clk,\n'
-        hdl += f'        bram_en_a     => mem_en,\n'
-        hdl += f'        bram_we_a     => mem_wr,\n'
-        hdl += f'        bram_wrdata_a => mem_din,\n'
-        hdl += f'        bram_rddata_a => mem_dout\n'
+        hdl += f'            bram_addr_a   => controller_addr,\n'
+        hdl += f'            bram_clk_a    => controller_clk,\n'
+        hdl += f'            bram_en_a     => controller_en,\n'
+        hdl += f'            bram_we_a     => controller_we,\n'
+        hdl += f'            bram_wrdata_a => controller_wrdata,\n'
+        hdl += f'            bram_rddata_a => controller_rddata\n'
         
-        hdl += f'    );\n\n'
-    
+        hdl += f'        );\n\n'
+        
+        # Create the controller interface
+        # First, pipeline the address(es)
+        # The controller data width will never be wider than the memory width
+        # because we choose the memory width to be the maximum of the controller
+        # width and the user width; therefore, it must always be less than or
+        # equal
+        # This means that the controller data depth will never be less than the
+        # memory depth, it will always be greater or equal
+        controller_mem_index_top_bit = controller_address_bits-log2_elements
+        controller_mem_index_lower_bit = controller_address_bits-log2_elements-log2_mem_depth
+        
+        hdl += f'    controller_pipeline_proc: process(controller_clk) begin\n'
+        hdl += f'        if rising_edge(controller_clk) then\n'
+        
+        if self._elements != 1:
+            hdl += f'            controller_element_sel  <= controller_addr({controller_address_bits-1} downto {controller_address_bits-log2_elements});\n'
+            
+        hdl += f'            controller_mem_index    <= controller_addr({controller_mem_index_top_bit-1} downto {controller_mem_index_lower_bit});\n'
+        
+        if self._controller_width != mem_width:
+            hdl += f'            controller_mem_subindex <= controller_addr({controller_mem_index_lower_bit-1} downto {controller_unused_bits});\n'
+                    
+        hdl += f'            controller_wrdata_d <= controller_wrdata;\n\n'    
+                
+        # Manually gate the write enables
+        hdl += f'            we_loop: for i in 0 to {(self._controller_width // 8) - 1} loop\n'
+        hdl += f'                controller_we_d(i) <= controller_we(i) and controller_en;\n'
+        hdl += f'            end loop we_loop;\n'
+            
+        hdl += f'        end if;\n'
+        hdl += f'    end process controller_pipeline_proc;\n\n'
+            
+        # Generate a process for the controller's interactions with the memories
+        hdl += f'    controller_rd_proc: process(controller_clk) begin\n'
+        hdl += f'        if rising_edge(controller_clk) then\n'            
+            
+        for element in range(self._elements):
+            if self._elements != 1:
+                hdl += f'            {"els" if element != 0 else ""}if(controller_element_sel = "{f"{element:b}".zfill(log2_elements)}") then\n'
+                indent = "    "
+            else:
+                indent = ""
+
+            if mem_width == self._controller_width:
+                hdl += f'            {indent}controller_rddata <= mem{element}(to_integer(unsigned(controller_mem_index)));\n'
+            else:
+                hdl += f'            {indent}case controller_mem_subindex is\n'
+                for w in range(mem_width // self._controller_width):
+                    hdl += f'            {indent}    when "{f"{w:b}".zfill(log2_controller_words_per_mem_word)}" => \n'
+                    hdl += f'            {indent}        controller_rddata <= mem{element}(to_integer(unsigned(controller_mem_index)))({w*self._controller_width + self._controller_width-1} downto {w*self._controller_width});\n'
+                hdl += f'            {indent}    when others => controller_rddata <= (others => \'0\');\n'
+                hdl += f'            {indent}end case;\n'
+                    
+        if self._elements != 1:
+            hdl += f'            end if;\n'
+
+        hdl += f'        end if;\n'
+        hdl += f'    end process controller_rd_proc;\n\n'
+            
+        for element in range(self._elements):
+            hdl += f'    controller_mem{element}_wr_proc: process(controller_clk) begin\n'
+            hdl += f'        if rising_edge(controller_clk) then\n'            
+            if self._elements != 1:
+                hdl += f'            if(controller_element_sel = "{f"{element:b}".zfill(log2_elements)}") then\n'
+                indent = "    "
+            else:
+                indent = ""
+
+            hdl += f'            {indent}byte_loop: for b in 0 to {(self._controller_width // 8) - 1} loop\n'
+            hdl += f'            {indent}    if(controller_we_d(b) = \'1\') then\n'
+            
+            if self._controller_width == mem_width:
+                hdl += f'            {indent}        mem{element}(to_integer(unsigned(controller_mem_index)))((b*8)+7 downto b*8) <= controller_wrdata_d((b*8)+7 downto b*8);\n'
+            else:
+                hdl += f'            {indent}        subindex_loop: for s in 0 to {(mem_width // self._controller_width) - 1} loop\n'
+                hdl += f'            {indent}            if(to_integer(unsigned(controller_mem_subindex)) = s) then\n'
+                hdl += f'            {indent}                mem{element}(to_integer(unsigned(controller_mem_index)))((s*{self._controller_width})+(b*8)+7 downto (s*{self._controller_width})+(b*8)) <= controller_wrdata_d((b*8)+7 downto b*8);\n'
+                hdl += f'            {indent}            end if;\n'
+                hdl += f'            {indent}        end loop subindex_loop;\n'
+            hdl += f'            {indent}    end if;\n'
+            hdl += f'            {indent}end loop byte_loop;\n'
+                    
+            if self._elements != 1:
+                hdl += f'            end if;\n'
+
+            hdl += f'        end if;\n'
+            hdl += f'    end process controller_mem{element}_wr_proc;\n\n'
+            
+        for element in range(self._elements):
+            hdl += f'    user_mem{element}_proc: process(controller_clk) begin\n'
+            hdl += f'        if rising_edge(controller_clk) then\n'
+            if self._read_data_pipeline != 0:
+                hdl += f'            mem{element}_dout <= mem{element}_dout_{"p"*self._read_data_pipeline};\n'
+                
+            for i in range(1, self._read_data_pipeline):
+                hdl += f'            mem{element}_dout_{"p"*(i+1)} <= mem{element}_dout_{"p"*i};\n'
+            
+            # Reading logic
+            if self._use_rst:
+                hdl += f'            if(mem{element}_rst = \'1\') then\n'
+                if self._read_data_pipeline == 0:
+                    hdl += f'                mem{element}_dout <= (others => \'0\');\n'
+                else:
+                    hdl += f'                mem{element}_dout_p <= (others => \'0\');\n'
+                hdl += f'            else\n'
+                indent = "    "
+            else:
+                indent = ""
+                
+            if mem_width == self._width:
+                hdl += f'            {indent}mem{element}_dout{"" if self._read_data_pipeline == 0 else "_p"} <= mem{element}(to_integer(unsigned(mem{element}_addr)));\n'
+            else:
+                mem_index = f"to_integer(unsigned(mem{element}_addr({log2_user_word_depth-1} downto {log2_user_words_per_mem_word})))"
+                hdl += f'            {indent}case mem{element}_addr({log2_user_words_per_mem_word-1} downto 0) is\n'
+                for w in range(mem_width // self._width):
+                    hdl += f'            {indent}    when "{f"{w:b}".zfill(log2_user_words_per_mem_word)}" => \n'
+                    hdl += f'            {indent}        mem{element}_dout{"" if self._read_data_pipeline == 0 else "_p"} <= mem{element}({mem_index})({w*self._width + self._width-1} downto {w*self._width});\n'
+                hdl += f'            {indent}    when others => mem{element}_dout{"" if self._read_data_pipeline == 0 else "_p"} <= (others => \'0\');\n'
+                hdl += f'            {indent}end case;\n'
+                
+            if self._use_rst:
+                hdl += f'        {indent}end if;\n'
+                
+            hdl += "\n"
+            
+            # Writing logic
+            if not self._read_only:
+                hdl += f'            if(mem{element}_wr = \'1\') then\n'
+                
+                if self._width == mem_width:
+                    hdl += f'                mem{element}(to_integer(unsigned(mem{element}_addr))) <= mem{element}_din;\n'
+                else:
+                    mem_index = f"to_integer(unsigned(mem{element}_addr({log2_user_word_depth-1} downto {log2_user_words_per_mem_word})))"
+                    hdl += f'                subindex_loop: for s in 0 to {(mem_width // self._width) - 1} loop\n'
+                    hdl += f'                    if(to_integer(unsigned(mem{element}_addr({log2_user_words_per_mem_word-1} downto 0))) = s) then\n'
+                    hdl += f'                        mem{element}({mem_index})((s*{self._width})+{self._width-1} downto s*{self._width}) <= mem{element}_din;\n'
+                    hdl += f'                    end if;\n'
+                    hdl += f'                end loop subindex_loop;\n'
+                
+                hdl += f'            end if;\n'
+                
+            hdl += f'        end if;\n'
+            hdl += f'    end process user_mem{element}_proc;\n\n'
+            
         hdl += f'end rtl;\n\n'
         
         return hdl
@@ -1027,13 +1250,13 @@ class AXIBRAMController(HDLModule):
                 f' -module_name'
                 f' {ip_name}\n')
         s += ('set_property -dict [list'
-                f' CONFIG.DATA_WIDTH {{{self._width}}}'
-                f' CONFIG.MEM_DEPTH {{{self._depth}}}'
+                f' CONFIG.DATA_WIDTH {{{self._controller_width}}}'
+                f' CONFIG.MEM_DEPTH {{{self._elements*self._size_bits // self._controller_width}}}'
                 f' CONFIG.SINGLE_PORT_BRAM {{1}}'
                 f' CONFIG.ECC_TYPE {{0}}'
                 f' CONFIG.Component_Name {{{ip_name}}}'
-                f' CONFIG.READ_LATENCY {{{self._read_latency}}}'
-                f' CONFIG.RD_CMD_OPTIMIZATION {{{int(self._read_cmd_optimization)}}}]'
+                f' CONFIG.READ_LATENCY {{1}}'
+                f' CONFIG.RD_CMD_OPTIMIZATION {{0}}]'
                 f' [get_ips {ip_name}]\n')
         xci_path = os.path.join(project_dir, f"acadia.srcs/sources_1/ip/{ip_name}/{ip_name}.xci") 
         simlib_path = os.path.join(project_dir, "acadia.cache/compile_simlib")

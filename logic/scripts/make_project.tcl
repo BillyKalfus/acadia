@@ -163,31 +163,18 @@ set obj [get_filesets sources_1]
 
 # Import local files from the original project
 set files [list \
- [file normalize "${origin_dir}/acadia_decoder.vhd" ]\
  [file normalize "${origin_dir}/acadia_sequencer.vhd" ]\
  [file normalize "${origin_dir}/acadia_rfdc_rts_regs.vhd" ]\
  [file normalize "${origin_dir}/acadia_zdma_controller.vhd" ]\
- [file normalize "${origin_dir}/acadia_axi_bram_ctrl_addr_slice.vhd" ]\
  [file normalize "${origin_dir}/acadia_fast_complex_macc.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma_fifo.vhd" ]\
+ [file normalize "${origin_dir}/acadia_adc_fifo.vhd" ]\
  [file normalize "${origin_dir}/acadia_sysref_capture.vhd" ]\
- [file normalize "${origin_dir}/acadia_bram_write_pipeline.vhd" ]\
 ]
 set imported_files [import_files -fileset sources_1 $files]
 
 # Set 'sources_1' fileset file properties for local files
-set file "acadia_decoder.vhd"
-set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
-set_property -name "file_type" -value "VHDL" -objects $file_obj
-set_property -name "is_enabled" -value "1" -objects $file_obj
-set_property -name "is_global_include" -value "0" -objects $file_obj
-set_property -name "library" -value "xil_defaultlib" -objects $file_obj
-set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
-set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
-set_property -name "used_in_simulation" -value "1" -objects $file_obj
-set_property -name "used_in_synthesis" -value "1" -objects $file_obj
-
 set file "acadia_sequencer.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
@@ -211,17 +198,6 @@ set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
 set file "acadia_zdma_controller.vhd"
-set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
-set_property -name "file_type" -value "VHDL" -objects $file_obj
-set_property -name "is_enabled" -value "1" -objects $file_obj
-set_property -name "is_global_include" -value "0" -objects $file_obj
-set_property -name "library" -value "xil_defaultlib" -objects $file_obj
-set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
-set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
-set_property -name "used_in_simulation" -value "1" -objects $file_obj
-set_property -name "used_in_synthesis" -value "1" -objects $file_obj
-
-set file "acadia_axi_bram_ctrl_addr_slice.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -265,7 +241,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "acadia_sysref_capture.vhd"
+set file "acadia_adc_fifo.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -276,7 +252,7 @@ set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
 set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
-set file "acadia_bram_write_pipeline.vhd"
+set file "acadia_sysref_capture.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -606,10 +582,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 dac2_clk
 
-  create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 sequencer_bus
-
-  create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 sequencer_instruction_mem
-
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:display_aurora:GT_Serial_Transceiver_Pins_RX_rtl:1.0 sfp0_rx
 
   create_bd_intf_pin -mode Master -vlnv xilinx.com:display_aurora:GT_Serial_Transceiver_Pins_TX_rtl:1.0 sfp0_tx
@@ -698,28 +670,19 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_bd_pin -dir O -from 15 -to 0 DACIO
   create_bd_pin -dir I DDR4_C0_ui_clk
   create_bd_pin -dir I DDR4_C1_ui_clk
-  create_bd_pin -dir O -from 87 -to 0 PS_GPIO_IN
+  create_bd_pin -dir O -from 90 -to 0 PS_GPIO_IN
   create_bd_pin -dir I -from 90 -to 0 PS_GPIO_OUT
   create_bd_pin -dir O -from 0 -to 0 PS_IRQ0
   create_bd_pin -dir O -from 0 -to 0 PS_IRQ1
-  create_bd_pin -dir O PS_M_AXI0_aclk
-  create_bd_pin -dir O PS_M_AXI1_aclk
-  create_bd_pin -dir O PS_S_AXI_HP0_aclk
-  create_bd_pin -dir O PS_S_AXI_HP1_aclk
-  create_bd_pin -dir O PS_S_AXI_HPC0_aclk
-  create_bd_pin -dir O PS_S_AXI_HPC1_aclk
+  create_bd_pin -dir I PS_AXI_clk
   create_bd_pin -dir I PS_clk_250
   create_bd_pin -dir I PS_resetn
-  create_bd_pin -dir O clk_locked
+  create_bd_pin -dir O -from 7 -to 0 ps_gdma_clk
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_cack
-  create_bd_pin -dir O -from 31 -to 0 ps_gdma_cvld
+  create_bd_pin -dir O -from 7 -to 0 ps_gdma_cvld
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_irq
-  create_bd_pin -dir O -from 31 -to 0 ps_gdma_tack
+  create_bd_pin -dir O -from 7 -to 0 ps_gdma_tack
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_tvld
-  create_bd_pin -dir O seq_clk
-  create_bd_pin -dir I seq_interconnect_aresetn
-  create_bd_pin -dir I seq_peripheral_aresetn
-  create_bd_pin -dir O -from 31 -to 0 sequencer_flags
   create_bd_pin -dir O CLK104_SYNC_IN
 
   # Create interface connections
@@ -931,13 +894,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.C_GPIO_WIDTH {1} \
    CONFIG.C_IS_DUAL {1} \
  ] $axi_gpio_ddr
- 
-  # Create instance: axi_gpio_seq, and set properties
-  set axi_gpio_seq [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_seq ]
-  set_property -dict [ list \
-   CONFIG.C_ALL_OUTPUTS {1} \
-   CONFIG.C_GPIO_WIDTH {2} \
- ] $axi_gpio_seq
 
   # Create instance: axi_gpio_spi, and set properties
   set axi_gpio_spi [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_spi ]
@@ -1323,6 +1279,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__CRL_APB__PL1_REF_CTRL__DIVISOR0 {30} \
    CONFIG.PSU__CRL_APB__PL1_REF_CTRL__DIVISOR1 {1} \
    CONFIG.PSU__CRL_APB__PL1_REF_CTRL__FREQMHZ {50} \
+   CONFIG.PSU__CRL_APB__PL2_REF_CTRL__FREQMHZ {300} \
    CONFIG.PSU__CRL_APB__PL1_REF_CTRL__SRCSEL {IOPLL} \
    CONFIG.PSU__CRL_APB__PL2_REF_CTRL__DIVISOR0 {4} \
    CONFIG.PSU__CRL_APB__PL2_REF_CTRL__DIVISOR1 {1} \
@@ -1461,6 +1418,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__FPD_SLCR__WDT_CLK_SEL__SELECT {APB} \
    CONFIG.PSU__FPGA_PL0_ENABLE {1} \
    CONFIG.PSU__FPGA_PL1_ENABLE {1} \
+   CONFIG.PSU__FPGA_PL2_ENABLE {1} \
    CONFIG.PSU__GEM3_COHERENCY {0} \
    CONFIG.PSU__GEM3_ROUTE_THROUGH_FPD {0} \
    CONFIG.PSU__GEM__TSU__ENABLE {0} \
@@ -1613,48 +1571,16 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__USE__S_AXI_GP3 {1} \
    CONFIG.SUBPRESET1 {Custom} \
  ] $ps
- 
-  # Create instance: seq_reset, and set properties
-  set seq_reset [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 seq_reset ]
-
-  # Create instance: acadia_sequencer, and set properties
-  set block_name acadia_sequencer
-  set block_cell_name sequencer
-  if { [catch {set sequencer [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
-     catch {common::send_gid_msg -ssname BD::TCL -id 2095 -severity "ERROR" "Unable to add referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
-     return 1
-   } elseif { $sequencer eq "" } {
-     catch {common::send_gid_msg -ssname BD::TCL -id 2096 -severity "ERROR" "Unable to referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
-     return 1
-   }
    
   # Create instance: smartconnect_lpd, and set properties
   set smartconnect_lpd [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_lpd ]
   set_property -dict [ list \
-   CONFIG.NUM_MI {3} \
+   CONFIG.NUM_MI {2} \
    CONFIG.NUM_SI {1} \
  ] $smartconnect_lpd
-  
-  # Create instance: xlconcat_ps_gdma_clk, and set properties
-  set xlconcat_ps_gdma_clk [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_ps_gdma_clk ]
-  set_property -dict [ list \
-   CONFIG.NUM_PORTS {8} \
- ] $xlconcat_ps_gdma_clk
  
   # Create instance: xlconstant_lpd_sys_reset_dcm_locked, and set properties
   set xlconstant_lpd_sys_reset_dcm_locked [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_lpd_sys_reset_dcm_locked ]
-
-  # Create instance: xlslice_seq_rst, and set properties
-  set xlslice_seq_rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_seq_rst ]
-  set_property -dict [ list \
-   CONFIG.DIN_WIDTH {2} \
- ] $xlslice_seq_rst
-
-  # Create instance: xlslice_seq_run, and set properties
-  set xlslice_seq_run [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_seq_run ]
-  set_property -dict [ list \
-   CONFIG.DIN_WIDTH {2} \
- ] $xlslice_seq_run
 
   # Create instance: xpm_cdc_DDR4_C0_MIG, and set properties
   set xpm_cdc_DDR4_C0_MIG [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C0_MIG ]
@@ -1667,18 +1593,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   set_property -dict [ list \
    CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
  ] $xpm_cdc_DDR4_C1_MIG
-
-  # Create instance: xpm_cdc_seq_rst, and set properties
-  set xpm_cdc_seq_rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_seq_rst ]
-  set_property -dict [ list \
-   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
- ] $xpm_cdc_seq_rst
-
-  # Create instance: xpm_cdc_seq_run, and set properties
-  set xpm_cdc_seq_run [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_seq_run ]
-  set_property -dict [ list \
-   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
- ] $xpm_cdc_seq_run
 
   # Create interface connections
   connect_bd_intf_net -intf_net CLK104_PL_CLK_1 [get_bd_intf_ports CLK104_PL_CLK] [get_bd_intf_pins hedgehog/CLK104_PL_CLK]
@@ -1734,15 +1648,12 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_intf_net -intf_net ps_M_AXI_HPM0_FPD [get_bd_intf_pins hedgehog/PS_M_AXI0] [get_bd_intf_pins ps/M_AXI_HPM0_FPD]
   connect_bd_intf_net -intf_net ps_M_AXI_HPM0_LPD [get_bd_intf_pins ps/M_AXI_HPM0_LPD] [get_bd_intf_pins smartconnect_lpd/S00_AXI]
   connect_bd_intf_net -intf_net ps_M_AXI_HPM1_FPD [get_bd_intf_pins hedgehog/PS_M_AXI1] [get_bd_intf_pins ps/M_AXI_HPM1_FPD]
-  connect_bd_intf_net -intf_net sequencer_instruction_mem [get_bd_intf_pins hedgehog/sequencer_instruction_mem] [get_bd_intf_pins sequencer/instruction_mem]
-  connect_bd_intf_net -intf_net sequencer_mem_bus [get_bd_intf_pins hedgehog/sequencer_bus] [get_bd_intf_pins sequencer/mem_bus]
   connect_bd_intf_net -intf_net sfp0_rx_1 [get_bd_intf_ports sfp0_rx] [get_bd_intf_pins hedgehog/sfp0_rx]
   connect_bd_intf_net -intf_net sfp1_rx_1 [get_bd_intf_ports sfp1_rx] [get_bd_intf_pins hedgehog/sfp1_rx]
   connect_bd_intf_net -intf_net sfp2_rx_1 [get_bd_intf_ports sfp2_rx] [get_bd_intf_pins hedgehog/sfp2_rx]
   connect_bd_intf_net -intf_net sfp3_rx_1 [get_bd_intf_ports sfp3_rx] [get_bd_intf_pins hedgehog/sfp3_rx]
   connect_bd_intf_net -intf_net smartconnect_lpd_M00_AXI [get_bd_intf_pins axi_gpio_spi/S_AXI] [get_bd_intf_pins smartconnect_lpd/M00_AXI]
-  connect_bd_intf_net -intf_net smartconnect_lpd_M01_AXI [get_bd_intf_pins axi_gpio_seq/S_AXI] [get_bd_intf_pins smartconnect_lpd/M01_AXI]
-  connect_bd_intf_net -intf_net smartconnect_lpd_M02_AXI [get_bd_intf_pins axi_gpio_ddr/S_AXI] [get_bd_intf_pins smartconnect_lpd/M02_AXI]
+  connect_bd_intf_net -intf_net smartconnect_lpd_M02_AXI [get_bd_intf_pins axi_gpio_ddr/S_AXI] [get_bd_intf_pins smartconnect_lpd/M01_AXI]
   connect_bd_intf_net -intf_net sysref_in_1 [get_bd_intf_ports sysref_in] [get_bd_intf_pins hedgehog/sysref_in]
   connect_bd_intf_net -intf_net vin00_1 [get_bd_intf_ports vin00] [get_bd_intf_pins hedgehog/vin00]
   connect_bd_intf_net -intf_net vin01_1 [get_bd_intf_ports vin01] [get_bd_intf_pins hedgehog/vin01]
@@ -1769,46 +1680,36 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net DDR4_C1_MIG_c0_init_calib_complete [get_bd_pins DDR4_C1_MIG/c0_init_calib_complete] [get_bd_pins axi_gpio_ddr/gpio2_io_i]
   connect_bd_net -net axi_gpio_ddr_gpio2_io_o [get_bd_pins DDR4_C1_MIG/sys_rst] [get_bd_pins axi_gpio_ddr/gpio2_io_o]
   connect_bd_net -net axi_gpio_ddr_gpio_io_o [get_bd_pins DDR4_C0_MIG/sys_rst] [get_bd_pins axi_gpio_ddr/gpio_io_o]
-  connect_bd_net -net axi_gpio_seq_gpio_io_o [get_bd_pins axi_gpio_seq/gpio_io_o] [get_bd_pins xlslice_seq_rst/Din] [get_bd_pins xlslice_seq_run/Din]
   connect_bd_net -net hedgehog_DACIO [get_bd_ports DACIO] [get_bd_pins hedgehog/DACIO]
   connect_bd_net -net hedgehog_PS_GPIO_IN [get_bd_pins hedgehog/PS_GPIO_IN] [get_bd_pins ps/emio_gpio_i]
   connect_bd_net -net hedgehog_PS_IRQ0 [get_bd_pins hedgehog/PS_IRQ0] [get_bd_pins ps/pl_ps_irq0]
   connect_bd_net -net hedgehog_PS_IRQ1 [get_bd_pins hedgehog/PS_IRQ1] [get_bd_pins ps/pl_ps_irq1]
-  connect_bd_net -net hedgehog_PS_M_AXI0_aclk [get_bd_pins hedgehog/PS_M_AXI0_aclk] [get_bd_pins ps/maxihpm0_fpd_aclk]
-  connect_bd_net -net hedgehog_PS_M_AXI1_aclk [get_bd_pins hedgehog/PS_M_AXI1_aclk] [get_bd_pins ps/maxihpm1_fpd_aclk]
-  connect_bd_net -net hedgehog_PS_S_AXI0_aclk [get_bd_pins hedgehog/PS_S_AXI_HPC0_aclk] [get_bd_pins ps/saxihpc0_fpd_aclk]
-  connect_bd_net -net hedgehog_PS_S_AXI1_aclk [get_bd_pins hedgehog/PS_S_AXI_HPC1_aclk] [get_bd_pins ps/saxihpc1_fpd_aclk]
-  connect_bd_net -net hedgehog_PS_S_AXI_HP0_aclk [get_bd_pins hedgehog/PS_S_AXI_HP0_aclk] [get_bd_pins ps/saxihp0_fpd_aclk]
-  connect_bd_net -net hedgehog_PS_S_AXI_HP1_aclk [get_bd_pins hedgehog/PS_S_AXI_HP1_aclk] [get_bd_pins ps/saxihp1_fpd_aclk]
-  connect_bd_net -net hedgehog_clk_locked [get_bd_pins hedgehog/clk_locked] [get_bd_pins seq_reset/dcm_locked]
+  connect_bd_net [get_bd_pins hedgehog/PS_AXI_clk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/maxihpm0_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/maxihpm1_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/saxihpc0_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/saxihp0_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/saxihpc1_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/saxihp1_fpd_aclk] [get_bd_pins ps/pl_clk2]
   connect_bd_net -net hedgehog_ps_gdma_cvld [get_bd_pins hedgehog/ps_gdma_cvld] [get_bd_pins ps/perif_gdma_cvld]
   connect_bd_net -net hedgehog_ps_gdma_tack [get_bd_pins hedgehog/ps_gdma_tack] [get_bd_pins ps/perif_gdma_tack]
-  connect_bd_net -net hedgehog_seq_clk [get_bd_pins hedgehog/seq_clk] [get_bd_pins seq_reset/slowest_sync_clk] [get_bd_pins sequencer/clk] [get_bd_pins xlconcat_ps_gdma_clk/In0] [get_bd_pins xlconcat_ps_gdma_clk/In1] [get_bd_pins xlconcat_ps_gdma_clk/In2] [get_bd_pins xlconcat_ps_gdma_clk/In3] [get_bd_pins xlconcat_ps_gdma_clk/In4] [get_bd_pins xlconcat_ps_gdma_clk/In5] [get_bd_pins xlconcat_ps_gdma_clk/In6] [get_bd_pins xlconcat_ps_gdma_clk/In7] [get_bd_pins xpm_cdc_seq_rst/dest_clk] [get_bd_pins xpm_cdc_seq_run/dest_clk]
-  connect_bd_net -net hedgehog_sequencer_flags [get_bd_pins hedgehog/sequencer_flags] [get_bd_pins sequencer/hedgehog_flags]
-  connect_bd_net -net interconnect_aresetn_1 [get_bd_pins hedgehog/seq_interconnect_aresetn] [get_bd_pins seq_reset/interconnect_aresetn]
   connect_bd_net -net proc_sys_reset_0_interconnect_aresetn [get_bd_pins lpd_sys_reset/interconnect_aresetn] [get_bd_pins smartconnect_lpd/aresetn]
-  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn [get_bd_pins axi_gpio_ddr/s_axi_aresetn] [get_bd_pins axi_gpio_spi/s_axi_aresetn] [get_bd_pins lpd_sys_reset/peripheral_aresetn] [get_bd_pins axi_gpio_seq/s_axi_aresetn]
+  connect_bd_net -net proc_sys_reset_0_peripheral_aresetn [get_bd_pins axi_gpio_ddr/s_axi_aresetn] [get_bd_pins axi_gpio_spi/s_axi_aresetn] [get_bd_pins lpd_sys_reset/peripheral_aresetn]
   connect_bd_net -net ps_emio_gpio_o [get_bd_pins hedgehog/PS_GPIO_OUT] [get_bd_pins ps/emio_gpio_o]
   connect_bd_net -net ps_gdma_cack_1 [get_bd_pins hedgehog/ps_gdma_cack] [get_bd_pins ps/gdma_perif_cack]
   connect_bd_net -net ps_gdma_irq_1 [get_bd_pins hedgehog/ps_gdma_irq] [get_bd_pins ps/ps_pl_irq_gdma_chan]
   connect_bd_net -net ps_gdma_tvld_1 [get_bd_pins hedgehog/ps_gdma_tvld] [get_bd_pins ps/gdma_perif_tvld]
+  connect_bd_net [get_bd_pins hedgehog/ps_gdma_clk] [get_bd_pins ps/perif_gdma_clk]
   connect_bd_net -net ps_pl_clk0 [get_bd_pins hedgehog/PS_clk_250] [get_bd_pins ps/pl_clk0]
-  connect_bd_net -net ps_pl_clk1 [get_bd_pins axi_gpio_ddr/s_axi_aclk] [get_bd_pins axi_gpio_seq/s_axi_aclk] [get_bd_pins axi_gpio_spi/s_axi_aclk] [get_bd_pins lpd_sys_reset/slowest_sync_clk] [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins ps/pl_clk1] [get_bd_pins smartconnect_lpd/aclk]
-  connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins lpd_sys_reset/ext_reset_in] [get_bd_pins ps/pl_resetn0] [get_bd_pins seq_reset/ext_reset_in] [get_bd_pins xpm_cdc_DDR4_C0_MIG/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_MIG/src_rst]
-  connect_bd_net -net seq_peripheral_aresetn_1 [get_bd_pins hedgehog/seq_peripheral_aresetn] [get_bd_pins seq_reset/peripheral_aresetn]
-  connect_bd_net -net xlconcat_ps_gdma_clk_dout [get_bd_pins ps/perif_gdma_clk] [get_bd_pins xlconcat_ps_gdma_clk/dout]
+  connect_bd_net -net ps_pl_clk1 [get_bd_pins axi_gpio_ddr/s_axi_aclk] [get_bd_pins axi_gpio_spi/s_axi_aclk] [get_bd_pins lpd_sys_reset/slowest_sync_clk] [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins ps/pl_clk1] [get_bd_pins smartconnect_lpd/aclk]
+  connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins lpd_sys_reset/ext_reset_in] [get_bd_pins ps/pl_resetn0] [get_bd_pins xpm_cdc_DDR4_C0_MIG/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_MIG/src_rst]
   connect_bd_net -net xlconstant_0_dout [get_bd_pins lpd_sys_reset/dcm_locked] [get_bd_pins xlconstant_lpd_sys_reset_dcm_locked/dout]
-  connect_bd_net -net xlslice_seq_rst_Dout [get_bd_pins xlslice_seq_rst/Dout] [get_bd_pins xpm_cdc_seq_rst/src_rst]
-  connect_bd_net -net xlslice_seq_run_Dout [get_bd_pins xlslice_seq_run/Dout] [get_bd_pins xpm_cdc_seq_run/src_rst]
   connect_bd_net -net xpm_cdc_DDR4_C0_MIG_dest_rst_out [get_bd_pins DDR4_C0_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C0_MIG/dest_rst_out]
   connect_bd_net -net xpm_cdc_DDR4_C1_MIG_dest_rst_out [get_bd_pins DDR4_C1_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C1_MIG/dest_rst_out]
-  connect_bd_net -net xpm_cdc_seq_rst_dest_rst_out [get_bd_pins sequencer/nrst] [get_bd_pins xpm_cdc_seq_rst/dest_rst_out]
-  connect_bd_net -net xpm_cdc_seq_run_dest_rst_out [get_bd_pins sequencer/run] [get_bd_pins xpm_cdc_seq_run/dest_rst_out]
   connect_bd_net -net hedgehog_CLK104_SYNC_IN [get_bd_ports CLK104_SYNC_IN] [get_bd_pins hedgehog/CLK104_SYNC_IN]
 
   # Create address segments
   assign_bd_address -offset 0x80020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_ddr/S_AXI/Reg] -force
-  assign_bd_address -offset 0x80010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_seq/S_AXI/Reg] -force
   assign_bd_address -offset 0x80000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces ps/Data] [get_bd_addr_segs axi_gpio_spi/S_AXI/Reg] -force
   
   # Create the HEDGEHOG logic before we make the wrapper
@@ -1886,46 +1787,23 @@ preplace port CLK_8A34001_Q7_OUT -pg 1 -lvl 0 -x 0 -y 80 -defaultsOSRD
 preplace port CLK_8A34001_Q8_OUT -pg 1 -lvl 0 -x 0 -y 100 -defaultsOSRD
 preplace port CLK_8A34001_Q11_OUT -pg 1 -lvl 0 -x 0 -y 590 -defaultsOSRD
 preplace port FMCP_CLK1_M2C -pg 1 -lvl 0 -x 0 -y 390 -defaultsOSRD
-preplace port debug_clk -pg 1 -lvl 0 -x 0 -y 170 -defaultsOSRD
-preplace port debug_seq_run -pg 1 -lvl 0 -x 0 -y 140 -defaultsOSRD
-preplace port debug_seq_nrst -pg 1 -lvl 0 -x 0 -y 120 -defaultsOSRD
 preplace portBus DACIO -pg 1 -lvl 8 -x 4100 -y 1160 -defaultsOSRD
 preplace portBus ADCIO -pg 1 -lvl 0 -x 0 -y 810 -defaultsOSRD
 preplace inst ps -pg 1 -lvl 2 -x 800 -y 1000 -defaultsOSRD
-preplace inst seq_run_slice -pg 1 -lvl 3 -x 1400 -y 1050 -defaultsOSRD
-preplace inst seq_rst_slice -pg 1 -lvl 3 -x 1400 -y 1180 -defaultsOSRD
-preplace inst xpm_cdc_seq_rst -pg 1 -lvl 4 -x 1860 -y 580 -defaultsOSRD
-preplace inst xpm_cdc_seq_run -pg 1 -lvl 4 -x 1860 -y 460 -defaultsOSRD
-preplace inst seq_reset -pg 1 -lvl 3 -x 1400 -y 880 -defaultsOSRD
 preplace inst DDR4_C0_MIG -pg 1 -lvl 7 -x 3825 -y 850 -defaultsOSRD
 preplace inst DDR4_C1_MIG -pg 1 -lvl 7 -x 3825 -y 1050 -defaultsOSRD
 preplace inst hedgehog -pg 1 -lvl 6 -x 3080 -y 670 -defaultsOSRD
 preplace inst xpm_cdc_DDR4_C0_MIG -pg 1 -lvl 6 -x 3080 -y 1370 -defaultsOSRD
 preplace inst xpm_cdc_DDR4_C1_MIG -pg 1 -lvl 6 -x 3080 -y 1490 -defaultsOSRD
-preplace inst xlconcat_ps_gdma_clk -pg 1 -lvl 1 -x 230 -y 1070 -defaultsOSRD
-preplace inst sequencer -pg 1 -lvl 5 -x 2260 -y 400 -defaultsOSRD
 preplace netloc ps_emio_gpio_o 1 2 4 1200 980 1690 970 N 970 N
-preplace netloc hedgehog_seq_clk 1 0 7 60 1200 350 1210 1170 640 1620 360 2040 90 2470 38 3380
-preplace netloc seq_peripheral_aresetn_1 1 3 3 N 920 N 920 2470
-preplace netloc xpm_cdc_seq_run_dest_rst_out 1 4 1 1980 390n
-preplace netloc xpm_cdc_seq_rst_dest_rst_out 1 4 1 2000 410n
 preplace netloc ps_pl_resetn0 1 2 4 1190 1120 N 1120 N 1120 2660
-preplace netloc hedgehog_sequencer_flags 1 4 3 2040 1260 NJ 1260 3360J
-preplace netloc hedgehog_PS_M_AXI0_aclk 1 1 6 410 1260 NJ 1260 1690J 1250 NJ 1250 NJ 1250 3330J
-preplace netloc hedgehog_PS_S_AXI1_aclk 1 1 6 360 1640 NJ 1640 NJ 1640 NJ 1640 NJ 1640 3400J
-preplace netloc hedgehog_PS_S_AXI0_aclk 1 1 6 390 1300 NJ 1300 NJ 1300 NJ 1300 NJ 1300 3350J
-preplace netloc hedgehog_PS_M_AXI_LPD_aclk 1 1 6 370 1560 NJ 1560 NJ 1560 NJ 1560 NJ 1560 3380J
-preplace netloc hedgehog_PS_M_AXI1_aclk 1 1 6 420 1270 NJ 1270 NJ 1270 NJ 1270 NJ 1270 3340J
 preplace netloc ps_pl_clk0 1 2 4 1130J 1310 NJ 1310 NJ 1310 2650J
 preplace netloc DDR4_C0_MIG_c0_ddr4_ui_clk 1 5 3 2670 1590 NJ 1590 4060
 preplace netloc DDR4_C1_MIG_c0_ddr4_ui_clk 1 5 3 2680 1650 NJ 1650 4020
-preplace netloc interconnect_aresetn_1 1 3 3 NJ 900 NJ 900 2480J
 preplace netloc hedgehog_PS_GPIO_IN 1 2 5 1140J 1630 NJ 1630 NJ 1630 NJ 1630 3440J
 preplace netloc hedgehog_PS_IRQ1 1 1 6 470 1570 NJ 1570 NJ 1570 NJ 1570 NJ 1570 3410J
 preplace netloc hedgehog_PS_IRQ0 1 1 6 440 1600 NJ 1600 NJ 1600 NJ 1600 NJ 1600 3420J
 preplace netloc hedgehog_clk_locked 1 2 5 1210 1610 NJ 1610 NJ 1610 NJ 1610 3390
-preplace netloc hedgehog_PS_S_AXI_HP1_aclk 1 1 6 460 1290 NJ 1290 NJ 1290 NJ 1290 NJ 1290 3300
-preplace netloc hedgehog_PS_S_AXI_HP0_aclk 1 1 6 450 1280 NJ 1280 NJ 1280 NJ 1280 NJ 1280 3310
 preplace netloc debug_clk_1 1 0 6 30J 180 430 160 NJ 160 NJ 160 NJ 160 2600
 preplace netloc xpm_cdc_DDR4_C0_MIG_dest_rst_out 1 6 1 3470 860n
 preplace netloc xpm_cdc_DDR4_C1_MIG_dest_rst_out 1 6 1 3490 1060n
@@ -1934,9 +1812,6 @@ preplace netloc hedgehog_ps_gdma_tack 1 1 6 430 1580 NJ 1580 NJ 1580 NJ 1580 NJ 
 preplace netloc ps_gdma_tvld_1 1 2 4 1150 1250 1680J 1150 NJ 1150 NJ
 preplace netloc ps_gdma_cack_1 1 2 4 1180 990 NJ 990 NJ 990 2460J
 preplace netloc ps_gdma_irq_1 1 2 4 1160 1110 NJ 1110 NJ 1110 2450J
-preplace netloc xlconcat_ps_gdma_clk_dout 1 1 1 N 1070
-preplace netloc seq_run_slice_Dout 1 3 1 1630 470n
-preplace netloc seq_rst_slice_Dout 1 3 1 1650 590n
 preplace netloc hedgehog_DACIO 1 6 2 3460J 1160 NJ
 preplace netloc ADCIO_1 1 0 6 50J 720 NJ 720 NJ 720 NJ 720 NJ 720 2500J
 preplace netloc CLK_8A34001_Q1_OUT_1 1 0 6 NJ 20 NJ 20 NJ 20 NJ 20 NJ 20 2660
@@ -1993,9 +1868,7 @@ preplace netloc hedgehog_DDR4_C1_S_AXI 1 6 1 3460J 260n
 preplace netloc hedgehog_vout22 1 6 2 NJ 480 N
 preplace netloc hedgehog_vout00 1 6 2 N 280 NJ
 preplace netloc vin13_1 1 0 6 NJ 330 420 310 NJ 310 NJ 310 NJ 310 2470
-preplace netloc sequencer_0_mem_bus 1 5 1 2540J 190n
 preplace netloc hedgehog_vout03 1 6 2 N 340 NJ
-preplace netloc sequencer_0_instruction_mem 1 5 1 2550J 210n
 preplace netloc vin12_1 1 0 6 70J 280 N 280 NJ 280 NJ 280 NJ 280 2650
 preplace netloc vin33_1 1 0 6 NJ 530 400 630 NJ 630 1670J 680 2030J 640 2630
 preplace netloc hedgehog_PS_S_AXI_HPC0 1 1 6 440 120 NJ 120 NJ 120 NJ 120 2480J 48 3330J
