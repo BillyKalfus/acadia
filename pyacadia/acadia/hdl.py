@@ -734,29 +734,38 @@ class AXIMemoryArray(HDLModule):
     Creates a wrapper for an AXI BRAM controller connected to a memory.
     """
     
-    def __init__(self, module_name, size_bits, width, axi_frequency, controller_width=None, controller_pipeline=1, elements=1, primitive="auto", axi4_lite=False, read_only=False, use_rst=True, read_data_pipeline=0, synth_jobs=16):
+    def __init__(self, module_name, size_bits, width, axi_frequency, elements=1, primitive="auto", controller_width=None, controller_port_input_pipeline=1, controller_port_output_pipeline=1, user_port_input_pipeline=1, user_port_output_pipeline=1, axi4_lite=False, read_only=False, use_rst=True, synth_jobs=16):
         """
         :param module_name: The name of the module
         :type module_name: str
-        :param width: The width of the exposed data port NOT connected to the
-        controller.
+        :param width: The width of the user data port.
         :type width: int
         :param size_bits: The size of a single memory element in bits
         :type depth: int
         :param axi_frequency: Frequency of the AXI bus in Hz, needed for the
         `FREQ_HZ` parameter of the AXI interface.
         :type axi_frequency: int
-        :param controller_width: The width of the memory port connected to 
-        the controller (and correspondingly, the width of the AXI interface)
-        :type controller_width: int, optional
-        :param controller_pipeline: The number of pipeline stages to add to 
-        the interface between the AXI BRAM controller and the memories.
-        :type controller_pipeline: int, optional
         :param elements: Number of memory elements to create
         :type elements: int, optional
         :param primitive: The memory primitive to use. One of "auto", "block", 
         "distributed", "mixed", "ultra"
         :type primitive: str, optional
+        :param controller_width: Width of the port connected to the controller
+        :type controller_width: int
+        :param controller_port_input_pipeline: Number of pipeline stages to
+        add to the memory's input signals (din, addr, we) on the port connected
+        to the controller.
+        :type controller_port_input_pipeline: int
+        :param controller_port_output_pipeline: Number of pipeline stages to
+        add to the memory's data output signal on the port connected to the 
+        controller.
+        :type controller_port_output_pipeline: int
+        :param user_port_input_pipeline: Number of pipeline stages to
+        add to the memory's input signals (din, addr, we) on the user port.
+        :type user_port_output_pipeline: int
+        :param user_port_output_pipeline: Number of pipeline stages to
+        add to the memory's data output signal on the user port.
+        :type user_port_output_pipeline: int
         :param axi4_lite: If `True`, the BRAM controller will be implemented
         with an AXI4-Lite interface instead of full AXI4.
         :type axi4_lite: bool, optional
@@ -776,11 +785,6 @@ class AXIMemoryArray(HDLModule):
         self._size_bits = size_bits
         self._width = width
         self._axi_frequency = axi_frequency
-        self._controller_width = controller_width if controller_width is not None else width
-        
-        if controller_pipeline <= 0:
-            raise ValueError("Controller pipeline must be a positive number.")
-        self._controller_pipeline = controller_pipeline
         
         if elements <= 0:
             raise ValueError("Number of memory elements must be a positive number")
@@ -790,10 +794,15 @@ class AXIMemoryArray(HDLModule):
             raise ValueError("Primitive must be one of 'auto', 'block', 'distributed', or 'ultra'.")
         self._primitive = primitive
         
+        self._controller_width = controller_width if controller_width is not None else width
+        self._controller_port_input_pipeline = controller_port_input_pipeline
+        self._controller_port_output_pipeline = controller_port_output_pipeline
+        self._user_port_input_pipeline = user_port_input_pipeline
+        self._user_port_output_pipeline = user_port_output_pipeline
+        
         self._axi4_lite = axi4_lite
         self._read_only = read_only
         self._use_rst = use_rst
-        self._read_data_pipeline = read_data_pipeline
         self._synth_jobs = synth_jobs
         super().__init__(module_name)
         
@@ -802,20 +811,12 @@ class AXIMemoryArray(HDLModule):
         Generates an HDL file for the controller.
         """        
         
-        # Make some constants that we'll use later
-        mem_width = max(self._width, self._controller_width)
-        mem_depth = self._size_bits // mem_width
-        
+        # Make some constants that we'll use later        
         log2_elements = next_highest_power_of_2(self._elements, log=True) 
-        log2_mem_depth = next_highest_power_of_2(mem_depth, log=True) 
+        log2_mem_depth = next_highest_power_of_2(self._size_bits // self._width, log=True) 
         
         controller_address_bits = next_highest_power_of_2((self._size_bits // 8)*self._elements, log=True) 
-        log2_controller_word_depth = next_highest_power_of_2(self._size_bits // self._controller_width, log=True)
-        controller_unused_bits = next_highest_power_of_2(self._controller_width // 8, log=True)
-        log2_controller_words_per_mem_word = next_highest_power_of_2(mem_width // self._controller_width, log=True)
-        
-        log2_user_word_depth = next_highest_power_of_2(self._size_bits // self._width, log=True)
-        log2_user_words_per_mem_word = next_highest_power_of_2(mem_width // self._width, log=True)
+        controller_unused_bits = next_highest_power_of_2(self._controller_width // 8, log=True)        
         
         hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\nlibrary xpm;\nuse xpm.vcomponents.all;\n\n'
         hdl += f'entity {self._module_name}_axi_memory is\n'
@@ -862,10 +863,10 @@ class AXIMemoryArray(HDLModule):
             if not self._read_only:
                 hdl += f'        mem{i}_din     : in  std_logic_vector({self._width-1} downto 0);\n'
             hdl += f'        mem{i}_dout    : out std_logic_vector({self._width-1} downto 0);\n'
-            hdl += f'        mem{i}_addr    : in  std_logic_vector({log2_user_word_depth-1} downto 0);\n'
+            hdl += f'        mem{i}_addr    : in  std_logic_vector({log2_mem_depth-1} downto 0);\n'
             # hdl += f'        mem{i}_clk     : in  std_logic;\n'
             if not self._read_only:
-                hdl += f'        mem{i}_wr      : in  std_logic;\n'
+                hdl += f'        mem{i}_we      : in  std_logic;\n'
             if self._use_rst:
                 hdl += f'        mem{i}_rst     : in  std_logic;\n'
             
@@ -875,7 +876,7 @@ class AXIMemoryArray(HDLModule):
 
         hdl += f'architecture rtl of {self._module_name}_axi_memory is\n\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n' 
-        hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;\n\n'
         
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awaddr  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWADDR";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awvalid : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWVALID";\n'
@@ -904,9 +905,12 @@ class AXIMemoryArray(HDLModule):
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arsize  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARSIZE";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arburst : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARBURST";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rlast   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RLAST";\n'
+         
+        hdl += f'\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_aclk      : SIGNAL is "xilinx.com:signal:clock:1.0 s_axi_aclk CLK";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER of s_axi_aclk : SIGNAL is "ASSOCIATED_BUSIF S_AXI";\n'
         
         hdl += f'\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;\n'
         hdl += (f'    ATTRIBUTE X_INTERFACE_PARAMETER of s_axi_awaddr : SIGNAL is "'
                         f'MAX_BURST_LENGTH {1 if self._axi4_lite else 256},'
                         f'SUPPORTS_NARROW_BURST {0 if self._axi4_lite else 1},'
@@ -939,7 +943,7 @@ class AXIMemoryArray(HDLModule):
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} ADDR";\n'
             # hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} CLK";\n'
             if not self._read_only:
-                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_wr   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} WE";\n'
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_we   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} WE";\n'
             if self._use_rst:
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_rst  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} RST";\n'
         
@@ -990,7 +994,7 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            bram_addr_a   : out std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'            bram_wrdata_a : out std_logic_vector({self._controller_width-1} downto 0);\n'
         hdl += f'            bram_rddata_a : in  std_logic_vector({self._controller_width-1} downto 0);\n'
-        hdl += f'            bram_we_a     : out std_logic_vector({(self._controller_width // 8)-1} downto 0);\n'
+        hdl += f'            bram_we_a     : out std_logic_vector({(self._controller_width // 8) - 1} downto 0);\n'
         hdl += f'            bram_en_a     : out std_logic;\n'
         hdl += f'            bram_clk_a    : out std_logic\n'
         
@@ -1000,36 +1004,51 @@ class AXIMemoryArray(HDLModule):
         hdl += f'    signal controller_addr   : std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'    signal controller_wrdata : std_logic_vector({self._controller_width-1} downto 0);\n'
         hdl += f'    signal controller_rddata : std_logic_vector({self._controller_width-1} downto 0);\n'
-        hdl += f'    signal controller_we     : std_logic_vector({(self._controller_width // 8)-1} downto 0);\n'
-        hdl += f'    signal controller_en     : std_logic;\n'
-        hdl += f'    signal controller_clk    : std_logic;\n\n'
+        hdl += f'    signal controller_we     : std_logic_vector({(self._controller_width // 8) - 1} downto 0);\n'
+        hdl += f'    signal controller_en     : std_logic;\n\n'
         
-        hdl += f'    signal controller_wrdata_d : std_logic_vector({self._controller_width-1} downto 0);\n'
-        hdl += f'    signal controller_we_d     : std_logic_vector({(self._controller_width // 8)-1} downto 0);\n\n'
+        for element in range(self._elements):
+            hdl += f'    signal controller_mem{element}_en_gated : std_logic;\n'
         
-        hdl += f"    type mem_type is array (natural range <>) of std_logic_vector({mem_width-1} downto 0);\n"
-        for i in range(self._elements):
-            hdl += f'    signal mem{i} : mem_type(0 to {mem_depth-1});\n' 
+        for i in range(self._controller_port_input_pipeline + self._controller_port_output_pipeline):
+            hdl += f'    signal controller_addr_{"d"*(i+1)}   : std_logic_vector({controller_address_bits-1} downto 0);\n'
+        
+        for i in range(self._controller_port_input_pipeline):
+            hdl += f'    signal controller_wrdata_{"d"*(i+1)} : std_logic_vector({self._controller_width-1} downto 0);\n'
+            hdl += f'    signal controller_we_{"d"*(i+1)} : std_logic_vector({(self._controller_width // 8)-1} downto 0);\n'
         hdl += "\n"
         
-        hdl += f'    ATTRIBUTE RAM_STYLE : STRING;\n' 
-        for i in range(self._elements):
-            hdl += f'    ATTRIBUTE RAM_STYLE of mem{i} : signal is "{self._primitive}";\n' 
+        for i in range(self._controller_port_input_pipeline):
+            for element in range(self._elements):
+                hdl += f'    signal controller_mem{element}_en_gated_{"d"*(i+1)} : std_logic;\n'
+            hdl += "\n"
+        
+        for element in range(self._elements):
+            hdl += f'    signal controller_mem{element}_rddata : std_logic_vector({self._controller_width-1} downto 0);\n'
+            for i in range(self._controller_port_output_pipeline):
+                hdl += f'    signal controller_mem{element}_rddata_{"d"*(i+1)} : std_logic_vector({self._controller_width-1} downto 0);\n'    
+        
         hdl += "\n"
+        
+        for element in range(self._elements):
+            for i in range(self._user_port_input_pipeline):
+                hdl += f'    signal mem{element}_addr_{"d"*(i+1)} : std_logic_vector({log2_mem_depth-1} downto 0);\n'
+                
+                if not self._read_only:
+                    hdl += f'    signal mem{element}_din_{"d"*(i+1)}  : std_logic_vector({self._width-1} downto 0);\n'
+                    hdl += f'    signal mem{element}_we_{"d"*(i+1)}   : std_logic;\n'
+                    
+                if self._use_rst:
+                    hdl += f'    signal mem{element}_rst_{"d"*(i+1)}  : std_logic;\n'
             
-        hdl += f'    signal controller_mem_index    : std_logic_vector({log2_mem_depth-1} downto 0);\n'
-        if self._controller_width != mem_width:
-            hdl += f'    signal controller_mem_subindex : std_logic_vector({log2_controller_words_per_mem_word-1} downto 0);\n'
-        if self._elements != 1:
-            hdl += f'    signal controller_element_sel  : std_logic_vector({log2_elements-1} downto 0);\n'
+            hdl += f'    signal mem{element}_dout_int : std_logic_vector({self._width-1} downto 0);\n'  
             
-        hdl += "\n"
+            for i in range(self._user_port_output_pipeline):
+                hdl += f'    signal mem{element}_dout_int_{"d"*(i+1)} : std_logic_vector({self._width-1} downto 0);\n'    
+                
+            hdl += "\n"
         
-        if self._read_data_pipeline != 0:
-            for i in range(self._elements):
-                for j in range(self._read_data_pipeline):
-                    hdl += f'    signal mem{i}_dout_{"p"*(j+1)} : std_logic_vector({self._width-1} downto 0);\n'
-                hdl += "\n"
+        hdl += "\n"
         
         hdl += f'begin\n\n'
     
@@ -1077,7 +1096,7 @@ class AXIMemoryArray(HDLModule):
         hdl += f'\n'
         
         hdl += f'            bram_addr_a   => controller_addr,\n'
-        hdl += f'            bram_clk_a    => controller_clk,\n'
+        hdl += f'            bram_clk_a    => open,\n'
         hdl += f'            bram_en_a     => controller_en,\n'
         hdl += f'            bram_we_a     => controller_we,\n'
         hdl += f'            bram_wrdata_a => controller_wrdata,\n'
@@ -1085,149 +1104,162 @@ class AXIMemoryArray(HDLModule):
         
         hdl += f'        );\n\n'
         
+        
+
+        for element in range(self._elements):
+            hdl += f'    controller_mem{element}_en_gated <= controller_en'
+            if self._elements == 1:
+                hdl += ';\n'
+            else:
+                hdl += f' when controller_addr({controller_address_bits-1} downto {controller_address_bits-log2_elements}) = "{f"{element:b}".zfill(log2_elements)}" else \'0\';\n'
+
+        
+        input_to_output_delay = self._controller_port_input_pipeline + self._controller_port_output_pipeline
+        
         # Create the controller interface
-        # First, pipeline the address(es)
-        # The controller data width will never be wider than the memory width
-        # because we choose the memory width to be the maximum of the controller
-        # width and the user width; therefore, it must always be less than or
-        # equal
-        # This means that the controller data depth will never be less than the
-        # memory depth, it will always be greater or equal
-        controller_mem_index_top_bit = controller_address_bits-log2_elements
-        controller_mem_index_lower_bit = controller_address_bits-log2_elements-log2_mem_depth
-        
-        hdl += f'    controller_pipeline_proc: process(controller_clk) begin\n'
-        hdl += f'        if rising_edge(controller_clk) then\n'
-        
-        if self._elements != 1:
-            hdl += f'            controller_element_sel  <= controller_addr({controller_address_bits-1} downto {controller_address_bits-log2_elements});\n'
-            
-        hdl += f'            controller_mem_index    <= controller_addr({controller_mem_index_top_bit-1} downto {controller_mem_index_lower_bit});\n'
-        
-        if self._controller_width != mem_width:
-            hdl += f'            controller_mem_subindex <= controller_addr({controller_mem_index_lower_bit-1} downto {controller_unused_bits});\n'
-                    
-        hdl += f'            controller_wrdata_d <= controller_wrdata;\n\n'    
-                
-        # Manually gate the write enables
-        hdl += f'            we_loop: for i in 0 to {(self._controller_width // 8) - 1} loop\n'
-        hdl += f'                controller_we_d(i) <= controller_we(i) and controller_en;\n'
-        hdl += f'            end loop we_loop;\n'
-            
-        hdl += f'        end if;\n'
-        hdl += f'    end process controller_pipeline_proc;\n\n'
-            
-        # Generate a process for the controller's interactions with the memories
-        hdl += f'    controller_rd_proc: process(controller_clk) begin\n'
-        hdl += f'        if rising_edge(controller_clk) then\n'            
-            
-        for element in range(self._elements):
-            if self._elements != 1:
-                hdl += f'            {"els" if element != 0 else ""}if(controller_element_sel = "{f"{element:b}".zfill(log2_elements)}") then\n'
-                indent = "    "
-            else:
-                indent = ""
+        if self._controller_port_input_pipeline > 0 or self._controller_port_output_pipeline > 0:
+            hdl += f'    controller_pipeline_proc: process(s_axi_aclk) begin\n'
+            hdl += f'        if rising_edge(s_axi_aclk) then\n'
 
-            if mem_width == self._controller_width:
-                hdl += f'            {indent}controller_rddata <= mem{element}(to_integer(unsigned(controller_mem_index)));\n'
-            else:
-                hdl += f'            {indent}case controller_mem_subindex is\n'
-                for w in range(mem_width // self._controller_width):
-                    hdl += f'            {indent}    when "{f"{w:b}".zfill(log2_controller_words_per_mem_word)}" => \n'
-                    hdl += f'            {indent}        controller_rddata <= mem{element}(to_integer(unsigned(controller_mem_index)))({w*self._controller_width + self._controller_width-1} downto {w*self._controller_width});\n'
-                hdl += f'            {indent}    when others => controller_rddata <= (others => \'0\');\n'
-                hdl += f'            {indent}end case;\n'
-                    
-        if self._elements != 1:
-            hdl += f'            end if;\n'
+            for i in range(self._controller_port_input_pipeline):
+                delay = "_" + "d"*i if i != 0 else ""
+                hdl += f'            controller_wrdata_{"d"*(i+1)}        <= controller_wrdata{delay};\n' 
+                hdl += f'            controller_we_{"d"*(i+1)}            <= controller_we{delay};\n' 
+                
+                for element in range(self._elements):
+                    hdl += f'            controller_mem{element}_en_gated_{"d"*(i+1)} <= controller_mem{element}_en_gated{delay};\n' 
 
-        hdl += f'        end if;\n'
-        hdl += f'    end process controller_rd_proc;\n\n'
-            
-        for element in range(self._elements):
-            hdl += f'    controller_mem{element}_wr_proc: process(controller_clk) begin\n'
-            hdl += f'        if rising_edge(controller_clk) then\n'            
-            if self._elements != 1:
-                hdl += f'            if(controller_element_sel = "{f"{element:b}".zfill(log2_elements)}") then\n'
-                indent = "    "
-            else:
-                indent = ""
-
-            hdl += f'            {indent}byte_loop: for b in 0 to {(self._controller_width // 8) - 1} loop\n'
-            hdl += f'            {indent}    if(controller_we_d(b) = \'1\') then\n'
-            
-            if self._controller_width == mem_width:
-                hdl += f'            {indent}        mem{element}(to_integer(unsigned(controller_mem_index)))((b*8)+7 downto b*8) <= controller_wrdata_d((b*8)+7 downto b*8);\n'
-            else:
-                hdl += f'            {indent}        subindex_loop: for s in 0 to {(mem_width // self._controller_width) - 1} loop\n'
-                hdl += f'            {indent}            if(to_integer(unsigned(controller_mem_subindex)) = s) then\n'
-                hdl += f'            {indent}                mem{element}(to_integer(unsigned(controller_mem_index)))((s*{self._controller_width})+(b*8)+7 downto (s*{self._controller_width})+(b*8)) <= controller_wrdata_d((b*8)+7 downto b*8);\n'
-                hdl += f'            {indent}            end if;\n'
-                hdl += f'            {indent}        end loop subindex_loop;\n'
-            hdl += f'            {indent}    end if;\n'
-            hdl += f'            {indent}end loop byte_loop;\n'
-                    
-            if self._elements != 1:
-                hdl += f'            end if;\n'
-
-            hdl += f'        end if;\n'
-            hdl += f'    end process controller_mem{element}_wr_proc;\n\n'
-            
-        for element in range(self._elements):
-            hdl += f'    user_mem{element}_proc: process(controller_clk) begin\n'
-            hdl += f'        if rising_edge(controller_clk) then\n'
-            if self._read_data_pipeline != 0:
-                hdl += f'            mem{element}_dout <= mem{element}_dout_{"p"*self._read_data_pipeline};\n'
-                
-            for i in range(1, self._read_data_pipeline):
-                hdl += f'            mem{element}_dout_{"p"*(i+1)} <= mem{element}_dout_{"p"*i};\n'
-            
-            # Reading logic
-            if self._use_rst:
-                hdl += f'            if(mem{element}_rst = \'1\') then\n'
-                if self._read_data_pipeline == 0:
-                    hdl += f'                mem{element}_dout <= (others => \'0\');\n'
-                else:
-                    hdl += f'                mem{element}_dout_p <= (others => \'0\');\n'
-                hdl += f'            else\n'
-                indent = "    "
-            else:
-                indent = ""
-                
-            if mem_width == self._width:
-                hdl += f'            {indent}mem{element}_dout{"" if self._read_data_pipeline == 0 else "_p"} <= mem{element}(to_integer(unsigned(mem{element}_addr)));\n'
-            else:
-                mem_index = f"to_integer(unsigned(mem{element}_addr({log2_user_word_depth-1} downto {log2_user_words_per_mem_word})))"
-                hdl += f'            {indent}case mem{element}_addr({log2_user_words_per_mem_word-1} downto 0) is\n'
-                for w in range(mem_width // self._width):
-                    hdl += f'            {indent}    when "{f"{w:b}".zfill(log2_user_words_per_mem_word)}" => \n'
-                    hdl += f'            {indent}        mem{element}_dout{"" if self._read_data_pipeline == 0 else "_p"} <= mem{element}({mem_index})({w*self._width + self._width-1} downto {w*self._width});\n'
-                hdl += f'            {indent}    when others => mem{element}_dout{"" if self._read_data_pipeline == 0 else "_p"} <= (others => \'0\');\n'
-                hdl += f'            {indent}end case;\n'
-                
-            if self._use_rst:
-                hdl += f'        {indent}end if;\n'
-                
             hdl += "\n"
             
-            # Writing logic
-            if not self._read_only:
-                hdl += f'            if(mem{element}_wr = \'1\') then\n'
+            for i in range(input_to_output_delay):
+                delay = "_" + "d"*i if i != 0 else ""
+                hdl += f'            controller_addr_{"d"*(i+1)}          <= controller_addr{delay};\n' 
+
+            hdl += "\n"
                 
-                if self._width == mem_width:
-                    hdl += f'                mem{element}(to_integer(unsigned(mem{element}_addr))) <= mem{element}_din;\n'
-                else:
-                    mem_index = f"to_integer(unsigned(mem{element}_addr({log2_user_word_depth-1} downto {log2_user_words_per_mem_word})))"
-                    hdl += f'                subindex_loop: for s in 0 to {(mem_width // self._width) - 1} loop\n'
-                    hdl += f'                    if(to_integer(unsigned(mem{element}_addr({log2_user_words_per_mem_word-1} downto 0))) = s) then\n'
-                    hdl += f'                        mem{element}({mem_index})((s*{self._width})+{self._width-1} downto s*{self._width}) <= mem{element}_din;\n'
-                    hdl += f'                    end if;\n'
-                    hdl += f'                end loop subindex_loop;\n'
-                
-                hdl += f'            end if;\n'
-                
+            for i in range(self._controller_port_output_pipeline):
+                delay = "_" + "d"*i if i != 0 else ""
+                for element in range(self._elements):
+                    hdl += f'            controller_mem{element}_rddata_{"d"*(i+1)}   <= controller_mem{element}_rddata{delay};\n'
+
             hdl += f'        end if;\n'
-            hdl += f'    end process user_mem{element}_proc;\n\n'
+            hdl += f'    end process controller_pipeline_proc;\n\n'
+        
+        hdl += f'    controller_rddata <= '
+        
+        if self._elements == 1:
+            hdl += f'controller_mem0_rddata{"_" + "d"*self._controller_port_output_pipeline if self._controller_port_output_pipeline != 0 else ""};\n\n'
+        else:
+            for element in range(self._elements):
+                hdl += f'        controller_mem{element}_rddata{"_" + "d"*self._controller_port_output_pipeline if self._controller_port_output_pipeline != 0 else ""} when controller_addr{"_" + "d"*input_to_output_delay if input_to_output_delay != 0 else ""}({controller_address_bits-1} downto {controller_address_bits-log2_elements}) = "{f"{element:b}".zfill(log2_elements)}" else\n'
+            hdl += f'    (others => \'0\');\n\n'
+            
+        if self._user_port_input_pipeline > 0 or self._user_port_output_pipeline > 0:
+            # Create the user interface
+            hdl += f'    user_pipeline_proc: process(s_axi_aclk) begin\n'
+            hdl += f'        if rising_edge(s_axi_aclk) then\n'
+
+            for element in range(self._elements):
+                for i in range(self._user_port_input_pipeline):
+                    delay = "_" + "d"*i if i != 0 else ""
+                    hdl += f'            mem{element}_addr_{"d"*(i+1)}     <= mem{element}_addr{delay};\n' 
+                    if not self._read_only:
+                        hdl += f'            mem{element}_din_{"d"*(i+1)}      <= mem{element}_wrdata{delay};\n' 
+                        hdl += f'            mem{element}_we_{"d"*(i+1)}       <= mem{element}_we{delay};\n' 
+                    if self._use_rst:
+                        hdl += f'            mem{element}_rst_{"d"*(i+1)}      <= mem{element}_rst{delay};\n' 
+
+                for i in range(self._user_port_output_pipeline):
+                    delay = "_" + "d"*i if i != 0 else ""
+                    hdl += f'            mem{element}_dout_int_{"d"*(i+1)} <= mem{element}_dout_int{delay};\n'
+
+                hdl += "\n"
+
+            hdl += f'        end if;\n'
+            hdl += f'    end process user_pipeline_proc;\n\n'
+        
+        for element in range(self._elements):
+            hdl += f'    mem{element}_dout <= mem{element}_dout_int{"_" + "d"*self._user_port_output_pipeline if self._user_port_output_pipeline != 0 else ""};\n'
+        hdl += f'\n'
+            
+        # Generate a process for the controller's interactions with the memories
+        for element in range(self._elements):            
+            hdl += f'    mem{element}_inst : xpm_memory_tdpram\n'
+            hdl += f'        generic map (\n'
+            hdl += f'           ADDR_WIDTH_A            => {controller_address_bits-log2_elements-controller_unused_bits},\n'
+            hdl += f'           ADDR_WIDTH_B            => {log2_mem_depth},\n'
+            hdl += f'           AUTO_SLEEP_TIME         => 0,\n'
+            hdl += f'           BYTE_WRITE_WIDTH_A      => 8,\n'
+            hdl += f'           BYTE_WRITE_WIDTH_B      => 8,\n'
+            hdl += f'           CASCADE_HEIGHT          => 0,\n'
+            hdl += f'           CLOCKING_MODE           => "common_clock",\n'
+            hdl += f'           ECC_MODE                => "no_ecc",\n'
+            hdl += f'           MEMORY_INIT_FILE        => "none",\n'
+            hdl += f'           MEMORY_INIT_PARAM       => "0",\n'
+            hdl += f'           MEMORY_OPTIMIZATION     => "true",\n'
+            hdl += f'           MEMORY_PRIMITIVE        => "{self._primitive}",\n'
+            hdl += f'           MEMORY_SIZE             => {self._size_bits},\n'
+            hdl += f'           MESSAGE_CONTROL         => 0,\n'
+            hdl += f'           READ_DATA_WIDTH_A       => {self._controller_width},\n'
+            hdl += f'           READ_DATA_WIDTH_B       => {self._width},\n'
+            hdl += f'           READ_LATENCY_A          => 1,\n'
+            hdl += f'           READ_LATENCY_B          => 1,\n'
+            hdl += f'           READ_RESET_VALUE_A      => "0",\n'
+            hdl += f'           READ_RESET_VALUE_B      => "0",\n'
+            hdl += f'           RST_MODE_A              => "SYNC",\n'
+            hdl += f'           RST_MODE_B              => "SYNC",\n'
+            hdl += f'           SIM_ASSERT_CHK          => 0,\n'
+            hdl += f'           USE_EMBEDDED_CONSTRAINT => 0,\n'
+            hdl += f'           USE_MEM_INIT            => 1,\n'
+            hdl += f'           USE_MEM_INIT_MMI        => 0,\n'
+            hdl += f'           WAKEUP_TIME             => "disable_sleep",\n'
+            hdl += f'           WRITE_DATA_WIDTH_A      => {self._controller_width},\n'
+            hdl += f'           WRITE_DATA_WIDTH_B      => {self._width},\n'
+            hdl += f'           WRITE_MODE_A            => "no_change",\n'
+            hdl += f'           WRITE_MODE_B            => "no_change",\n'
+            hdl += f'           WRITE_PROTECT           => 1\n'
+            hdl += f'        )\n'
+            hdl += f'        port map (\n'
+            hdl += f'           clka   => s_axi_aclk,\n'
+            hdl += f'           addra  => controller_addr{"_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""}({controller_address_bits-log2_elements-1} downto {controller_unused_bits}),\n'
+            hdl += f'           douta  => controller_mem{element}_rddata,\n'
+            hdl += f'           dina   => controller_wrdata{"_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""},\n'
+            hdl += f'           ena    => controller_mem{element}_en_gated{"_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""},\n'
+            hdl += f'           regcea => \'1\',\n'
+            hdl += f'           rsta   => \'0\',\n'
+            hdl += f'           wea    => controller_we{"_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""},\n\n'
+            
+            hdl += f'           clkb   => s_axi_aclk,\n'
+            hdl += f'           addrb  => mem{element}_addr{"_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""},\n'
+            hdl += f'           doutb  => mem{element}_dout_int,\n'
+            if self._read_only:
+                hdl += f'           dinb   => "{"0"*self._width}",\n'
+            else:
+                hdl += f'           dinb   => mem{element}_din{"_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""},\n'
+            hdl += f'           enb    => \'1\',\n'
+            hdl += f'           regceb => \'1\',\n'
+            if self._use_rst:
+                hdl += f'           rstb   => mem{element}_rst{"_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""},\n'
+            else:
+                hdl += f'           rstb   => \'0\',\n'
+                
+            if self._read_only:
+                hdl += f'           web    => "{"0"*(self._width // 8)}",\n'
+            else:
+                for i in range(self._width // 8):
+                    hdl += f'           web({i}) => mem{element}_we{"_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""},\n'
+                    
+            hdl += '\n'
+            hdl += f'           dbiterra => open,\n'
+            hdl += f'           dbiterrb => open,\n'
+            hdl += f'           sbiterra => open,\n'
+            hdl += f'           sbiterrb => open,\n'
+            hdl += f'           injectdbiterra => \'0\',\n'
+            hdl += f'           injectdbiterrb => \'0\',\n'
+            hdl += f'           injectsbiterra => \'0\',\n'
+            hdl += f'           injectsbiterrb => \'0\',\n'
+            hdl += f'           sleep => \'0\'\n'
+            hdl += f'        );\n\n'
             
         hdl += f'end rtl;\n\n'
         
@@ -1255,7 +1287,7 @@ class AXIMemoryArray(HDLModule):
                 f' CONFIG.SINGLE_PORT_BRAM {{1}}'
                 f' CONFIG.ECC_TYPE {{0}}'
                 f' CONFIG.Component_Name {{{ip_name}}}'
-                f' CONFIG.READ_LATENCY {{1}}'
+                f' CONFIG.READ_LATENCY {{{self._controller_port_input_pipeline + self._controller_port_output_pipeline + 1}}}'
                 f' CONFIG.RD_CMD_OPTIMIZATION {{0}}]'
                 f' [get_ips {ip_name}]\n')
         xci_path = os.path.join(project_dir, f"acadia.srcs/sources_1/ip/{ip_name}/{ip_name}.xci") 

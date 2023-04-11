@@ -287,91 +287,106 @@ class StandardFirmware(Firmware):
         cache_controller = AXIMemoryArray("cache", 
             size_bits=StandardFirmware.CACHE_MEMORY_SIZE_BITS, 
             width=32, 
-            controller_width=128, 
+            controller_width=128,
             axi_frequency=300e6, 
             elements=1, 
             read_only=False,
             use_rst=False,
             primitive="block", 
-            read_data_pipeline=1)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,                              
+            user_port_input_pipeline=0,
+            user_port_output_pipeline=1)
         self.add(cache_controller)
         self._memory_tcl += cache_controller.generate_ip_tcl(self._project_dir)
         
         instruction_mem_controller = AXIMemoryArray("instruction", 
             size_bits=StandardFirmware.INSTRUCTION_MEMORY_SIZE_BITS, 
             width=128, 
-            controller_width=128, 
             axi_frequency=300e6, 
             elements=1, 
             read_only=True,
             use_rst=True,
             primitive="block", 
-            read_data_pipeline=1)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,
+            user_port_input_pipeline=0,
+            user_port_output_pipeline=1)
         self.add(instruction_mem_controller)
         self._memory_tcl += instruction_mem_controller.generate_ip_tcl(self._project_dir)
         
         controller = AXIMemoryArray(f"dac", 
             size_bits=StandardFirmware.DAC_MEMORY_SIZE_BITS, 
             width=128, 
-            controller_width=128, 
             axi_frequency=300e6, 
             elements=StandardFirmware.NUM_DAC, 
             read_only=True,
             use_rst=True,
             primitive="ultra", 
-            read_data_pipeline=2)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,   
+            user_port_input_pipeline=1,
+            user_port_output_pipeline=2)
         self.add(controller)
         self._memory_tcl += controller.generate_ip_tcl(self._project_dir)
             
         controller = AXIMemoryArray(f"cmacc_kernel", 
             size_bits=StandardFirmware.CMACC_KERNEL_MEMORY_SIZE_BITS, 
             width=64, 
-            controller_width=32, 
             axi_frequency=300e6, 
             elements=StandardFirmware.NUM_CMACC, 
             read_only=True,
             use_rst=True,
             primitive="block", 
-            read_data_pipeline=1)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,   
+            user_port_input_pipeline=0,
+            user_port_output_pipeline=1)
         self.add(controller)
         self._memory_tcl += controller.generate_ip_tcl(self._project_dir)
             
         controller = AXIMemoryArray(f"dac_dma_descriptor", 
             size_bits=StandardFirmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS, 
             width=64, 
-            controller_width=32, 
             axi_frequency=300e6, 
             elements=StandardFirmware.NUM_DAC, 
             read_only=True,
             use_rst=False,
             primitive="block", 
-            read_data_pipeline=0)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,   
+            user_port_input_pipeline=0,
+            user_port_output_pipeline=0)
         self.add(controller)
         self._memory_tcl += controller.generate_ip_tcl(self._project_dir)
             
         controller = AXIMemoryArray(f"adc_dma_descriptor", 
             size_bits=StandardFirmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS, 
             width=64, 
-            controller_width=32, 
             axi_frequency=300e6, 
             elements=StandardFirmware.NUM_ADC, 
             read_only=True,
             use_rst=False,
             primitive="block", 
-            read_data_pipeline=0)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,   
+            user_port_input_pipeline=0,
+            user_port_output_pipeline=0)
         self.add(controller)
         self._memory_tcl += controller.generate_ip_tcl(self._project_dir)
             
         controller = AXIMemoryArray(f"cmacc_dma_descriptor", 
             size_bits=StandardFirmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS, 
             width=64, 
-            controller_width=32, 
             axi_frequency=300e6, 
             elements=StandardFirmware.NUM_CMACC, 
             read_only=True,
             use_rst=False,
             primitive="block", 
-            read_data_pipeline=0)
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,   
+            user_port_input_pipeline=0,
+            user_port_output_pipeline=0)
         self.add(controller)
         self._memory_tcl += controller.generate_ip_tcl(self._project_dir)
         
