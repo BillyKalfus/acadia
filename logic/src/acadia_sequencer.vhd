@@ -46,7 +46,6 @@ entity acadia_sequencer is
         -- Instruction memory interface(s)
         instruction_mem_dout : in  std_logic_vector(127 downto 0);
         instruction_mem_addr : out std_logic_vector(15 downto 0);
-        instruction_mem_rst  : out std_logic;
         instruction_mem_clk  : out std_logic;
         
         -- Bus interface
@@ -70,7 +69,6 @@ architecture rtl of acadia_sequencer is
     
     ATTRIBUTE X_INTERFACE_INFO of instruction_mem_dout : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 instruction_mem DOUT";
     ATTRIBUTE X_INTERFACE_INFO of instruction_mem_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 instruction_mem ADDR";
-    ATTRIBUTE X_INTERFACE_INFO of instruction_mem_rst  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 instruction_mem RST";
     ATTRIBUTE X_INTERFACE_INFO of instruction_mem_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 instruction_mem CLK";
     ATTRIBUTE X_INTERFACE_MODE of instruction_mem_dout : SIGNAL is "Master";
     
@@ -145,8 +143,10 @@ architecture rtl of acadia_sequencer is
     signal instruction       : std_logic_vector(127 downto 0);
     
     signal instruction_rst   : std_logic;
+    signal instruction_rst_d : std_logic;
     signal instruction_en    : std_logic;
     signal instruction_en_d  : std_logic;
+
     
     -- Instruction fields
     signal instr_opcode      : std_logic_vector(0 downto 0);
@@ -211,30 +211,27 @@ begin
     instr_dest2_sub <= to_integer(unsigned(instr_dest2(2 downto 0)));
                              
     -- Instruction memory interface and loading
-    instruction_en   <= '0' when (instr_dest1_maj = DEST_HOLD and dest1_en = '1') 
-                              or (instr_dest2_maj = DEST_HOLD and dest2_en = '1')
-                        else '1';
+    instruction_en  <= '0' when (instr_dest1_maj = DEST_HOLD and dest1_en = '1') 
+                             or (instr_dest2_maj = DEST_HOLD and dest2_en = '1')
+                           else '1';
         
     -- We have to reset the instruction memory output any time we jump or come out of a hold
-    instruction_rst  <= '1' when (instr_dest1_maj = DEST_PC and dest1_en = '1')
-                                 or (instr_dest2_maj = DEST_PC and dest2_en = '1')
-                                 or (instruction_en = '1' and instruction_en_d = '0') 
-                                 or (run = '0') 
-                             else '0';
+    instruction_rst <= '1' when (instr_dest1_maj = DEST_PC and dest1_en = '1')
+                             or (instr_dest2_maj = DEST_PC and dest2_en = '1')
+                             or (instruction_en = '1' and instruction_en_d = '0') 
+                             or (run = '0') 
+                           else '0';
     
-    instruction_mem_addr <= pc;
     instruction_mem_clk  <= clk;
-    instruction_mem_rst  <= instruction_rst;
-    
-    instruction_en_d_proc: process(clk) begin
-        if rising_edge(clk) then
-            instruction_en_d <= instruction_en;
-        end if;
-    end process instruction_en_d_proc;
-    
+
+    -- Control instruction loading and resetting
     instruction_proc: process(clk) begin
         if rising_edge(clk) then
-            if(instruction_rst = '1') then
+            instruction_mem_addr <= pc;
+            instruction_en_d     <= instruction_en;
+            instruction_rst_d    <= instruction_rst;
+                             
+            if(instruction_rst = '1' or instruction_rst_d = '1') then
                 instruction <= (others => '0');
             elsif(instruction_en = '1') then
                 instruction <= instruction_mem_dout;
@@ -360,7 +357,7 @@ begin
                 pc <= src1(15 downto 0);
             elsif(dest2_en = '1' and (instr_dest2_maj = DEST_PC or instr_dest2_maj = DEST_HOLD)) then
                 pc <= src2(15 downto 0);
-            elsif(instruction_rst = '0') then
+            elsif(instruction_en = '1') then
                 pc <= std_logic_vector(unsigned(pc) + 1);
             end if;
         end if;

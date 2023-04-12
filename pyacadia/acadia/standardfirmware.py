@@ -306,12 +306,12 @@ class StandardFirmware(Firmware):
             axi_frequency=300e6, 
             elements=1, 
             read_only=True,
-            use_rst=True,
+            use_rst=False,
             primitive="block", 
             controller_port_input_pipeline=2,
             controller_port_output_pipeline=2,
             user_port_input_pipeline=0,
-            user_port_output_pipeline=1)
+            user_port_output_pipeline=0)
         self.add(instruction_mem_controller)
         self._memory_tcl += instruction_mem_controller.generate_ip_tcl(self._project_dir)
         
