@@ -3,15 +3,17 @@ __all__ = ["StandardFirmware", "Acadia", "Channel", "PSGPIO"]
 import os
 import re
 import mmap
+import time
 from dataclasses import dataclass
 from functools import wraps
 from abc import ABC, abstractmethod
 
+import numpy as np
+
 from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController, AXIMemoryArray
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Symbol, Operation
 from .firmware import Firmware
-from .pythonprocessor import PythonProcessor, PythonProcessorCacheable
-from .sequencer import Sequencer
+from .sequencer import Sequencer, STP, Destination
 from .dma import DMA
 from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg, next_highest_power_of_2
 
@@ -721,7 +723,7 @@ class StandardFirmware(Firmware):
 
             create_ip(f, name="hedgehog/xlconst_0", vlnv="xilinx.com:ip:xlconstant:1.1")
             set_property(f, name="hedgehog/xlconst_0", properties={"CONST_WIDTH": 32, "CONST_VAL": 0})
-            connect_bd_net(f, f"hedgehog/sequencer/hedgehog_flags", f"hedgehog/xlconst_0/Dout")
+            connect_bd_net(f, f"hedgehog/sequencer/ext_in", f"hedgehog/xlconst_0/Dout")
             
             # ------------------- PS GPIO and Interrupt Connections -------------------- #
             
@@ -1120,39 +1122,6 @@ class StandardFirmware(Firmware):
                         assign_bd_address(f, target_address_space=target_address_space, offset=address, range=rng, addr_seg=segment)
                 for segment in self.excluded_segments:
                     exclude_bd_addr_seg(f, addr_seg=segment, target_address_space=target_address_space)
-                
-def livecallable(imperative=True):
-    """
-    A decorator for wrapping functions that the user may want to call live on 
-    hardware instead of creating an instruction for a :class:`PythonProcessor`.
-    The behavior is determined by the active processor at the time of invocation.
-    :param imperative: Determines whether a new instruction for a 
-    :class:`PythonProcessor` should be created when called in the context of one.
-    If `False`, `Processor.call` is executed and returned. If `True`, a new 
-    instruction is created to by calling the :class:`Processor` instance on an
-    invocation of `Processor.call`.
-    """
-                
-    def livecallable_inner(func):
-        
-        @wraps(func)
-        def _new_func(*args, **kwargs):
-            proc = Processor.active_processor()
-            if proc is None:
-                return func(*args, **kwargs)
-            elif isinstance(proc, PythonProcessor):
-                call = proc.call(func, *args, **kwargs)
-                if imperative:
-                    return proc(call)
-                return call
-            else:
-                raise TypeError(f"Function {func} must either be called outside of"
-                                 " a processor context or within one for a"
-                                 " `PythonProcessor`.")
-
-        return _new_func
-    
-    return livecallable_inner
 
 class DMASynchronizer(Synchronizer):
     """
@@ -1165,10 +1134,7 @@ class DMASynchronizer(Synchronizer):
         return super().__call__(*args, **kwargs)
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if Processor.active_processor() is not None:
-            raise TypeError("DMA synchronization may not be implemented in the"
-                            " context of any particular processor.")
-            
+        
         mask_tmp = 0
         for call in self._calls:
             function,parent,args,kwargs = call.values()
@@ -1200,6 +1166,8 @@ class DMASynchronizer(Synchronizer):
             # Wait until all the DMAs in the mask have completed
             parent.dma_block(self.mask)
             
+        super().__exit__(exc_type, exc_val, exc_tb)
+            
                 
 class NCOSynchronizer(Synchronizer):
     """
@@ -1210,23 +1178,9 @@ class NCOSynchronizer(Synchronizer):
         self._event_source = kwargs.pop("event", "immediate")
         return super().__call__(*args, **kwargs)
         
-    def __exit__(self, *args, **kwargs):        
+    def __exit__(self, exc_type, exc_val, exc_tb):        
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
-            # Set the event sources
-            for call in self._calls:
-                function,channel,args,kwargs = call.values()
-                channel.set_nco_update_event_source(self._event_source)
-                
-                if self._event_source == "immediate":
-                    offset = channel.RFDC_def(f"XRFDC_{'DAC' if channel.is_dac else 'ADC'}_UPDATE_DYN_OFFSET")
-                    channel.RFDC_voidcall("ClrSetReg", 
-                                   channel.register_base_address(), 
-                                   offset, 
-                                   channel.RFDC_def(f"XRFDC_UPDT_EVNT_MASK"),
-                                   channel.RFDC_def(f"XRFDC_UPDT_EVNT_NCO_MASK"))
-                    
-        elif isinstance(proc, Sequencer):
+        if isinstance(proc, Sequencer):
             if self._event_source not in ["immediate", "pl"]:
                 raise ValueError(f"Invalid event source for sequencer-driven"
                                  f" NCO synchronization: {self._event_source}")
@@ -1272,7 +1226,7 @@ class NCOSynchronizer(Synchronizer):
                     raise ValueError(f"Unrecognized function {function}.")
                     
             # Generate register writes for all the updates that need to happen
-            rts_address = Acadia.firmware["rfdc_rts_regs"].address().value()
+            rts_address = channel._parent.firmware["rfdc_rts_regs"].address().value()
             for tile in range(8):
                 if update_enables[tile] != 0:
                     proc.bus_write(address=rts_address + 0x60 + tile,
@@ -1294,13 +1248,25 @@ class NCOSynchronizer(Synchronizer):
                 proc.bus_write(address=rts_address + 0x6C, data=nco_update_request)
                 proc.bus_write(address=rts_address + 0x6C, data=0)
         else:
-            raise TypeError(f"Invalid processor for NCO synchronization: {proc}")
+            for call in self._calls:
+                function,channel,args,kwargs = call.values()
+                channel.set_nco_update_event_source(self._event_source)
+                
+                if self._event_source == "immediate":
+                    offset = channel.RFDC_def(f"XRFDC_{'DAC' if channel.is_dac else 'ADC'}_UPDATE_DYN_OFFSET")
+                    channel.RFDC_voidcall("ClrSetReg", 
+                                   channel.register_base_address(), 
+                                   offset, 
+                                   channel.RFDC_def(f"XRFDC_UPDT_EVNT_MASK"),
+                                   channel.RFDC_def(f"XRFDC_UPDT_EVNT_NCO_MASK"))
+                    
+        super().__exit__(exc_type, exc_val, exc_tb)
                 
 class VOPDSASynchronizer(Synchronizer):
     """
     Synchronizes DAC VOP and ADC DSA update signals.
     """
-    def __exit__(self, *args, **kwargs):        
+    def __exit__(self, exc_type, exc_val, exc_tb):        
         proc = Processor.active_processor()
         if isinstance(proc, Sequencer):
             vop_dsa_update_reg = 0
@@ -1311,6 +1277,7 @@ class VOPDSASynchronizer(Synchronizer):
             
             for call in self._calls:
                 function,channel,args,kwargs = call.values()
+                
                 if function == "set_vop":
                     vop_dsa_update_reg |= 1 << channel.num
                 elif function == "set_dsa":
@@ -1322,6 +1289,7 @@ class VOPDSASynchronizer(Synchronizer):
                     raise ValueError(f"Unrecognized function {function}.")
                     
             # Write the ADC DSA registers for the tiles
+            rts_address = channel._parent.firmware["rfdc_rts_regs"].address().value()
             for i in range(4):
                 if vop_dsa_update_reg & (1 << (16+i)):
                     proc.bus_write(address=rts_address + 0x80, data=tile_dsa_codes[i])
@@ -1330,6 +1298,8 @@ class VOPDSASynchronizer(Synchronizer):
                 proc.bus_write(address=rts_address + 0x6D, data=vop_dsa_update_reg)
         else:
             raise TypeError(f"Invalid processor for VOP/DSA synchronization: {proc}")
+            
+        super().__exit__(exc_type, exc_val, exc_tb)
             
 class TDDSynchronizer(Synchronizer):
     """
@@ -1359,7 +1329,8 @@ class TDDSynchronizer(Synchronizer):
                         tdd_mode_clear_reg |= 1 << bit_position
                 else:
                     raise ValueError(f"Unrecognized function {function}.")
-
+            
+            rts_address = channel._parent.firmware["rfdc_rts_regs"].address().value()
             if tdd_mode_set_reg != 0:
                 proc.bus_write(address=rts_address + 0x6B, data=tdd_mode_set_reg)
             if tdd_mode_clear_reg != 0:
@@ -1368,12 +1339,15 @@ class TDDSynchronizer(Synchronizer):
             raise TypeError(f"Invalid processor for TDD mode synchronization: {proc}")
         
 @dataclass
-class Channel(PythonProcessorCacheable):
+class Channel:
     num: int = None
     tile: int = None
     block: int = None
     bank: int = None
     is_dac: bool = None
+    interface_sample_frequency: float = None
+    analog_sample_frequency: float = None
+    interface_samples_per_cycle: int = None
     
     nco_synchronizer = NCOSynchronizer()
     vop_dsa_synchronizer = VOPDSASynchronizer()
@@ -1439,7 +1413,6 @@ class Channel(PythonProcessorCacheable):
         return xrfdc.lib.XRFDC_DAC_TILE if self.is_dac else xrfdc.lib.XRFDC_ADC_TILE
     
     @classmethod
-    @livecallable()
     def RFDC_init(cls):
         """
         Initializes the RFDC library and stores a reference to the initialized
@@ -1459,7 +1432,6 @@ class Channel(PythonProcessorCacheable):
         cls.RFDC_call("CfgInitialize", config_ptr)
         
     @classmethod
-    @livecallable()
     def RFDC_call(cls, func_name, *args, **kwargs):
         """
         Call a function in the XRFDC driver. If no Processor is active, it is
@@ -1476,7 +1448,6 @@ class Channel(PythonProcessorCacheable):
             raise ValueError(f"XRFdc_{func_name} failed.")
             
     @classmethod
-    @livecallable()
     def RFDC_voidcall(cls, func_name, *args, **kwargs):
         """
         Call a function in the XRFDC driver. If no Processor is active, it is
@@ -1492,7 +1463,6 @@ class Channel(PythonProcessorCacheable):
         getattr(xrfdc.lib, f"XRFdc_{func_name}")(cls._rfdc, *args, **kwargs)
             
     @classmethod
-    @livecallable(imperative=False)
     def RFDC_def(cls, name):
         """
         Get a definition from the XRFDC library by name.
@@ -1503,7 +1473,6 @@ class Channel(PythonProcessorCacheable):
         return getattr(xrfdc.lib, name)
     
     @classmethod
-    @livecallable(imperative=False)
     def RFDC_struct(cls, name, init=None):
         """
         Get a definition from the XRFDC library by name.
@@ -1514,19 +1483,34 @@ class Channel(PythonProcessorCacheable):
         return xrfdc.ffi.new(name, init)
     
     @classmethod
-    @livecallable(imperative=False)
     def IP_status(cls):
         """
-        Get the status of the RFDC IP.
+        Get the status of the RFDC IP. The return value is a CFFI struct with
+        members:
+        - XRFdc_TileStatus DACTileStatus[4]
+        - XRFdc_TileStatus ADCTileStatus[4]
+        
+        The XRFdc_TileStatus struct contains:
+        - u32 IsEnabled
+        - u32 TileState
+        - u8 BlockStatusMask
+        - u32 PowerUpState
+        - u32 PLLState
         """
         ip_status = xrfdc.ffi.new("XRFdc_IPStatus*")
         cls.RFDC_call("GetIPStatus", ip_status)
         return ip_status
     
-    @livecallable(imperative=False)
     def status(self):
         """
-        Get the status of the converter. 
+        Get the status of the converter. The return value is a CFFI struct with
+        members:
+        - double SamplingFreq
+        - u32 AnalogDataPathStatus
+        - u32 DigitalDataPathStatus
+        - u8 DataPathClocksStatus
+        - u8 IsFIFOFlagsEnabled
+        - u8 IsFIFOFlagsAsserted
         """
         block_status = xrfdc.ffi.new("XRFdc_BlockStatus*")
         self.RFDC_call("GetBlockStatus", 
@@ -1536,20 +1520,16 @@ class Channel(PythonProcessorCacheable):
                    block_status)
         return block_status            
     
-    @livecallable()
     def startup(self):
         self.RFDC_call("StartUp", self.converter_type(), self.tile)
         
-    @livecallable()
     def shutdown(self):
         self.RFDC_call("Shutdown", self.converter_type(), self.tile)
         
-    @livecallable()
     def reset(self):
         self.RFDC_call("Reset", self.converter_type(), self.tile)
         
     @classmethod
-    @livecallable()
     def reset_all(cls):
         cls.RFDC_call("Reset", cls.RFDC_def("XRFDC_DAC_TILE"), -1)
         cls.RFDC_call("Reset", cls.RFDC_def("XRFDC_ADC_TILE"), -1)
@@ -1560,8 +1540,8 @@ class Channel(PythonProcessorCacheable):
         Configure some or all NCO settings. The three 16-bit registers for
         the frequency tuning word, the two for the phase word, and the single  may be individually enabled, allowing
         for lower latency when less precise changes are acceptable.
-        :param frequency_word: Frequency tuning word
-        :type frequency_word: int
+        :param frequency: Frequency in GHz
+        :type frequency: int
         :param low: Indicates whether the low bits of the frequency tuning word
         are to be updated
         :type low: bool, optional
@@ -1572,23 +1552,26 @@ class Channel(PythonProcessorCacheable):
         word are to be updated
         :type high: bool, optional
         """     
+        
+        frequency_word = self.frequency_to_nco_tuning_word(frequency)
+        
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             if low:
                 self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_ADC_NCO_FQWD_LOW_OFFSET"), 
-                               frequency & 0xFFFF)
+                               frequency_word & 0xFFFF)
             if mid:
                 self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_ADC_NCO_FQWD_MID_OFFSET"), 
-                               (frequency >> 16) & 0xFFFF)
+                               (frequency_word >> 16) & 0xFFFF)
             if high:
                 self.RFDC_voidcall("WriteReg16Wrapper", 
                                self.register_base_address(), 
                                self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
-                               (frequency >> 32) & 0xFFFF)
+                               (frequency_word >> 32) & 0xFFFF)
                 
         elif isinstance(proc, Sequencer):
             if (mid and not high) or (high and not mid):
@@ -1602,10 +1585,10 @@ class Channel(PythonProcessorCacheable):
                 frequency_base_reg += 16*2 
             if high:
                 proc.bus_write(address=frequency_base_reg, 
-                               data=(frequency >> 16) & 0xFFFFFFFF)
+                               data=(frequency_word >> 16) & 0xFFFFFFFF)
             if low:
                 proc.bus_write(address=frequency_base_reg+1, 
-                               data=frequency & 0xFFFF)
+                               data=frequency_word & 0xFFFF)
         
         else:
             raise TypeError("NCO frequency can only be set in"
@@ -1683,7 +1666,6 @@ class Channel(PythonProcessorCacheable):
                        self.RFDC_def("XRFDC_NCO_UPDT_MODE_MASK"),
                        self.RFDC_def(f"XRFDC_EVNT_SRC_{source.upper()}"))
     
-    @livecallable
     def nco_update_event(self):
         """
         Trigger an NCO update event from the RFDC software driver.
@@ -1908,6 +1890,53 @@ class Channel(PythonProcessorCacheable):
                 
         # Reconfigure the interface width to 128 bits
         self.RFDC_call("SetFabRdVldWords", self.tile, self.block, 128 // 16)
+        
+    def seconds_to_samples(self, duration):
+        """
+        Convert a length of time into an equivalent number of samples for the 
+        given channel.
+        :param duration: Pulse duration in seconds
+        :type duration: float
+        """
+        # Make sure that the requested duration is an integer number of samples
+        duration_samples = int(round(duration * self.interface_sample_frequency))
+        if abs(duration * self.interface_sample_frequency - duration_samples) > 1e-6:
+            raise ValueError("Duration must be equivalent to an integer number of"
+                             f" samples; found {duration * self.interface_sample_frequency} samples.")
+
+        # Make sure that the number of samples in the pulse results in a valid 
+        # number of cycles
+        clock_speed = self.interface_sample_frequency / self.interface_samples_per_cycle
+        duration_cycles = int(round(duration * clock_speed))
+        if abs(duration * clock_speed - duration_cycles) > 1e-6:
+            raise ValueError("Array must be an integer number of cycles;"
+                             f" found {duration * clock_speed} cycles"
+                             f" ({duration_samples} samples).")
+
+        return duration_samples
+    
+    def frequency_to_nco_tuning_word(self, frequency):
+        """
+        Converts a frequency in Hz to the nearest integer tuning word for the
+        NCO.
+        :param frequency: Frequency in Hz
+        :type frequency: float
+        :return: NCO tuning word corresponding to the provided frequency
+        :rtype: int
+        """
+        
+        # If we're using IMR mode, the NCO frequency is half
+        nco_sample_frequency = self.analog_sample_frequency if self.analog_sample_frequency < 7e9 else self.analog_sample_frequency / 2
+            
+        word = frequency / nco_sample_frequency
+        
+        # Move the desired NCO frequency into the proper Nyquist zone
+        while word > 0.5:
+            word -= 0.5
+        while word < -0.5:
+            word += 0.5
+            
+        return np.int64(round(word * (2**48)))
     
 class RFClk:
     """
@@ -1921,7 +1950,6 @@ class RFClk:
             raise ValueError(f"Call to {name} failed.")
         
     @classmethod
-    @livecallable()
     def init(cls):
         """
         Initialize the xrfclk driver.
@@ -1941,12 +1969,10 @@ class RFClk:
             pass
         
         @classmethod
-        @livecallable()
         def reset(cls):
             RFClk.call("ResetChip", cls.chip_id())
             
         @classmethod
-        @livecallable()
         def set_config(cls, config_id=1):
             """
             Set a configuration present in the driver on the chip.
@@ -1954,7 +1980,6 @@ class RFClk:
             RFClk.call("SetConfigOnOneChipFromConfigId", cls.chip_id(), config_id)
             
         @classmethod
-        @livecallable(imperative=False)
         def read_reg(cls, address):
             """
             Read a register on the chip.
@@ -1964,7 +1989,6 @@ class RFClk:
             return value[0]
         
         @classmethod
-        @livecallable()
         def write_reg(cls, address, data):
             """
             Write a register on the chip.
@@ -2004,7 +2028,6 @@ class RFClk:
             cls.write_reg(address, data & mask & 0xFF)
         
         @classmethod
-        @livecallable()
         def set_output_divider(cls, output, div):
             """
             Set the value of an output divider on a DCLK output.
@@ -2012,7 +2035,6 @@ class RFClk:
             cls.write_reg(0x100 + 4*output, div & 0x1F)
             
         @classmethod
-        @livecallable(imperative=False)
         def get_output_divider(cls, output):
             """
             Set the value of an output divider on a DCLK output.
@@ -2023,7 +2045,6 @@ class RFClk:
             return reg
         
         @classmethod
-        @livecallable()
         def set_input(cls, clkin):
             """
             Set the clock input mux.
@@ -2031,7 +2052,6 @@ class RFClk:
             cls.write_reg(0x147, (clkin << 4) | (2 << 2) | (2 << 0))
             
         @classmethod
-        @livecallable(imperative=False)
         def get_input(cls):
             """
             Get the setting of the clock input mux.
@@ -2040,47 +2060,38 @@ class RFClk:
             return reg & 0x7
         
         @classmethod
-        @livecallable()
         def set_input_R(cls, clkin, R):
             cls.write_reg16(0x153 + 2*clkin, R, mask=0x3FFF)
         
         @classmethod
-        @livecallable(imperative=False)
         def get_input_R(cls, clkin):
             return cls.read_reg16(0x153 + 2*clkin) & 0x3FFF
         
         @classmethod
-        @livecallable()
         def set_PLL2_R(cls, N):
             cls.write_reg16(0x160, N, mask=0x0FFF)
         
         @classmethod
-        @livecallable(imperative=False)
         def get_PLL2_R(cls):
             return cls.read_reg16(0x160) & 0x0FFF
         
         @classmethod
-        @livecallable()
         def set_PLL1_N(cls, N):
             cls.write_reg16(0x159, N, mask=0x3FFF)
         
         @classmethod
-        @livecallable(imperative=False)
         def get_PLL1_N(cls):
             return cls.read_reg16(0x159) & 0x3FFF
         
         @classmethod
-        @livecallable()
         def set_PLL2_N(cls, N):
             cls.write_reg16(0x167, N)
         
         @classmethod
-        @livecallable(imperative=False)
         def get_PLL2_N(cls):
             return cls.read_reg16(0x167)
         
         @classmethod
-        @livecallable(imperative=False)
         def get_PLL2_P(cls):
             reg = cls.read_reg(0x162)
             reg = (reg >> 5) & 0x7
@@ -2151,6 +2162,22 @@ class PSGPIO:
             return proc.bus_write(address=self._sequencer_address, data=data)
         else:
             raise TypeError(f"Unable to access GPIO on processor {proc}.")
+    
+    @staticmethod
+    def sysfs_export(gpio):        
+        if f"gpio{gpio}" not in os.listdir("/sys/class/gpio"):
+            with open(f"/sys/class/gpio/export", "w") as f:
+                f.write(f"{gpio}\n")
+    
+    @staticmethod
+    def sysfs_set_direction(gpio, direction):        
+        with open(f"/sys/class/gpio/gpio{gpio}/direction", "w") as f:
+            f.write(f"{direction}\n")
+        
+    @staticmethod
+    def sysfs_write(gpio, value):
+        with open(f"/sys/class/gpio/gpio{gpio}/value", "w") as f:
+            f.write(f"{value}\n")
         
 @dataclass
 class ZDMA:
@@ -2253,7 +2280,6 @@ class ZDMA:
         """ 
         self._mem = mem.cast("B")
         
-    @livecallable()
     def configure_hardware(self):
         """
         Writes the internally-stored configuration to the hardware.
@@ -2277,7 +2303,6 @@ class ZDMA:
         else:
             raise ValueError(f"Unable to start DMA transfer from processor {proc}.")
             
-    @livecallable(imperative=False)
     def byte_count(self, clear=False):
         """
         :return: The total number of bytes transferred since the last clear.
@@ -2361,7 +2386,6 @@ class AXISSwitch:
         """
         self._mem = mem.cast("I")
     
-    @livecallable()
     def connect(self, mi, si, commit=True):
         """
         Connect a master interface to a slave interface.
@@ -2377,7 +2401,6 @@ class AXISSwitch:
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
     
-    @livecallable()
     def disconnect(self, mi=None, commit=True):
         """
         Disconnect a master interface. If not provided, all are disconnected.
@@ -2395,7 +2418,7 @@ class AXISSwitch:
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
         
-class Acadia(PythonProcessorCacheable):
+class Acadia:
     """
     A class that implements system-wide commands for the Acadia hardware.
     Because of the heteregenous nature of the system, instructions with 
@@ -2403,17 +2426,23 @@ class Acadia(PythonProcessorCacheable):
     performed by the sequencer or the PS) must be carried out in processor
     contexts.
     """
-    firmware = StandardFirmware("/tmp")
-    dma_synchronizer = DMASynchronizer()
 
+    dma_synchronizer = DMASynchronizer()
     def __init__(self):
+        self.firmware = StandardFirmware("/tmp")
+        
         # A dictionary for storing assembled code, which maps memoryviews to
         # the bytes that should be loaded into them
         self._assembled = {}
         
-        # Create the PS and the sequencer
-        self.PS = PythonProcessor()
-        self.sequencer = Sequencer()
+        # Create a list for keeping track of all Sequencer sequences
+        self._sequence = ManagedResource("Sequence", (Sequencer,), {})
+        
+        # We'll adjust the allocation index so that it actually corresponds to
+        # locations in instruction memory
+        # We'll reserve location 0 for jumping to the start of the defined 
+        # sequence
+        self._sequence._allocation_index = 0
                 
         # Make DMAs
         self._dac_dmas = [DMA() for i in range(16)]
@@ -2460,22 +2489,25 @@ class Acadia(PythonProcessorCacheable):
         self._attach_resource(self.CacheArray, mem_cast="I")
         
         self._sequencer_instruction_memory = self._attach_memory(
-            address=self.firmware["mem_decoder"]["instruction_mem"].address().value()*16,
-            size=StandardFirmware.INSTRUCTION_MEM_SIZE_BITS // 8)  
+            address=StandardFirmware.INSTRUCTION_MEMORY_ADDRESS,
+            size=StandardFirmware.INSTRUCTION_MEMORY_SIZE_BITS // 8)  
         
         self._dac_dma_descriptor_memory = [self._attach_memory(
-            address=self.firmware["mem_decoder"][f"dac_dma{i}_descriptor_mem"].address().value()*16,
-            size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 8,
+            address=(StandardFirmware.DAC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
+                    + i*(StandardFirmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
+            size=StandardFirmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
             mem_cast='Q') for i in range(16)]
                 
         self._adc_dma_descriptor_memory = [self._attach_memory(
-            address=self.firmware["mem_decoder"][f"adc_dma{i}_descriptor_mem"].address().value()*16,
-            size=StandardFirmware.ADC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 8,
+            address=(StandardFirmware.ADC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
+                    + i*(StandardFirmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
+            size=StandardFirmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
             mem_cast='Q') for i in range(4)]
         
         self._cmacc_dma_descriptor_memory = [self._attach_memory(
-            address=self.firmware["mem_decoder"][f"cmacc_dma{i}_descriptor_mem"].address().value()*16,
-            size=StandardFirmware.CMACC_DMA_DESCRIPTOR_MEM_SIZE_BITS // 8,
+            address=(StandardFirmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
+                    + i*(StandardFirmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
+            size=StandardFirmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
             mem_cast='Q') for i in range(4)]
             
         for dac_mem in self.DACArray:
@@ -2493,7 +2525,7 @@ class Acadia(PythonProcessorCacheable):
         
         # Connect to the ADC AXIS switch
         self._ADC_AXIS_switch.attach(self._attach_memory(
-            address=StandardFirmware.ADC_AXIS_SWITCH_ADDR, 
+            address=StandardFirmware.ADC_AXIS_SWITCH_ADDRESS, 
             size=0x1000))
         
         # Connect to the PS GDMA
@@ -2506,35 +2538,19 @@ class Acadia(PythonProcessorCacheable):
         PSGPIO.attach(self._attach_memory(0xFF0A0000, 0x400))
         
         # Connect to the clock wizard
-        self.clk_wiz = self._attach_memory(address=self.firmware.CLK_WIZ_ADDR, size=2**18)  
+        self.clk_wiz = self._attach_memory(address=StandardFirmware.CLK_WIZ_ADDRESS, size=2**18)  
             
-        # Configure and connect to the sysfs interface for the GPIO driving
-        # the sequencer run and reset pins
-        self._sequencer_gpio_base = Acadia._get_gpio_base(0x8001_0000)
-        
-        if f"gpio{self._sequencer_gpio_base}" not in os.listdir("/sys/class/gpio"):
-            with open(f"/sys/class/gpio/export", "w") as f:
-                f.write(f"{self._sequencer_gpio_base}\n")
-            
-        with open(f"/sys/class/gpio/gpio{self._sequencer_gpio_base}/direction", "w") as f:
-            f.write(f"out\n")
-            
-        with open(f"/sys/class/gpio/gpio{self._sequencer_gpio_base}/value", "w") as f:
-            f.write(f"0\n")
+        # Configure and connect to the sysfs interface for various GPIO        
+        self._sequencer_gpio = 334 + 3*26 + StandardFirmware.GPIO_SEQUENCER_RUN
+        PSGPIO.sysfs_export(self._sequencer_gpio)
+        PSGPIO.sysfs_set_direction(self._sequencer_gpio, "out")
+        PSGPIO.sysfs_write(self._sequencer_gpio, 0)
             
         self._ddr_gpio_base = Acadia._get_gpio_base(0x8002_0000)
+        PSGPIO.sysfs_export(self._ddr_gpio_base)
+        PSGPIO.sysfs_set_direction(self._ddr_gpio_base, "out")
+        PSGPIO.sysfs_write(self._ddr_gpio_base, 0)
         
-        if f"gpio{self._ddr_gpio_base}" not in os.listdir("/sys/class/gpio"):
-            with open(f"/sys/class/gpio/export", "w") as f:
-                f.write(f"{self._ddr_gpio_base}\n")
-            
-        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/direction", "w") as f:
-            f.write(f"out\n")
-            
-        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/value", "w") as f:
-            f.write(f"0\n")
-        
-            
     def detach(self):
         """
         Unmaps all system memory.
@@ -2542,13 +2558,51 @@ class Acadia(PythonProcessorCacheable):
         for m in self._mem_maps:
             m.close()
             
+            
+    # ---------------- COMPILATION FUNCTIONS ---------------------- #
+    
+    def sequence(self, func):
+        """
+        Compiles a Python functiond as a sequence for the Acadia sequencer. 
+        The wrapped function should accept an instance of :class:`Acadia` as
+        its sole argument.
+        
+        :param func: Function to be compiled as a Sequencer sequence.
+        :type func: callable with one argument of type :class:`Sequencer`
+        :return: A :class:`Sequencer` object containing the compiled sequence
+        :rtype: :class:`Sequencer`
+        """
+        # Get a new sequence resource
+        s = self._sequence()
+        
+        # Store this particular Sequencer instance as an instance member of the 
+        # Acadia object so that helper functions of the Acadia object know to 
+        # use it
+        self.active_sequencer = s
+        
+        # Call the function to populate the sequencer object and compile it
+        with s:
+            func(self)
+        
+        # Because the sequence resource object was created before we knew its 
+        # size and because we know that the size won't change from this point,
+        # we can update the size of the instance and the allocation index of
+        # the sequence resource
+        s.size = s.Instruction.usage()
+        
+        # -1 because the index was incremented by 1 when the resource was 
+        # instantiated
+        self._sequence._allocation_index += s.size-1 
+        
+        return s
+            
     def compile_all(self):
         """
         Compiles the programs for all internally-stored :class:`Processor` 
         objects.
         """
-        self.PS.compile_all()
-        self.sequencer.compile_all()
+        for s in self._sequence.instances:
+            s.compile_all()
         for dma in self._dac_dmas:
             dma.compile_all()
         for dma in self._ADCDMA.instances:
@@ -2556,35 +2610,120 @@ class Acadia(PythonProcessorCacheable):
         for dma in self._CMACCDMA.instances:
             dma.compile_all()
         
-    def assemble(self, load=False):
+    def assemble(self, load=False, sequencer=True, dac_dmas=True, adc_dmas=True, cmacc_dmas=True):
         """
-        Loads instruction memory for all internally-stored :class:`Processor` 
-        objects.
+        Assembles and optionally loads instruction memory for some or all 
+        internally-stored :class:`Processor` objects.
+        :param load: If `True`, will only assemble and not load memory.
+        :type load: bool
+        :param sequencer: If `False`, the sequencer instructions will not be
+        assembled or loaded.
+        :type sequencer: bool
+        :param dac_dmas: If `False`, the DAC DMA descriptor memory will not be
+        assembled or loaded.
+        :type dac_dmas: bool
+        :param adc_dmas: If `False`, the ADC DMA descriptor memory will not be
+        assembled or loaded.
+        :type adc_dmas: bool
+        :param cmacc_dmas: If `False`, the CMACC DMA descriptor memory will not
+        be assembled or loaded.
+        :type cmacc_dmas: bool
         """
-        self.PS.assemble()
         
-        for idx_instr,instr in enumerate(self.sequencer._compiled_program):
-            assembled = instr.assemble()
-            if load:
-                self._sequencer_instruction_memory[idx_instr*16 : (idx_instr+1)*16] = assembled.to_bytes(16, "little")
+        if sequencer:
+            for s in self._sequence.instances:
+                for idx_instr,instr in enumerate(s._compiled_program):
+                    assembled = instr.assemble()
+                    if load:
+                        address = (s._resource_id + idx_instr)*16
+                        self._sequencer_instruction_memory[address : address+16] = assembled.to_bytes(16, "little")
+        
+        if dac_dmas:
+            for i,dma in enumerate(self._dac_dmas):
+                for idx_instr,instr in enumerate(dma._compiled_program):
+                    assembled = instr.assemble()
+                    if load:
+                        self._dac_dma_descriptor_memory[i][idx_instr] = assembled
                 
-        for i,dma in enumerate(self._dac_dmas):
-            for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = instr.assemble()
-                if load:
-                    self._dac_dma_descriptor_memory[i][idx_instr] = assembled
+        if adc_dmas:
+            for dma in self._ADCDMA.instances:
+                for idx_instr,instr in enumerate(dma._compiled_program):
+                    assembled = instr.assemble()
+                    if load:
+                        self._adc_dma_descriptor_memory[dma._resource_id][idx_instr] = assembled
+        
+        if cmacc_dmas:
+            for dma in self._CMACCDMA.instances:
+                for idx_instr,instr in enumerate(dma._compiled_program):
+                    assembled = instr.assemble()
+                    if load:
+                        self._cmacc_dma_descriptor_memory[dma._resource_id][idx_instr] = assembled
+                        
+    def assemble_simulation(self, sequencer=True, dac_dmas=True, adc_dmas=True, cmacc_dmas=True):
+        """
+        Identical to :meth:`assemble`, but creates a string for loading memory
+        in Verilog testbenches connected to the Zynq Ultrascale AXI VIP.
+        """
+        sim_string = ""
+        if sequencer:
+            for s in self._sequence.instances:
+                for idx_instr,instr in enumerate(s._compiled_program):
+                    assembled = instr.assemble()
+                    address = (s._resource_id + idx_instr)*16
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{address + StandardFirmware.INSTRUCTION_MEMORY_ADDRESS : X}, 16, 128'h{assembled:032X}, resp);\n"
+        
+        if dac_dmas:
+            for i,dma in enumerate(self._dac_dmas):
+                for idx_instr,instr in enumerate(dma._compiled_program):
+                    assembled = instr.assemble()
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{StandardFirmware.DAC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + i*(StandardFirmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8): X}, 8, 64'h{assembled:016X}, resp);\n"
                 
-        for dma in self._ADCDMA.instances:
-            for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = instr.assemble()
-                if load:
-                    self._adc_dma_descriptor_memory[dma._resource_id][idx_instr] = assembled
-                
-        for dma in self._CMACCDMA.instances:
-            for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = instr.assemble()
-                if load:
-                    self._cmacc_dma_descriptor_memory[dma._resource_id][idx_instr] = assembled
+        if adc_dmas:
+            for dma in self._ADCDMA.instances:
+                for idx_instr,instr in enumerate(dma._compiled_program):
+                    assembled = instr.assemble()
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{StandardFirmware.ADC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + dma._resource_id*(StandardFirmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
+        
+        if cmacc_dmas:
+            for i,dma in self._CMACCDMA.instances:
+                for idx_instr,instr in enumerate(dma._compiled_program):
+                    assembled = instr.assemble()
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{StandardFirmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + dma._resource_id*(StandardFirmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
+                    
+        return sim_string
+                        
+    # -------------- HIGH-LEVEL JOINT PS-PL ROUTINES ----------- #
+    
+    def channel(self, *args, **kwargs):
+        """
+        Get a channel from this Acadia system. All arguments are passed 
+        directly to the constructor for :class:`Channel`.
+        """
+        c = Channel(*args, **kwargs)
+        c._parent = self
+        return c
+        
+    def DAC(self, *args, **kwargs):
+        """
+        :return: a :class:`Channel` representing a DAC.
+        :rtype: :class:`Channel`
+        """
+        c = self.channel(*args, is_dac=True, **kwargs)
+        c.interface_sample_frequency = 1.2e9
+        c.analog_sample_frequency = 4.8e9 if c.tile == 0 or c.tile == 1 else 9.6e9
+        c.interface_samples_per_cycle = 4
+        return c
+
+    def ADC(self, *args, **kwargs):
+        """
+        :return: a :class:`Channel` representing an ADC.
+        :rtype: :class:`Channel`
+        """
+        c = self.channel(*args, is_dac=False, **kwargs)
+        c.interface_sample_frequency = 1.2e9
+        c.analog_sample_frequency = 1.2e9 if c.tile == 0 else 2.4e9
+        c.interface_samples_per_cycle = 4
+        return c
             
     def memcpy(self, src, dst, size=None, block=True, ps_fci=False, ps_fci_side=None):
         """
@@ -2629,7 +2768,8 @@ class Acadia(PythonProcessorCacheable):
         proc = Processor.active_processor()
         if ((isinstance(src, bytes) 
                  or isinstance(src, Symbol) 
-                 or isinstance(src, Operation)) 
+                 or isinstance(src, Operation)
+                 or isinstance(src, np.ndarray)) 
                 and isinstance(type(dst), ManagedMemory)):
             if size > 2**30:
                 raise ValueError(f"Size must be less than 1 GB; received {size}.")
@@ -2641,14 +2781,7 @@ class Acadia(PythonProcessorCacheable):
                 if not hasattr(dst, "memory"):
                     raise ValueError("Destination resource not attached.")
                 # Loading from virtual memory, can't use DMA
-                dst.memory.cast("B")[:size] = src
-            elif isinstance(proc, PythonProcessor):
-                # Rather than storing a reference to self, we'll just
-                # call setitem on the memory (better for pickling)
-                proc(proc.call("memoryview.__setitem__", 
-                               proc.call("getattr", dst, "memory"), 
-                               slice(0, size),
-                               src))
+                dst.memory.cast("B")[:size] = src.view(np.uint8) if isinstance(src, np.ndarray) else src
             else:
                 raise TypeError(f"Unable to copy literal into memory on"
                                 f" processor {proc}.")
@@ -2690,7 +2823,7 @@ class Acadia(PythonProcessorCacheable):
                 
                 if block:
                     # Wait until we get a status from the S2MM
-                    with proc.wait_until(proc.bus_read(firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_s2mm"]+1) != 0):
+                    with proc.wait_until(proc.bus_read(self.firmware["sequencer_bus_decoder"]["datamover_controller"]["cfg_dm_s2mm"]+1) != 0):
                         pass
                 return transfer_tag
             else:
@@ -2718,6 +2851,10 @@ class Acadia(PythonProcessorCacheable):
             raise TypeError(f"Channel must be of type `Channel`;"
                             f" received {channel}.")
             
+        if channel.is_dac:
+            raise TypeError(f"Channel must be an ADC;"
+                            f" received {channel}.")
+            
         if not (isinstance(array, self.PSDDRArray)
                 or isinstance(array, self.PLDDR0Array)
                 or isinstance(array, self.PLDDR1Array)
@@ -2739,9 +2876,9 @@ class Acadia(PythonProcessorCacheable):
         trace_length = array.byte_length() // 16
         
         if (integration_kernel is not None 
-                and (integration_kernel.byte_length() // 128) != trace_length):
+                and (integration_kernel.byte_length() // 16) != trace_length):
             raise ValueError(f"Integration kernel length"
-                             f" ({integration_kernel.byte_length() // 128})"
+                             f" ({integration_kernel.byte_length() // 16})"
                              f" does not match trace length ({trace_length}).")
         
         # See if any DMAs are using the same physical channel as the one we
@@ -2774,7 +2911,7 @@ class Acadia(PythonProcessorCacheable):
         
         # Add the descriptor address to the FIFO for the DMA
         descriptor = dma.request_descriptor(trace_address, trace_length, decimate)
-        self.sequencer.bus_write(address=Acadia.firmware["sequencer_bus_decoder"][fifo_name].address().value(),
+        self.active_sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"][fifo_name].address().value(),
                                          data=descriptor)
         
         # Configure the DataMover
@@ -2782,7 +2919,6 @@ class Acadia(PythonProcessorCacheable):
                                    array.byte_address(), 
                                    array.byte_length(), 
                                    tag=datamover_tag)
-        
     
     @dma_synchronizer.synchronized
     def generate(self, channel, array):
@@ -2797,6 +2933,10 @@ class Acadia(PythonProcessorCacheable):
             raise TypeError(f"Channel must be of type `Channel`;"
                             f" received {channel}.")
             
+        if not channel.is_dac:
+            raise TypeError(f"Channel must be a DAC;"
+                            f" received {channel}.")
+            
         dma = self._dac_dmas[channel.num]
         
         # Store a reference to the DMA chosen in the Channel object
@@ -2805,11 +2945,11 @@ class Acadia(PythonProcessorCacheable):
         descriptor = dma.request_descriptor(array.word_address(), 
                                             array.word_length())
         
-        fifo_device = Acadia.firmware["sequencer_bus_decoder"][f"dac_dma{channel.num}_fifo"]
-        return self.sequencer.bus_write(address=fifo_device.address().value(),
+        fifo_device = self.firmware["sequencer_bus_decoder"][f"dac_dma{channel.num}_fifo"]
+        return self.active_sequencer.bus_write(address=fifo_device.address().value(),
                                          data=descriptor)
     
-    def run(self, assembled=True):
+    def configure_adc_switch(self):
         """
         Run the encapsulated program on Acadia hardware. 
         """
@@ -2823,40 +2963,54 @@ class Acadia(PythonProcessorCacheable):
             if dma.Instruction.usage() > 0:
                 self._ADC_AXIS_switch.connect(dma._resource_id+4, dma.physical_channel.num)
 
-        self.PS.run(assembled)
+    def sequencer_run(self, sequence=None):
+        """
+        Runs the sequencer by driving its run pin high. If a Sequence resource 
+        is provided, the instruction memory will be updated to jump to that
+        sequence in instruction memory.
         
-    @livecallable()
-    def sequencer_run(self):
+        :param sequence: The Sequence resource to run.
+        :type sequence: Sequence
         """
-        Runs the sequencer by driving its run pin high.
-        """
-        with open(f"/sys/class/gpio/gpio{self._sequencer_gpio_base}/value", "w") as f:
+        if sequence is not None:
+            jump_instruction = STP(src1=sequence._resource_id, 
+                                    dest1=Destination.PC).assemble()
+            self._sequencer_instruction_memory[0:16] = jump_instruction.to_bytes(16, "little")
+            
+        with open(f"/sys/class/gpio/gpio{self._sequencer_gpio}/value", "w") as f:
             f.write(f"1\n")
 
-    @livecallable()
     def sequencer_halt(self):
         """
         Halts the sequencer by driving its run pin low.
         """
-        with open(f"/sys/class/gpio/gpio{self._sequencer_gpio_base}/value", "w") as f:
+        with open(f"/sys/class/gpio/gpio{self._sequencer_gpio}/value", "w") as f:
             f.write(f"0\n")
             
-    @livecallable()
     def reset_plddr0(self):
-        import time
-        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/value", "w") as f:
-            f.write(f"1\n")
+        PSGPIO.sysfs_write(self._ddr_gpio_base, 1)
         time.sleep(0.2)
-        with open(f"/sys/class/gpio/gpio{self._ddr_gpio_base}/value", "w") as f:
-            f.write(f"0\n")
+        PSGPIO.sysfs_write(self._ddr_gpio_base, 0)
         time.sleep(0.2)
+        
+    def reset_logic(self):
+        """
+        Resets the PL logic.
+        """
+        gpio = 334 + 3*26 + 95
+        PSGPIO.sysfs_export(gpio)
+        PSGPIO.sysfs_set_direction(gpio, "out")
+        PSGPIO.sysfs_write(gpio, 0)
+        time.sleep(0.01)
+        PSGPIO.sysfs_write(gpio, 1)
+        time.sleep(0.01)
         
     def dma_trigger(self, mask):
         """
         Triggers the DMAs according to a provided bitmask.
         """
         dma_trigger_device = self.firmware["sequencer_bus_decoder"]["dma_trigger"]
-        self.sequencer.bus_write(address=dma_trigger_device.address().value(),
+        self.active_sequencer.bus_write(address=dma_trigger_device.address().value(),
                                  data=mask)
         
     def dma_block(self, mask):
@@ -2864,16 +3018,12 @@ class Acadia(PythonProcessorCacheable):
         Wait until the DMAs specified in the mask are not running.
         """
         dma_running_device = self.firmware["sequencer_bus_decoder"]["dma_running"]
-        dma_running = self.sequencer.bus_read(dma_running_device.address().value())
-        with self.sequencer.wait_until(dma_running & mask == 0):
+        dma_running = self.active_sequencer.bus_read(dma_running_device.address().value())
+        with self.active_sequencer.wait_until(dma_running & mask == 0):
             pass
     
     ########################### UTILITY METHODS ##############################
-    # In contrast to the rest of this library, these functions may depend on #
-    # numpy.                                                                 #
-    ##########################################################################
     @classmethod
-    @livecallable(imperative=False)
     def seconds_to_samples(cls, duration, clock_speed=300e6, samples_per_cycle=4):
         """
         Create an array of zeros with the correct size and type given the length of
@@ -2903,7 +3053,6 @@ class Acadia(PythonProcessorCacheable):
         return duration_samples
 
     @classmethod
-    @livecallable(imperative=False)
     def to_samples(cls, array):
         """
         Convert arrays of complex numbers ranging from -1 to 1 into samples for
@@ -2914,25 +3063,25 @@ class Acadia(PythonProcessorCacheable):
         :param array: Input array of numbers to be converted into samples
         :type array: numpy.ndarray
         """
-        import numpy
+
         # Check shape properties
         if array.ndim != 1:
             raise ValueError("Arrays must be 1D.")
 
-        if (array.dtype == numpy.float32
-                or array.dtype == numpy.float64
-                or array.dtype == numpy.complex128):
-            array = array.astype(numpy.complex64)
-        elif array.dtype != numpy.complex64:
+        if (array.dtype == np.float32
+                or array.dtype == np.float64
+                or array.dtype == np.complex128):
+            array = array.astype(np.complex64)
+        elif array.dtype != np.complex64:
             raise TypeError(f"Numpy array dtype must be `np.complex64`"
                             f" or be able to be casted to `np.complex64`;"
                             f" received {array.dtype}.")
 
         array *= 2**13 - 1
-        array = array.round().view(numpy.float32).astype(numpy.int16)
+        array = array.round().view(np.float32).astype(np.int16)
         array <<= 2
         
-        return array.view(dtype=numpy.uint8)
+        return array.view(dtype=np.uint8)
     
     ########################### HELPER METHODS #############################
         
@@ -2964,7 +3113,7 @@ class Acadia(PythonProcessorCacheable):
             elif isinstance(proc, PythonProcessor):
                 return proc.call("memoryview.__getitem__", cache_self, key)
             elif isinstance(proc, Sequencer):
-                return proc.bus_read(Acadia.firmware["sequencer_bus_decoder"]["cache"].address().value() + key)
+                return proc.bus_read(self.firmware["sequencer_bus_decoder"]["cache"].address().value() + key)
             raise TypeError(f"Unable to access cache on processor {proc}.")
             
         def _cache_setitem(cache_self, key, value):
@@ -2974,7 +3123,7 @@ class Acadia(PythonProcessorCacheable):
             elif isinstance(proc, PythonProcessor):
                 proc.call("memoryview.__setitem__", cache_self, key, value)
             elif isinstance(proc, Sequencer):
-                proc.bus_write(address=Acadia.firmware["sequencer_bus_decoder"]["cache"].address().value() + key,
+                proc.bus_write(address=self.firmware["sequencer_bus_decoder"]["cache"].address().value() + key,
                                data=value)
             raise TypeError(f"Unable to access cache on processor {proc}.")
         
@@ -2984,40 +3133,42 @@ class Acadia(PythonProcessorCacheable):
              "__getitem__": _cache_getitem, 
              "__setitem__": _cache_setitem},
             base_word_address=self.firmware["sequencer_bus_decoder"]["cache"].address().value(),
-            base_byte_address=StandardFirmware.BRAM_CTRL_CACHE_ADDR,
+            base_byte_address=StandardFirmware.CACHE_MEMORY_ADDRESS,
             word_width=32,
-            pool_size=StandardFirmware.CACHE_SIZE_BITS // 32)
+            pool_size=StandardFirmware.CACHE_MEMORY_SIZE_BITS // 32)
         
     def _create_dac_arrays(self):
         self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {},
             base_word_address=0,
-            base_byte_address=self.firmware["dac_mem_decoder"][f"dac_dma{i}_mem"].address().value()*16,
+            base_byte_address=(StandardFirmware.DAC_MEMORY_BASE_ADDRESS 
+                               + i*(StandardFirmware.DAC_MEMORY_SIZE_BITS // 8)),
             word_width=128,
-            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128) for i in range(16)]
+            pool_size=StandardFirmware.DAC_MEMORY_SIZE_BITS // 128) for i in range(16)]
         
     def _create_cmacc_kernel_arrays(self):
         self.CMACCKernelArray = [ManagedMemory(f"CMACCKernel{i}Array", (), {},
             base_word_address=0,
-            base_byte_address=self.firmware["mem_decoder"][f"cmacc{i}_kernel_mem"].address().value()*16,
+            base_byte_address=(StandardFirmware.CMACC_KERNEL_MEMORY_BASE_ADDRESS 
+                               + i*(StandardFirmware.CMACC_KERNEL_MEMORY_SIZE_BITS // 8)),
             word_width=128,
-            pool_size=StandardFirmware.DAC_MEM_SIZE_BITS // 128) for i in range(4)]
+            pool_size=StandardFirmware.CMACC_KERNEL_MEMORY_SIZE_BITS // 128) for i in range(4)]
         
     def _create_pl_ddr_arrays(self):
         self.PLDDR0Array = ManagedMemory(f"PLDDR0Array", (), {},
-            base_word_address=StandardFirmware.DDR4_C0_ADDR,
-            base_byte_address=StandardFirmware.DDR4_C0_ADDR,
+            base_word_address=StandardFirmware.DDR4_C0_ADDRESS,
+            base_byte_address=StandardFirmware.DDR4_C0_ADDRESS,
             word_width=8,
             pool_size=2**32)
         
         self.PLDDR1Array = ManagedMemory(f"PLDDR1Array", (), {},
-            base_word_address=StandardFirmware.DDR4_C1_ADDR,
-            base_byte_address=StandardFirmware.DDR4_C1_ADDR,
+            base_word_address=StandardFirmware.DDR4_C1_ADDRESS,
+            base_byte_address=StandardFirmware.DDR4_C1_ADDRESS,
             word_width=8,
             pool_size=2**32)
         
     def _create_ps_ddr_arrays(self):
         # PS DDR
-        self.PSDDRArray = ManagedMemory(f"PLDDRArray", (), {},
+        self.PSDDRArray = ManagedMemory(f"PSDDRArray", (), {},
             base_word_address=0x8_0000_0000,
             base_byte_address=0x8_0000_0000,
             word_width=8,
@@ -3114,11 +3265,11 @@ class Acadia(PythonProcessorCacheable):
         # push the complete command into the command FIFO)
         # Configure the S2MM side first so that it is prepared when the
         # MM2S side starts streaming after the command gets pushed in
-        self.sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"]["datamover_controller"][datamover_name]+2, 
+        self.active_sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"]["datamover_controller"][datamover_name]+2, 
                             data=misc_reg)
-        self.sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"]["datamover_controller"][datamover_name]+1, 
+        self.active_sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"]["datamover_controller"][datamover_name]+1, 
                             data=size)
-        self.sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"]["datamover_controller"][datamover_name]+0, 
+        self.active_sequencer.bus_write(address=self.firmware["sequencer_bus_decoder"]["datamover_controller"][datamover_name]+0, 
                             data=addr_reg)
         
     

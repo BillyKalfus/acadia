@@ -15,14 +15,13 @@ def is_numeric(obj):
     :return: `True` if a given object is suitable as a numeric argument for assembly.
     :rtype: `bool`
     """
-    if isinstance(obj, int):
-        return obj.bit_length() <= 32
-    if isinstance(obj, bool):
-        return True
-    if isinstance(obj, Symbol) and obj.value_type() is int:
-        return True
-    if isinstance(obj, DSPConfiguration):
-        return True
+    for t in [int, bool, DSPConfiguration, ProcessorInstruction]:
+        if (isinstance(obj, t) 
+            or (isinstance(obj, Symbol) 
+                and (obj.value_type() is t 
+                    or t in obj.value_type().__bases__))):
+            return True
+        
     if isinstance(obj, Operation):
         if obj._op not in Operable.NUMERIC_OPERATORS:
             return False
@@ -53,7 +52,7 @@ class SequencerDatapathPort(type):
 
         def field_value(self):
             minor_value = self.minor.value() if "value" in dir(self.minor) else self.minor
-            return self.major.value + minor_value
+            return (self.major.value << 3) + minor_value
 
         def field_str(self):
             minor_str = self.minor if self.major is type(self).Major.REG or "DSP" in self.major.name else ""
@@ -76,26 +75,31 @@ class SequencerDatapathPort(type):
 class Source(metaclass=SequencerDatapathPort):
     class Major(Enum):
         REG = 0
-        PC = 8
-        IMM = 16
-        FLAGS = 32
-        STACK = 40
-        BUS_DATA = 48
-        DSP_PATTERN = 56
-        DSP_DATA = 64
+        PC = 1
+        IMM = 2
+        EXT = 3
+        STACK = 4
+        BUS_DATA = 5
+        DSP_PATTERN = 6
+        DSP_P = 7
             
 class Destination(metaclass=SequencerDatapathPort):
+    PC_ABSOLUTE_BRANCH = 0b00
+    PC_RELATIVE_BRANCH = 0b01
+    PC_ABSOLUTE_HOLD   = 0b10
+    PC_RELATIVE_HOLD   = 0b11
+    
     class Major(Enum):
         REG = 0
-        PC = 8
-        HOLD = 16
-        MASK = 24
-        STACK = 40
-        BUS_ADDR = 48
-        BUS_DATA = 56
-        DSP_CFG = 64
-        DSP_AB = 72
-        DSP_C = 80
+        PC = 1
+        MASK = 2
+        EXT = 3
+        STACK = 4
+        BUS_DATA = 5
+        BUS_ADDR = 6
+        DSP_CFG = 7
+        DSP_AB = 8
+        DSP_C = 9
 
 # DSP operating modes
 # All constants come from Xilinx UG579
@@ -108,23 +112,35 @@ class DSPMode:
     alumode: int = 0
     cin: int = 0
     name: str = ""
+    
+    def __contains__(self, key):
+        return key in name
 
 DSP_MODES = {}
 for z_name,z in [("", 0),("P", 0b010), ("C",0b011), ("I", 0b001), ("S", 0b110)]:
     for x_name,x in [("", 0), ("P", 0b10), ("A", 0b11)]:
-        for sign,alumode in [("+", 0b0000), ("-", 0b0011)]:
+        for z_sign,wyxcin_sign,minus_one,alumode in [("+", "+", False, 0b0000), ("+", "-", False, 0b0011), ("-", "+", True, 0b0001), ("-", "-", True, 0b0010)]:
             for w_name,w in [("", 0), ("P", 0b01), ("C", 0b11)]:
                 for y_name,y in [("", 0), ("C", 0b11)]:
                     for set_cin in range(2):
-                        w_str = f"+{w_name}" if w else "+0"
-                        z_str = f"{sign}{z_name}" if z else "+0"
-                        y_str = f"{sign}{y_name}" if y else "+0"
-                        x_str = f"{sign}{x_name}" if x else "+0"
-                        cin_str = f"{sign}1" if set_cin else "+0"
+                        z_str = f"{z_sign}{z_name}" if z else "+0"
+                        w_str = f"{wyxcin_sign}{w_name}" if w else "+0"
+                        y_str = f"{wyxcin_sign}{y_name}" if y else "+0"
+                        x_str = f"{wyxcin_sign}{x_name}" if x else "+0"
+                        
+                        # Because of the +1 associated with CIN and the -1 
+                        # associated with computing the NOT of an arithmetic
+                        # operation in 2's complement, the operation could have
+                        # an additive constant with a couple of different 
+                        # potential values
+                        constant = 0
+                        constant += -set_cin if wyxcin_sign == "-" else set_cin
+                        constant += -1 if minus_one else 0
+                        constant_str = f"{'+' if constant >= 0 else ''}{constant}"
 
                         # Because addition is commutative, generate all permutations
                         # of the operands
-                        for str_pieces in permutations([w_str, z_str, y_str, x_str, cin_str]):
+                        for str_pieces in permutations([w_str, z_str, y_str, x_str, constant_str]):
 
                             key = "".join(str_pieces)
 
@@ -138,8 +154,9 @@ for z_name,z in [("", 0),("P", 0b010), ("C",0b011), ("I", 0b001), ("S", 0b110)]:
                             key = (key.replace("A", "AB")
                                        .replace("I", "PCIN")
                                        .replace("S", "(P >> 17)"))
-
-                            DSP_MODES[key] = DSPMode(w, z, y, x, alumode, set_cin, key)
+                            
+                            if key not in DSP_MODES:
+                                DSP_MODES[key] = DSPMode(w, z, y, x, alumode, set_cin, key)
 
         # Add the two-input logic operations
         if x and z:
@@ -290,10 +307,11 @@ class STP:
     src2: Source = Source.REG
     dest1: Destination = Destination.REG
     dest2: Destination = Destination.REG
-    imm1: [int, bool, Symbol, Operation, DSPConfiguration] = 0
-    imm2: [int, bool, Symbol, Operation, DSPConfiguration] = 0
-    dsp_cep: [Source, Destination, Symbol, Operation] = None
+    imm1: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
+    imm2: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
+    dsp_cep: [Source, Destination, int] = None
     push_return: [bool, int] = False
+    comment: str = None
 
     def __post_init__(self):
         # Check types
@@ -341,19 +359,35 @@ class STP:
         tmp |= self.dest2.value() << 72
         tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
 
-        if (isinstance(self.imm1, Symbol) 
-            or isinstance(self.imm1, Operation)
-            or isinstance(self.imm1, DSPConfiguration)):
-            tmp |= self.imm1.value() << 32
-        else:
-            tmp |= self.imm1 << 32
+        imm1_value = self.imm1
+        while hasattr(imm1_value, "value") or hasattr(imm1_value, "address"):
+            if hasattr(imm1_value, "value"):
+                if callable(imm1_value.value):
+                    imm1_value = imm1_value.value()
+                else:
+                    imm1_value = imm1_value.value
+            if hasattr(imm1_value, "address"):
+                if callable(imm1_value.address):
+                    imm1_value = imm1_value.address()
+                else:
+                    imm1_value = imm1_value.address
 
-        if (isinstance(self.imm2, Symbol) 
-            or isinstance(self.imm2, Operation)
-            or isinstance(self.imm2, DSPConfiguration)):
-            tmp |= self.imm2.value()
-        else:
-            tmp |= self.imm2
+        tmp |= imm1_value << 32
+
+        imm2_value = self.imm2
+        while hasattr(imm2_value, "value") or hasattr(imm2_value, "address"):
+            if hasattr(imm2_value, "value"):
+                if callable(imm2_value.value):
+                    imm2_value = imm2_value.value()
+                else:
+                    imm2_value = imm2_value.value
+            if hasattr(imm2_value, "address"):
+                if callable(imm2_value.address):
+                    imm2_value = imm2_value.address()
+                else:
+                    imm2_value = imm2_value.address
+            
+        tmp |= imm2_value
 
         return tmp
 
@@ -363,10 +397,11 @@ class STC:
     src_tval: Source = Source.REG
     dest_stval: Destination = Destination.REG
     op: int = 0
-    imm_stval: [int, bool, Symbol, Operation, DSPConfiguration] = 0
-    imm_tval: [int, bool, Symbol, Operation, DSPConfiguration] = 0
-    dsp_cep: [Source, Destination, Symbol, Operation] = None
+    imm_stval: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
+    imm_tval: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
+    dsp_cep: [Source, Destination, int] = None
     push_return: bool = False
+    comment: str = None
 
     def __post_init__(self):
         self.name = "STC"
@@ -417,19 +452,35 @@ class STC:
         tmp |= self.op << 72
         tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
 
-        if (isinstance(self.imm_stval, Symbol) 
-            or isinstance(self.imm_stval, Operation)
-            or isinstance(self.imm_stval, DSPConfiguration)):
-            tmp |= self.imm_stval.value() << 32
-        else:
-            tmp |= self.imm_stval << 32
+        imm_stval_value = self.imm_stval
+        while hasattr(imm_stval_value, "value") or hasattr(imm_stval_value, "address"):
+            if hasattr(imm_stval_value, "value"):
+                if callable(imm_stval_value.value):
+                    imm_stval_value = imm_stval_value.value()
+                else:
+                    imm_stval_value = imm1_stval_value.value
+            if hasattr(imm_stval_value, "address"):
+                if callable(imm_stval_value.address):
+                    imm_stval_value = imm_stval_value.address()
+                else:
+                    imm_stval_value = imm_stval_value.address
 
-        if (isinstance(self.imm_tval, Symbol)
-            or isinstance(self.imm_tval, Operation)
-            or isinstance(self.imm_tval, DSPConfiguration)):
-            tmp |= self.imm_tval.value()
-        else:
-            tmp |= self.imm_tval
+        tmp |= imm_stval_value << 32
+
+        imm_tval_value = self.imm_tval
+        while hasattr(imm_tval_value, "value") or hasattr(imm_tval_value, "address"):
+            if hasattr(imm_tval_value, "value"):
+                if callable(imm_tval_value.value):
+                    imm_tval_value = imm_tval_value.value()
+                else:
+                    imm_tval_value = imm_tval_value.value
+            if hasattr(imm_tval_value, "address"):
+                if callable(imm_tval_value.address):
+                    imm_tval_value = imm_tval_value.address()
+                else:
+                    imm_tval_value = imm_tval_value.address
+            
+        tmp |= imm_tval_value
 
         return tmp
     
@@ -455,37 +506,52 @@ class Sequencer(Processor):
             return f"REG{reg_self._resource_id}"
         
         def register_source(reg_self):
-            return Source(Source.REG, reg_self._resource_id)
+            return Source(Source.Major.REG, reg_self._resource_id)
         
         def register_destination(reg_self):
-            return Destination(Destination.REG, reg_self._resource_id)
-            
-        OperableResource = type("OperableResource", (ManagedResource, Operable), {})
-            
-        self.Register = OperableResource(
-            "Register", 
-            (), 
-            {"operator_handler": resource_load,
-             "__str__": register_str,
-             "__repr__": register_str,
-             "load": resource_load,
-             "source": register_source,
-             "destination": register_destination,
-             "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
+            return Destination(Destination.Major.REG, reg_self._resource_id)
+                        
+        reg_dct = {"operator_handler": resource_load,
+                     "__str__": register_str,
+                     "__repr__": register_str,
+                     "load": resource_load,
+                     "source": register_source,
+                     "destination": register_destination}
+        
+        reg_dct.update(Operable.make_operator_functions(["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
                            "mul", "rmul", "imul", 
-                           "xor", "rxor", "ixor", "invert"]},
-            allocation_limit=Sequencer.NUM_REGISTERS)
+                           "xor", "rxor", "ixor", "invert"]))
+            
+        self.Register = ManagedResource("Register", 
+                                        (), 
+                                        reg_dct, 
+                                        allocation_limit=Sequencer.NUM_REGISTERS)
         
         def dsp_str(dsp_self):
             return f"DSP{dsp_self._resource_id}"
             
         def dsp_getitem(dsp_self, key):
-            return Operation("getitem", dsp_self, key)
+            """
+            Get a Destination corresponding to a DSP port.
+            """
+            if key == "AB":
+                return Destination(major=Destination.Major.DSP_AB,
+                                   minor=dsp_self._resource_id)
+            if key == "C":
+                return Destination(major=Destination.Major.DSP_C,
+                                   minor=dsp_self._resource_id)
+            if key == "CFG":
+                return Destination(major=Destination.Major.DSP_CFG,
+                                   minor=dsp_self._resource_id)
+            if key == "P":
+                return dsp_self
+            
+            raise ValueError(f"Invalid DSP port {key}.")
         
         def dsp_source(dsp_self):
-            return Source(Source.DSP_DATA, dsp_self._resource_id)
+            return Source(Source.Major.DSP_P, dsp_self._resource_id)
         
         def dsp_setitem(dsp_self, key, value):
             if key == "AB":
@@ -497,13 +563,7 @@ class Sequencer(Processor):
                            dest=Destination(major=Destination.Major.DSP_C,
                                             minor=dsp_self._resource_id))
             elif key == "P":
-                self.STP(src1=DSPConfiguration(mode="AB", 
-                                               dsp_cep="pulse"), 
-                         dest1=Destination(major=Destination.Major.DSP_CFG,
-                                           minor=dsp_self._resource_id), 
-                         src2=value, 
-                         dest2=Destination(major=Destination.Major.DSP_AB,
-                                           minor=dsp_self._resource_id))
+                self.store(src=value, dest=dsp_self)
                 
             else:
                 raise ValueError(f"Invalid key {key}; must be"
@@ -537,83 +597,69 @@ class Sequencer(Processor):
             for instruction in self.Instruction.instances[start_idx:]:
                 if "dsp_cep" not in instruction.kwargs:
                     instruction.kwargs["dsp_cep"] = dsp_self
-            
-        self.DSP = OperableResource(
-            "DSP", 
-            (), 
-            {"__str__": dsp_str,
-             "__repr__": dsp_str,
-             "load": resource_load,
-             "operator_handler": resource_load,
-             "__setitem__": dsp_setitem,
-             "__getitem__": dsp_getitem,
-             "start_count": dsp_start_count,
-             "stop_count": dsp_stop_count,
-             "enabled": dsp_enabled,
-             "source": dsp_source,
-             "OPERATORS": ["eq", "ne", "gt", "lt", "ge", "le", 
+        
+        dsp_dct = {"__str__": dsp_str,
+                     "__repr__": dsp_str,
+                     "load": resource_load,
+                     "operator_handler": resource_load,
+                     "__setitem__": dsp_setitem,
+                     "__getitem__": dsp_getitem,
+                     "start_count": dsp_start_count,
+                     "stop_count": dsp_stop_count,
+                     "enabled": dsp_enabled,
+                     "source": dsp_source}
+        
+        dsp_dct.update(Operable.make_operator_functions(["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
                            "mul", "rmul", "imul", 
-                           "xor", "rxor", "ixor", "invert"]},
-            allocation_limit=Sequencer.NUM_DSP)
+                           "xor", "rxor", "ixor", "invert"]))
+        
+        self.DSP = ManagedResource("DSP", 
+                                    (), 
+                                    dsp_dct, 
+                                    allocation_limit=Sequencer.NUM_DSP)
      
-    def bus_read(self, address):
+    def bus_read(self, address=None, write_address=True):
         """
-        Reads a value from the bus.
+        Reads a value from the bus. If multiple reads are performed back-to-back, 
+        the additional wait time needed to overcome the bus latency may be 
+        unnecessary and may be excluded by setting `wait` to `False`. Additionally,
+        if the address was already written to the bus address register, it may be
+        unnecessary to write it again, and setting `write_address` to `False` will
+        skip this. 
         """
-        return Operation("bus_read", address)
+        if write_address:
+            if address is None:
+                raise ValueError("Address must be provided when"
+                                 " `write_address=True`.")
+            self.STP(src1=address, dest1=Destination.BUS_ADDR)
+        
+        return Source.BUS_DATA
     
-    @Processor.instruction()
-    def bus_write(self, instruction_resource):
+    def bus_write(self, address, data):
         """
         Writes a value to the bus.
         """
-        if len(instruction_resource.args) > 0:
-            raise ValueError("Positional arguments not supported for store;"
-                             f" received {instruction_resource._args}.")
-    
-        data = instruction_resource.kwargs["data"]
-        address = instruction_resource.kwargs["address"]
-        
-        compiled_addr,addr_instructions,addr_resources = self.compile_source(address)
-        compiled_data,data_instructions,data_resources = self.compile_source(data)
-        
-        instructions = addr_instructions + data_instructions
-        instructions.append(STP(src1=Source.IMM,
-                                imm1=compiled_addr, 
-                                dest1=Destination.BUS_ADDR,
-                                src2=compiled_data, 
-                                dest2=Destination.BUS_DATA))
-        
-        for res in addr_resources + data_resources:
-            res._released = True
-            
-        instruction_resource.compiled = instructions
+        self.STP(src1=address, 
+                dest1=Destination.BUS_ADDR,
+                src2=data, 
+                dest2=Destination.BUS_DATA)
         
     def halt(self):
         """
         Halts the sequencer. The reset pin must be toggled in order for the
         sequencer to execute any further instructions.
         """
-        self.store(src=0, dest=Destination.HOLD)
+        self.store(src=0, dest=Destination(Destination.Major.PC, 
+                                           Destination.PC_RELATIVE_HOLD))
         
     def goto(self, target):
-        self.store(src=target, dest=Destination.PC)
+        self.store(src=target, dest=Destination(Destination.Major.PC, 
+                                                Destination.PC_ABSOLUTE_BRANCH))
         
     def nop(self):
         self.store(src=Source.REG, dest=Destination.REG)
-
-    def compile_all(self):
-        """
-        Calls `Processor.compile_all()` and updates the compiled instructions 
-        to enable any DSP slices as necessary.
-        """
-        super().compile_all()
-        for instruction in self.Instruction.instances:
-            if "dsp_cep" in instruction.kwargs:
-                for compiled_instruction in instruction.compiled:
-                    compiled_instruction["dsp_cep"] = instruction.kwargs["dsp_cep"].source()
             
     @Processor.instruction()
     def STP(self, instruction_resource):
@@ -637,10 +683,12 @@ class Sequencer(Processor):
         :type when: :class:`Operation`, optional
         :param mask: Specifies the value to load into the mask register.
         """
-        
         if len(instruction_resource.args) > 0:
-            raise ValueError("Positional arguments not supported for store;"
-                             f" received {instruction_resource._args}.")
+            raise ValueError(f"Positional arguments not supported for store;"
+                             f" must specify the source with the `src` keyword"
+                             f" argument and the destination with the `dest`"
+                             f" keyword argument."
+                             f" Received {instruction_resource._args}.")
             
         # We need src and dest; these will throw KeyError if they aren't 
         # present, which is basically our desired behavior so no need to 
@@ -648,38 +696,21 @@ class Sequencer(Processor):
         kwargs = instruction_resource.kwargs
         src = kwargs["src"]
         dest = kwargs["dest"]
-                
-        # Convert dest into a Destination if necessary
-        if isinstance(dest, Operation):
-            if dest._op == "getitem" and isinstance(dest._args[0], self.DSP):
-                # Store directly into the port
-                if dest._args[1] == "AB":
-                    dest = Destination(major=Destination.Major.DSP_AB,
-                                       minor=dsp_self._resource_id)
-                elif dest._args[1] == "C":
-                    dest = Destination(major=Destination.Major.DSP_C,
-                                       minor=dsp_self._resource_id)
-                elif dest._args[1] == "P":
-                    # Handle below by replacing dest with the resource itself
-                    dest = dest._args[0]
-                elif dest._args[1] == "CFG":
-                    dest = Destination(major=Destination.Major.DSP_CFG,
-                                       minor=dsp_self._resource_id)
-                else:
-                    raise ValueError(f"Invalid DSP key {dest._args[1]}.")
-            else:
-                raise ValueError(f"Unable to store into destination {dest}.")
-        elif isinstance(dest, self.Register):
-            dest = Destination(major=Destination.Major.REG, 
-                               minor=dest._resource_id)
         
         # Some other optional settings; we don't want to pop these from kwargs
         # because we want to keep the Instruction dict intact
         when = kwargs["when"] if "when" in kwargs else None
         mask = kwargs["mask"] if "mask" in kwargs else None
         dsp_cep = kwargs["dsp_cep"] if "dsp_cep" in kwargs else None
-        push_return = kwargs["push_return"] if "push_return" in kwargs else False
-        allow_hold = kwargs["allow_hold"] if "allow_hold" in kwargs else False
+        push_return = kwargs["push_return"] if "push_return" in kwargs else False    
+            
+        # Check that we have valid destinations
+        if isinstance(dest, self.Register):
+            dest = Destination(major=Destination.Major.REG, 
+                               minor=dest._resource_id)
+        elif not (isinstance(dest, self.DSP) or isinstance(dest, Destination)):
+            raise TypeError("The `dest` field must be either a `Register`,"
+                            " `DSP`, or `Destination`.")
                                                                         
         if isinstance(dsp_cep, self.DSP):
             dsp_cep = dsp_cep.source()
@@ -690,24 +721,15 @@ class Sequencer(Processor):
             instructions += condition_instructions
         
         if isinstance(src, Operation):    
-            # If it's not a compatible argument, it must be an Operation that
-            # requires compilation and computation with a DSP slice.
-            # If the destination is itself a DSP slice, we can pass that down
-            # so that the compiled instructions just do the computation in the
-            # desired destination slice.
-            # Otherwise, after compiling we'll need to add our own instruction
-            # to write the computed result from the slice into the destination
-            if isinstance(dest, self.DSP):
-                # Load P through AB
+            # If the destination is a DSP, we may be able to do the calculation in-place
+            if isinstance(dest, self.DSP):    
                 compiled_src,src_instructions,src_resources = self.compile_source(src, dsp=dest)
                 instructions += src_instructions
             else:
                 compiled_src,src_instructions,src_resources = self.compile_source(src)
                 instructions += src_instructions
-                dest_field = Destination(major=Destination.Major.REG, 
-                                         minor=dest._resource_id) if isinstance(dest, self.Register) else dest
                 instructions.append(STP(src1=compiled_src, 
-                                         dest1=dest_field,
+                                         dest1=dest,
                                          dsp_cep=dsp_cep,
                                          push_return=push_return))
         else:
@@ -722,13 +744,11 @@ class Sequencer(Processor):
                     
                 # Load P through AB
                 instructions.append(STP(src1=Source.IMM, 
-                                         dest1=Destination(Destination.Major.DSP_CFG, 
-                                                           dest._resource_id), 
+                                         dest1=dest["CFG"], 
                                          imm1=DSPConfiguration(mode="AB", 
                                                                dsp_cep="pulse"),
                                          src2=compiled_src, 
-                                         dest2=Destination(Destination.Major.DSP_AB, 
-                                                           dest._resource_id),
+                                         dest2=dest["AB"],
                                          dsp_cep=dsp_cep,
                                          push_return=push_return))
             else:                
@@ -756,72 +776,46 @@ class Sequencer(Processor):
         source value; these resources and the additional instructions needed to
         operate them will be returned along with the compiled argument.
         :param obj: Object to translate
-        :param dsp: A pre-allocated DSP slice for use in the computation.
-        :type dsp: :class:`self.DSPSlice`
+        :param dsp: If the eventual destination of the source is a DSP slice, 
+        this argument will contain the DSP object.
+        :type dsp: :class:`self.DSP`
         :return: A reference to the object ready to be assembled, a `list` of 
         generated instructions, and a `list` of allocated resources.
         """
 
-        if dsp and not isinstance(dsp, self.DSP):
-            raise TypeError(f"Provided DSP resource must be of type DSP;"
+        if dsp is not None and not isinstance(dsp, self.DSP):
+            raise TypeError(f"Provided DSP destination must be of type DSP;"
                             f" received {dsp}.")
         
         if is_numeric(obj) or isinstance(obj, Source):
-            return obj,[],[]
+            return obj, [], []
         
-        if isinstance(obj, self.Register):
-            return Source(major=Source.Major.REG, minor=obj._resource_id),[],[]
-        
-        if isinstance(obj, self.DSP):
-            return Source(major=Source.Major.DSP_DATA, minor=obj._resource_id),[],[]
-        
-        if hasattr(obj, "address"):
-            if callable(obj.address):
-                return obj.address(),[],[]
-            return obj.address,[],[]
-        
-        if isinstance(obj, Symbol) and "address" in dir(obj.value_type()):
-            if callable(obj.value_type().address):
-                return obj.value().address(),[],[]
-            return obj.value().address,[],[]
+        if isinstance(obj, self.Register) or isinstance(obj, self.DSP):
+            return obj.source(), [], []
 
         # An Operation involving a resource; compile recursively
         # The if statements above along with the "getitem" Operation form
         # the bases cases for the recursion
         if isinstance(obj, Operation):
-               
             # Check that we have the right argument structure. invert will take
             # exactly one argument, otherwise we need exactly two. In both 
-            # cases, there should be no keyword arguments since this was 
-            # created by an operator (presumably)
+            # cases, there should be no keyword arguments
             if len(obj._kwargs) > 0:
                 raise ValueError(f"Operation expects no keywords arguments;"
                                  f" received {obj._kwargs}.")
-                
-            elif obj._op in ["invert", "bus_read"]:
-                # Using this if structure (instead of just anding the two
-                # conditions together) so that we don't execute the next elif
-                # when the op is invert or bus_read
-                if len(obj._args) != 1:
-                    raise ValueError(f"Operation expects one argument;"
-                                     f" received {obj}.")
-                
-            elif len(obj._args) != 2:
+            
+            if obj._op == "invert":
+                # This is the only operation that takes one argument. 
+                # To make the compiler simpler, we can replace inversion 
+                # with an XOR of all 1's
+                return self.compile_source(
+                            Operation("xor", obj._args[0], 0xFFFFFFFF), 
+                            dsp=dsp)
+            
+            if len(obj._args) != 2:
                 raise ValueError(f"Operations inside of arguments"
                                  f" should have two arguments and"
                                  f" no keywords; received {obj}.")
-            
-            # Handle bus operations
-            if obj._op == "bus_read":
-                addr,addr_instructions,addr_resources = self.compile_source(obj._args[0])
-                addr_instructions.append(STP(src1=Source.IMM, imm1=addr, dest1=Destination.BUS_ADDR))
-                addr_instructions.append(STP())
-                addr_instructions.append(STP())
-                addr_instructions.append(STP())
-                addr_instructions.append(STP())
-                for res in addr_resources:
-                    res._released = True
-                return Source.BUS_DATA,addr_instructions,[]
                 
             
             instructions = []
@@ -831,115 +825,83 @@ class Sequencer(Processor):
             # non-trivial mathematical operation on hardware on actual 
             # hardware resources (the case where the operation is between 
             # numerics is handled in is_numeric).
-            # If we were given a DSP slice, we have to decide which
-            # argument to give it to when compiling, since either one could
-            # require its own slice for temporary argument compilation
-            # We'll (arbitrarily) choose to give it to arg1 if arg1 is an
-            # Operation, and if it's not then we'll give it to arg2
-            arg1_dsp = dsp if isinstance(obj._args[0], Operation) else None
-            arg2_dsp = dsp if not isinstance(obj._args[0], Operation) else None
-                        
-            # Now, actually compile the arguments
-            arg1,arg1_instructions,arg1_resources = self.compile_source(obj._args[0], dsp=arg1_dsp)
-            instructions += arg1_instructions
-            resources += arg1_resources
-                
-            if obj._op != "invert":
-                arg2,arg2_instructions,arg2_resources = self.compile_source(obj._args[1], dsp=arg2_dsp)
-                instructions += arg2_instructions
-                resources += arg2_resources
-                
-            # If we're not given a DSP slice to use and we didn't allocate one
-            # when compiling arg1 and arg2, we must allocate one here
-            # We will choose to use a DSP slice allocated during the 
-            # compilation of arg2 before using that of arg1, because the one
-            # allocated most recently will be able to have greater flexibility
-            # in using previously-allocated slices for its PCIN input
-            if dsp is not None:
-                current_dsp = dsp
-            elif obj._op != "invert" and arg2_resources and isinstance(arg2_resources[0], self.DSP):
-                current_dsp = arg2_resources[0]
-            elif arg1_resources and isinstance(arg1_resources[0], self.DSP):
-                current_dsp = arg1_resources[0]
-            else:
+            
+            # We first need to compile the arguments into things that the DSP
+            # slices can natively operate on
+            args = [None, None]
+            for i in range(2):
+                args[i],arg_instructions,arg_resources = self.compile_source(obj._args[i])
+                instructions += arg_instructions
+                resources += arg_resources
+                    
+            if args[0] is None or args[1] is None:
+                raise ValueError(f"Argument compilation failed;"
+                                 f" received {args}.")
+            
+            # Figure out what DSP slice we'll use to carry out the computation
+            # If we were given a DSP slice, it means we'll use it for an 
+            # in-place calculation
+            current_dsp = dsp
+            
+            # See if a DSP slice was allocated when compiling the arguments
+            # Reverse the list of resources to prioritize reusing a DSP slice
+            # allocated during the compilation of the last argument, because 
+            # the one allocated most recently will be able to have greater 
+            # flexibility in using previously-allocated slices for its PCIN 
+            # input
+            if current_dsp is None:
+                for res in reversed(resources):
+                    if isinstance(res, self.DSP):
+                        current_dsp = res
+                        break
+            
+            # If we still don't have a DSP slice, allocate one now
+            if current_dsp is None:
                 current_dsp = self.DSP()
                 resources.append(current_dsp)
                 
-            # Now, determine the arguments to the slices and how they must
-            # physically enter. By default, they'll need to be loaded into the
-            # external inputs exposed to the datapath
+            # Now, determine how the arguments of the operation will enter the 
+            # DSP slice performing it. By default, they'll need to be loaded 
+            # into the external inputs exposed to the datapath
             # If the arguments are AB and C, we'll need separate instructions
             # to configure the DSP and load its inputs; otherwise, we can do 
             # this in one cycle
-            arg1_input = "AB"
-            arg2_input = "C"
-            if isinstance(arg1, Source) and "DSP" in arg1.major.name:                
-                # If we're operating on the current DSP, use the P register
-                if arg1.minor == current_dsp._resource_id:
-                    arg1_input = "P"
-                    
-                # If we're operating on the lower neighboring DSP, use the cascade input
-                elif arg1.minor == current_dsp._resource_id-1:
-                    arg1_input = "PCIN"
-                    
-            # For addition and subtraction by 1, we can use the carry input
-            elif isinstance(arg1, int) and abs(arg1) == 1 and obj._op in ["add", "sub"]:
-                arg1_input = str(arg1)
-                    
-            if isinstance(arg2, Source) and "DSP" in arg2.name:
-                num = int(arg2.name[3:])
-                
-                # If we're operating on the current DSP, use the P register
-                if num == current_dsp._resource_id:
-                    arg2_input = "P"
+            arg_inputs = ["AB", "C"]
+            for i,arg in enumerate(args):
+                if isinstance(arg, Source) and "DSP" in arg.major.name:                
+                    # If we're operating on the current DSP, use the P register
+                    if arg.minor == current_dsp._resource_id:
+                        arg_inputs[i] = "P"
 
-                # If we're operating on the lower neighboring DSP, use the cascade input
-                elif num == current_dsp._resource_id-1:
-                    arg2_input = "PCIN"
+                    # If we're operating on the lower neighboring DSP, use the
+                    # cascade input
+                    elif arg.minor == current_dsp._resource_id-1:
+                        arg_inputs[i] = "PCIN"
                     
-            # For addition and subtraction by 1, we can use the carry input
-            elif isinstance(arg2, int) and abs(arg2) == 1 and obj._op in ["add", "sub"]:
-                arg2_input = str(arg2)
-                
-            # If we only have one external input, make it C
-            if arg1_input == "AB" and arg2_input != "C":
-                arg1_input = "C"
+                # For addition and subtraction by 1, we can use the carry input
+                elif (isinstance(arg, int) 
+                      and abs(arg) == 1 
+                      and obj._op in ["add", "sub"]):
+                    arg_inputs[i] = str(arg)
+                    
+            # If we only have one external input, make it C, as the 
+            # DSP slice is much more flexible in using C than AB
+            if arg_inputs[0] == "AB" and arg_inputs[1] != "C":
+                arg_inputs[0] = "C"
                 
             # Look at the operator encoded in the Operation and convert it into
             # an operating configuration for the DSP slice
             dsp_mode_key = None
                     
-            if obj._op == "invert":
-                dsp_mode_key = f"NOT {arg1_input}"
-                
-            # elif obj._op == "mul" or obj._op == "rmul" or obj._op == "imul": 
-            #     # One of the arguments must be an integer with a magnitude of
-            #     # 2 or 3. Figure out which one this is
-            #     if isinstance(arg1, int) and (abs(arg1) == 2 or abs(arg1) == 3):
-            #         sign = "-" if arg1 < 0 else "+"
-            #         dsp_mode_key = f"{sign}{arg2_input}"*abs(arg1)
-            #         if dsp_mode_key.startswith("+"):
-            #             dsp_mode_key = dsp_mode_key[1:]
-            #     elif isinstance(arg2, int) and (abs(arg2) == 2 or abs(arg2) == 3):
-            #         sign = "-" if arg2 < 0 else "+"
-            #         dsp_mode_key = f"{sign}{arg1_input}"*abs(arg2)
-            #         if dsp_mode_key.startswith("+"):
-            #             dsp_mode_key = dsp_mode_key[1:]
-            #     else:
-            #         raise ValueError(f"Only multiplication by integers with"
-            #                          f" magnitudes of 2 or 3 are supported;"
-            #                          f" received Operation {obj}.")
-                    
-            else:
-                for base,key_format in [("add", "{}+{}"), 
-                                        ("sub", "{}-{}"), 
-                                        ("or", "{} OR {}"), 
-                                        ("and", "{} AND {}"),
-                                        ("xor", "{} XOR {}")]:
-                    if obj._op == base or obj._op == f"i{base}":
-                        dsp_mode_key = key_format.format(arg1_input, arg2_input)
-                    elif obj._op == f"r{base}":
-                        dsp_mode_key = key_format.format(arg2_input, arg1_input)
+            for base,key_format in [("add", "{}+{}"), 
+                                    ("sub", "{}-{}"), 
+                                    ("or", "{} OR {}"), 
+                                    ("and", "{} AND {}"),
+                                    ("xor", "{} XOR {}")]:
+                if obj._op == base or obj._op == f"i{base}":
+                    dsp_mode_key = key_format.format(*arg_inputs)
+                elif obj._op == f"r{base}":
+                    dsp_mode_key = key_format.format(*reversed(arg_inputs))
                     
             if not dsp_mode_key:
                 raise ValueError(f"Unable to find a DSP configuration for"
@@ -947,52 +909,33 @@ class Sequencer(Processor):
                                 
             # Finally, configure the slice
             # If we're still using AB, it means we must be using both external
-            # inputs, so it's a two-cycle config
-            if arg1_input == "AB":
-                instructions.append(STP(src1=Source.IMM, 
-                                        imm1=DSPConfiguration(mode=dsp_mode_key),
-                                        dest1=Destination(Destination.Major.DSP_CFG,
-                                                          current_dsp._resource_id),
-                                        src2=arg1, 
-                                        dest2=Destination(Destination.Major.DSP_AB,
-                                                          current_dsp._resource_id)))
+            # inputs, so it's a two-cycle config and we need to spend a cycle
+            # just loading AB
+            if arg_inputs[0] == "AB":
+                instructions.append(STP(src1=args[0], dest1=current_dsp["AB"]))
                 
-            # The next STP (or the only one, if arg1_input isn't AB)
+            # The next STP (or the only one, if arg_inputs[0] isn't AB)
             # will load C if necessary, and in either case CEP will be pulsed
             # If arg1 or arg2 are C, this means we're still loading some 
             # external input. Otherwise we might just be performing an
             # operation between registers inside the slice
-            if arg1_input == "C":
-                instructions.append(STP(src1=Source.IMM,
-                                        imm1=DSPConfiguration(mode=dsp_mode_key, 
-                                                              dsp_cep="pulse"), 
-                                        dest1=Destination(Destination.Major.DSP_CFG,
-                                                          current_dsp._resource_id),
-                                        src2=arg1,
-                                        dest2=Destination(Destination.Major.DSP_C,
-                                                          current_dsp._resource_id)))
-            elif arg2_input == "C":
-                instructions.append(STP(src1=Source.IMM,
-                                        imm1=DSPConfiguration(mode=dsp_mode_key, 
-                                                              dsp_cep="pulse"), 
-                                        dest1=Destination(Destination.Major.DSP_CFG,
-                                                          current_dsp._resource_id),
-                                        src2=arg2,
-                                        dest2=Destination(Destination.Major.DSP_C,
-                                                          current_dsp._resource_id)))
+            stp_args = {"src1": Source.IMM,
+                        "imm1": DSPConfiguration(mode=dsp_mode_key, dsp_cep="pulse"),
+                        "dest1": current_dsp["CFG"]}
+            if arg_inputs[0] == "C":
+                stp_args["src2"] = args[0]
+                stp_args["dest2"] = current_dsp["C"]
+            elif arg_inputs[1] == "C":
+                stp_args["src2"] = args[1]
+                stp_args["dest2"] = current_dsp["C"]
             
             # No external inputs are being loaded, therefore it's a purely
             # internal operation
-            else:
-                instructions.append(STP(src1=Source.IMM, 
-                                        imm1=DSPConfiguration(mode=dsp_mode_key, 
-                                                               dsp_cep="pulse"),
-                                        dest1=Destination(Destination.Major.DSP_CFG,
-                                                          current_dsp._resource_id)))
+            instructions.append(STP(**stp_args))
             
             # The DSP slice we used will contain the answer at the end, so 
             # return it along with any resources allocated during compilation
-            return Source(Source.Major.DSP_DATA, current_dsp._resource_id),instructions,resources
+            return current_dsp.source(), instructions, resources
 
         raise TypeError(f"Unable to compile {obj} (type {type(obj)}).")
         
@@ -1038,7 +981,7 @@ class Sequencer(Processor):
             stc_kwargs["op"] = 0b11
             return stc_kwargs,[],[]
         elif isinstance(condition, self.DSP):
-            stc_kwargs["src_tval"] = Source(major=Source.Major.DSP_DATA, 
+            stc_kwargs["src_tval"] = Source(major=Source.Major.DSP_P, 
                                             minor=condition._resource_id)
             stc_kwargs["op"] = 0b11
             return stc_kwargs,[],[]
@@ -1075,14 +1018,37 @@ class Sequencer(Processor):
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
+            elif condition._op == "ne":
+                new_condition = Operation("eq", *condition._args, **condition._kwargs)
+                stc_kwargs,instructions,resources = self.compile_condition(new_condition, mask)
+                stc_kwargs["op"] ^= 0b100
+                return stc_kwargs,instructions,resources
             
             # Base cases for recursive operation simplification
             elif condition._op == "eq":
+                
+                if ((isinstance(condition._args[0], int) and condition._args[0] == 0) 
+                    or (isinstance(condition._args[0], Symbol) 
+                        and condition._args[0].assigned()
+                        and condition._args[0].value_type() is int
+                        and condition._args[0] == 0)):
+                    stc_kwargs,instructions,resources = self.compile_condition(condition._args[1], mask)
+                    stc_kwargs["op"] ^= 0b100
+                    return stc_kwargs,instructions,resources
+                elif ((isinstance(condition._args[1], int) and condition._args[1] == 0) 
+                    or (isinstance(condition._args[1], Symbol) 
+                        and condition._args[1].assigned()
+                        and condition._args[1].value_type() is int
+                        and condition._args[1] == 0)):
+                    stc_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
+                    stc_kwargs["op"] ^= 0b100
+                    return stc_kwargs,instructions,resources
+                
                 # not (SRC XOR MASK)
                 stc_kwargs["op"] = 0b101
             elif condition._op == "and" or condition._op == "rand":
                 stc_kwargs["op"] = 0b00
-            elif condition._op == "xor" or condition._op == "rxor" or condition._op == "ne":
+            elif condition._op == "xor" or condition._op == "rxor":
                 stc_kwargs["op"] = 0b01
             
             
@@ -1118,7 +1084,115 @@ class Sequencer(Processor):
         stc_kwargs["src_tval"] = compiled_src
         instructions += src_instructions
         return stc_kwargs,instructions,src_resources
+    
+    def add_latencies(self):
+        """
+        Iterates through a compiled program and ensures that operations requiring
+        manually-added latency are correctly buffered. Note that this will only work
+        in situations where the compiler is able to determine that the relevant 
+        resources are being modified, so it is encouraged for the user to verify
+        the timings of expected procedures.
+        :return: `True` if the program was modified, otherwise `False`
+        :rtype: bool
+        """
+        # If we used any DSP slices, we need to make sure that we add delays
+        # to account for the computation latency
+        # We'll do this by associating a counter with every DSP slice. When
+        # a DSP slice has its CEP pin activated, the counter will get set to
+        # the required latency amount and will decrement every cycle thereafter
+        # (unless the CEP pin is pulsed again, in which case it is reset). 
+        # When an instruction encountered that depends on the value of a given
+        # DSP slice, if the counter for that slice is non-zero, that many NOPs
+        # are added.
+        dsp_count_init = 4
+        bus_count_init = 4
+        counts = {f"DSP{i}": 0 for i in range(8)}
+        counts["BUS"] = 0
+        
+        for idx_instr,instr in enumerate(self._compiled_program):  
+            # Decrement all counts to indicate that a cyle has passed
+            for k in counts.keys():
+                if counts[k] > 0:
+                    counts[k] -= 1
+                    
+            if instr.dsp_cep is not None:
+                if isinstance(instr.dsp_cep, SequencerDatapathPort):
+                    counts[instr.dsp_cep.minor] = dsp_count_init
+                elif isinstance(instr.dsp_cep, int):
+                    counts[instr.dsp_cep] = dsp_count_init
+                else:
+                    raise TypeError(f"DSP CEP field must be of type"
+                                    f" `SequencerDatapathPort` or `int`;"
+                                    f" received {instr.dsp_cep}.")
 
+            srcs = [instr.src_stval if isinstance(instr, STC) else instr.src1,
+                     instr.src_tval if isinstance(instr, STC) else instr.src2]
+            dests = [instr.dest_stval if isinstance(instr, STC) else instr.dest1,
+                     None if isinstance(instr, STC) else instr.dest2]
+            imms = [instr.imm_stval if isinstance(instr, STC) else instr.imm1,
+                     instr.imm_tval if isinstance(instr, STC) else instr.imm2]
+            for src,dest,imm in zip(srcs, dests, imms):
+                # If we're configuring a DSP CFG register, it's very likely 
+                # that its CEP pin will be affected, so we'll reset the counter
+                # just in case
+                
+                # If a source of the operation we're configuring the DSP for
+                # depends on PCIN, we may need to add delays
+                # If we can't figure it out, assume the user was cautious
+                # (probably a bad assumption but we'll need a smarter way to
+                # detect issues with this)
+                # we also won't add delays if we've detected that we need to
+                # restart the search, since the insertion of delays elsewhere
+                # could lead to adding too many delays
+                if dest is not None:
+                    if dest.major is Destination.Major.DSP_CFG:
+                        counts[f"DSP{dest.minor}"] = dsp_count_init
+                        if ( (isinstance(src, DSPConfiguration) and "PCIN" in src.mode)
+                          or (src.major is Source.Major.IMM 
+                              and isinstance(imm, DSPConfiguration)
+                              and "PCIN" in imm.mode)):
+
+                            if counts[f"DSP{dest.minor-1}"] > 0:
+                                nops = [STP(comment=f"Pipeline latency for DSP{dest.minor-1}")]*counts[f"DSP{dest.minor-1}"]
+                                self.insert_compiled_instructions(idx_instr, nops)
+                                return True
+
+                    # If we're writing to the bus address register, we need to
+                    # make sure to give the bus enough time to respond
+                    if dest.major is Destination.Major.BUS_ADDR:
+                        counts["BUS"] = bus_count_init
+
+                # Now check the sources. If we are depending on the value 
+                # of a DSP slice, we need to make sure that we've given it 
+                # enough time to complete the computation
+                if src.major is Source.Major.DSP_P:
+                    if counts[f"DSP{src.minor}"] > 0:
+                        nops = [STP(comment=f"Pipeline latency for DSP{src.minor}")]*counts[f"DSP{src.minor}"]
+                        self.insert_compiled_instructions(idx_instr, nops)
+                        return True
+
+                # If we're getting data from the bus, we need to make sure 
+                # that we've given the bus enough time to shuttle the data
+                if src.major is Source.BUS_DATA:
+                    if counts[f"BUS"] > 0:
+                        nops = [STP(comment=f"Pipeline latency for bus")]*counts[f"BUS"]
+                        self.insert_compiled_instructions(idx_instr, nops)
+                        return True
+                
+        return False
+
+    def compile_all(self):
+        """
+        Invokes the typical compilation procedure and then verifies that any
+        intermediate computations are buffered with an appropriate amount of
+        pipeline cycles.
+        """
+        super().compile_all()
+
+        # Add necessary latencies until it can be confirmed that no more are
+        # needed
+        while self.add_latencies():
+            pass
     
     @contextmanager
     def test(self, condition, mask=None, speculation=True):
@@ -1138,13 +1212,15 @@ class Sequencer(Processor):
         if speculation:
             # The block to execute if the condition passes is inline
             # Jump past the block if the condition fails
-            jump = self.store(dest=Destination.PC, 
+            jump = self.store(dest=Destination(Destination.Major.PC, 
+                                               Destination.PC_ABSOLUTE_BRANCH), 
                               when=~condition,
                               mask=mask)
         else:
             # Jump to the block and push the return location
             # if the condition passes
-            jump = self.store(dest=Destination.PC, 
+            jump = self.store(dest=Destination(Destination.Major.PC, 
+                                               Destination.PC_ABSOLUTE_BRANCH), 
                               when=condition,
                               mask=mask,
                               push_return=True)
@@ -1163,7 +1239,8 @@ class Sequencer(Processor):
             jump_target = self.Instruction.next_instance()
         else:
             # Return from the block
-            self.store(src=Source.STACK, dest=Destination.PC)
+            self.store(src=Source.STACK, dest=Destination(Destination.Major.PC, 
+                                                          Destination.PC_ABSOLUTE_BRANCH))
  
         jump.kwargs["src"] = jump_target
         
@@ -1178,45 +1255,29 @@ class Sequencer(Processor):
         """
         return_instruction = self.Instruction.next_instance()
         yield
-        mask_determined = (mask is not None)
-        for arg in range(2):
-            if is_numeric(condition._args[arg]):
-                mask_determined = True
         
-        # Note that it may be difficult to rearrange the "if" structure here, 
-        # because if the clauses add any instructions then checking whether the
-        # next_instance symbol was assigned will break
-        if mask_determined:
-            if not self.Instruction.next_instance_assigned():
-                # No instructions have been added in the block and we can infer 
-                # which argument should be stored in the mask. Therefore, we can
-                # use the hold destination                
-                hold_instruction = self.store(dest=Destination.HOLD,
-                                   when=~condition,
-                                   mask=mask)
-                
-                # Call next_instance() again because store() will mean that
-                # return_instruction will not have the value we want
-                hold_instruction.kwargs["src"] = self.Instruction.next_instance()
-                
-            # TODO
-                # Alternatively, if we added only one DSP augmenting operation
-                # and the external argument is either a constant or a register,
-                # we can configure the DSP before the loop starts and set 
-                # dsp_cep
-            else:
-                # We have some instructions added in the block so we can't just 
-                # hold, but we can still determine what to store in the mask.
-                # Therefore, jump back to the beginning of the block
-                self.store(src=return_instruction, 
-                           dest=Destination.PC,
-                           when=~condition,
-                           mask=mask)
+        if not self.Instruction.next_instance_assigned():
+            # No instructions have been added in the block and we can infer 
+            # which argument should be stored in the mask. Therefore, we can
+            # use the hold destination                
+            hold_instruction = self.store(dest=Destination(Destination.Major.PC, 
+                                                           Destination.PC_ABSOLUTE_HOLD),
+                                           when=~condition,
+                                           mask=mask)
+
+            # Call next_instance() again because store() will mean that
+            # return_instruction will not have the value we want
+            hold_instruction.kwargs["src"] = self.Instruction.next_instance()
         else:
-            raise ValueError(f"Unable to determine branch mask for"
-                             f" condition {condition}.")
+            # We have some instructions added in the block so we can't just 
+            # hold, but we can still determine what to store in the mask.
+            # Therefore, jump back to the beginning of the block
+            self.store(src=return_instruction, 
+                       dest=Destination(Destination.Major.PC, 
+                                        Destination.PC_ABSOLUTE_BRANCH),
+                       when=~condition,
+                       mask=mask)
             
-        
     @contextmanager
     def loop(self, *args):
         """
@@ -1253,12 +1314,10 @@ class Sequencer(Processor):
             step = args[2]
             dsp.load(start)
             self.STP(src1=Source.IMM1, 
-                     dest1=Destination(Destination.Major.DSP_CFG,
-                                        dsp._resource_id), 
+                     dest1=dsp["CFG"], 
                      imm1=DSPConfiguration("P+AB"),
                      src2=step,
-                     dest2=Destination(Destination.Major.DSP_AB,
-                                        dsp._resource_id))
+                     dest2=dsp["AB"])
         else:
             raise ValueError(f"Unrecognized call signature for loop;"
                              f" receieved {args}.")
@@ -1271,6 +1330,9 @@ class Sequencer(Processor):
         if not block_empty:
             loop_block_start.kwargs["dsp_cep"] = dsp.source()
             
-        stc = self.store(src=loop_block_start, dest=Destination.PC, when=(dsp != stop))
+        stc = self.store(src=loop_block_start, 
+                         dest=Destination(Destination.Major.PC, 
+                                          Destination.PC_ABSOLUTE_BRANCH), 
+                         when=(dsp != stop))
         if block_empty:
             stc.kwargs["dsp_cep"] = dsp.source()

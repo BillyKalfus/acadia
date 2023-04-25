@@ -57,7 +57,8 @@ entity acadia_sequencer is
         mem_bus_clk          : out std_logic;
         
         -- Hedgehog input ports
-        hedgehog_flags       : in  std_logic_vector(WORD_SIZE-1 downto 0)
+        ext_in               : in  std_logic_vector(WORD_SIZE-1 downto 0);
+        ext_out              : out std_logic_vector(WORD_SIZE-1 downto 0)
     );
     
 end acadia_sequencer;
@@ -81,27 +82,25 @@ architecture rtl of acadia_sequencer is
     ATTRIBUTE X_INTERFACE_MODE of mem_bus_mosi         : SIGNAL is "Master";
 
     -- Some constants that will encode source and destination IDs (except for the last three bits)
-    constant SRC_REG         : natural := 0;
-    constant SRC_PC          : natural := 1;
-    constant SRC_IMM         : natural := 2;
-    constant SRC_TEST        : natural := 3;
-    constant SRC_FLAGS       : natural := 4;
-    constant SRC_STACK       : natural := 5;
-    constant SRC_BUS_DATA    : natural := 6;
-    constant SRC_DSP_PATTERN : natural := 7;
-    constant SRC_DSP_DATA    : natural := 8;
+    constant SRC_REG         : std_logic_vector(3 downto 0) := "0000";
+    constant SRC_PC          : std_logic_vector(3 downto 0) := "0001";
+    constant SRC_IMM         : std_logic_vector(3 downto 0) := "0010";
+    constant SRC_EXT         : std_logic_vector(3 downto 0) := "0011";
+    constant SRC_STACK       : std_logic_vector(3 downto 0) := "0100";
+    constant SRC_BUS_DATA    : std_logic_vector(3 downto 0) := "0101";
+    constant SRC_DSP_PATTERN : std_logic_vector(3 downto 0) := "0110";
+    constant SRC_DSP_DATA    : std_logic_vector(3 downto 0) := "0111";
     
-    constant DEST_REG        : natural := 0;
-    constant DEST_PC         : natural := 1;
-    constant DEST_HOLD       : natural := 2;
-    constant DEST_MASK       : natural := 3;
-    constant DEST_FLAGS      : natural := 4;
-    constant DEST_STACK      : natural := 5;
-    constant DEST_BUS_ADDR   : natural := 6;
-    constant DEST_BUS_DATA   : natural := 7;
-    constant DEST_DSP_CFG    : natural := 8;
-    constant DEST_DSP_AB     : natural := 9;
-    constant DEST_DSP_C      : natural := 10;
+    constant DEST_REG        : std_logic_vector(3 downto 0) := "0000";
+    constant DEST_PC         : std_logic_vector(3 downto 0) := "0001";
+    constant DEST_MASK       : std_logic_vector(3 downto 0) := "0010";
+    constant DEST_EXT        : std_logic_vector(3 downto 0) := "0011";
+    constant DEST_STACK      : std_logic_vector(3 downto 0) := "0100";
+    constant DEST_BUS_DATA   : std_logic_vector(3 downto 0) := "0101";
+    constant DEST_BUS_ADDR   : std_logic_vector(3 downto 0) := "0110";
+    constant DEST_DSP_CFG    : std_logic_vector(3 downto 0) := "0111";
+    constant DEST_DSP_AB     : std_logic_vector(3 downto 0) := "1000";
+    constant DEST_DSP_C      : std_logic_vector(3 downto 0) := "1001";
 
     constant OPCODE_STP      : std_logic_vector(0 downto 0) := "0";
     constant OPCODE_STC      : std_logic_vector(0 downto 0) := "1";
@@ -123,6 +122,7 @@ architecture rtl of acadia_sequencer is
     
     -- Program counter
     signal pc                : std_logic_vector(15 downto 0);
+    signal pc_wr             : std_logic;
     
     -- Data sources
     signal src1              : std_logic_vector(WORD_SIZE-1 downto 0);
@@ -133,20 +133,13 @@ architecture rtl of acadia_sequencer is
     signal dest2_en          : std_logic;
     
     -- Conditionality testing signals
-    signal test_val          : std_logic_vector(WORD_SIZE-1 downto 0);
-    signal test_val_d        : std_logic_vector(WORD_SIZE-1 downto 0);
     signal mask              : std_logic_vector(WORD_SIZE-1 downto 0);
     signal cond_val          : std_logic_vector(WORD_SIZE-1 downto 0);
     signal cond_satisfied    : std_logic;
     
     -- Instruction control signals
     signal instruction       : std_logic_vector(127 downto 0);
-    
-    signal instruction_rst   : std_logic;
-    signal instruction_rst_d : std_logic;
-    signal instruction_en    : std_logic;
-    signal instruction_en_d  : std_logic;
-
+    signal instruction_p     : std_logic_vector(127 downto 0);
     
     -- Instruction fields
     signal instr_opcode      : std_logic_vector(0 downto 0);
@@ -162,14 +155,14 @@ architecture rtl of acadia_sequencer is
     signal instr_op_sel      : std_logic_vector(2 downto 0);
                              
     -- Instruction subfields
-    signal instr_src1_maj    : natural range 0 to 15;
-    signal instr_src2_maj    : natural range 0 to 15;
-    signal instr_src1_sub    : natural range 0 to 7;
-    signal instr_src2_sub    : natural range 0 to 7;
-    signal instr_dest1_maj   : natural range 0 to 15;
-    signal instr_dest2_maj   : natural range 0 to 15;
-    signal instr_dest1_sub   : natural range 0 to 7;
-    signal instr_dest2_sub   : natural range 0 to 7;
+    signal instr_src1_maj    : std_logic_vector(3 downto 0);
+    signal instr_src2_maj    : std_logic_vector(3 downto 0);
+    signal instr_src1_min    : std_logic_vector(2 downto 0);
+    signal instr_src2_min    : std_logic_vector(2 downto 0);
+    signal instr_dest1_maj   : std_logic_vector(3 downto 0);
+    signal instr_dest2_maj   : std_logic_vector(3 downto 0);
+    signal instr_dest1_min   : std_logic_vector(2 downto 0);
+    signal instr_dest2_min   : std_logic_vector(2 downto 0);
         
     -- Stack                          
     signal stack             : word_array(0 to STACK_SIZE-1);
@@ -201,80 +194,114 @@ architecture rtl of acadia_sequencer is
 begin
                 
     -- Assign instruction subfields
-    instr_src1_maj <= to_integer(unsigned(instr_src1(6 downto 3)));
-    instr_src1_sub <= to_integer(unsigned(instr_src1(2 downto 0)));
-    instr_src2_maj <= to_integer(unsigned(instr_src2(6 downto 3)));
-    instr_src2_sub <= to_integer(unsigned(instr_src2(2 downto 0)));
-    instr_dest1_maj <= to_integer(unsigned(instr_dest1(6 downto 3)));
-    instr_dest1_sub <= to_integer(unsigned(instr_dest1(2 downto 0)));
-    instr_dest2_maj <= to_integer(unsigned(instr_dest2(6 downto 3)));
-    instr_dest2_sub <= to_integer(unsigned(instr_dest2(2 downto 0)));
-                             
-    -- Instruction memory interface and loading
-    instruction_en  <= '0' when (instr_dest1_maj = DEST_HOLD and dest1_en = '1') 
-                             or (instr_dest2_maj = DEST_HOLD and dest2_en = '1')
-                           else '1';
-        
-    -- We have to reset the instruction memory output any time we jump or come out of a hold
-    instruction_rst <= '1' when (instr_dest1_maj = DEST_PC and dest1_en = '1')
-                             or (instr_dest2_maj = DEST_PC and dest2_en = '1')
-                             or (instruction_en = '1' and instruction_en_d = '0') 
-                             or (run = '0') 
-                           else '0';
+    instr_src1_maj  <= instr_src1(6 downto 3);
+    instr_src1_min  <= instr_src1(2 downto 0);
+    instr_src2_maj  <= instr_src2(6 downto 3);
+    instr_src2_min  <= instr_src2(2 downto 0);
+    instr_dest1_maj <= instr_dest1(6 downto 3);
+    instr_dest1_min <= instr_dest1(2 downto 0);
+    instr_dest2_maj <= instr_dest2(6 downto 3);
+    instr_dest2_min <= instr_dest2(2 downto 0);
     
     instruction_mem_clk  <= clk;
-
-    -- Control instruction loading and resetting
-    instruction_proc: process(clk) begin
-        if rising_edge(clk) then
-            instruction_mem_addr <= pc;
-            instruction_en_d     <= instruction_en;
-            instruction_rst_d    <= instruction_rst;
+    instruction_mem_addr <= pc;
                              
-            if(instruction_rst = '1' or instruction_rst_d = '1') then
-                instruction <= (others => '0');
-            elsif(instruction_en = '1') then
-                instruction <= instruction_mem_dout;
+    -- Program counter and instruction loading
+    instruction_proc: process(clk) begin
+        if(rising_edge(clk)) then
+            if(nrst = '0' or run = '0') then
+                pc            <= (others => '0');
+                pc_wr         <= '0';
+                instruction_p <= (others => '0');
+                instruction   <= (others => '0');
+            elsif(dest1_en = '1' and instr_dest1_maj = DEST_PC) then
+                -- Indicate for the next cycle that the PC has been updated
+                pc_wr <= '1';
+                
+                -- Reset the instruction pipeline
+                instruction_p <= (others => '0');
+                             
+                -- Update the PC depending on the branch mode
+                if(instr_dest1_min(0) = '0') then
+                    pc <= src1(15 downto 0);
+                else
+                    pc <= std_logic_vector(unsigned(pc) + unsigned(src1(15 downto 0)));
+                end if;
+                           
+                -- Optionally reset the instruction register
+                if(instr_dest1_min(1) = '0') then
+                    instruction <= (others => '0');
+                end if;
+            elsif(dest2_en = '1' and instr_dest2_maj = DEST_PC) then
+                -- Indicate for the next cycle that the PC has been updated
+                pc_wr <= '1';
+                
+                -- Reset the instruction pipeline
+                instruction_p <= (others => '0');
+                             
+                -- Update the PC depending on the branch mode
+                if(instr_dest2_min(0) = '0') then
+                    pc <= src2(15 downto 0);
+                else
+                    pc <= std_logic_vector(unsigned(pc) + unsigned(src2(15 downto 0)));
+                end if;
+                           
+                -- Optionally reset the instruction register
+                if(instr_dest2_min(1) = '0') then
+                    instruction <= (others => '0');
+                end if;
+            elsif(pc_wr = '1') then
+                -- If the PC was just updated in the prvious cycle, we need one more
+                -- cycle of nothing before we can load the output of the memory
+                -- However, if we're here then the PC is no longer being written to,
+                -- so clear the flag and continue incrmeneting it as normal
+                pc            <= std_logic_vector(unsigned(pc) + 1);
+                pc_wr         <= '0';
+                instruction_p <= (others => '0');
+                instruction   <= instruction_p;
+            else
+                pc            <= std_logic_vector(unsigned(pc) + 1);
+                pc_wr         <= '0';
+                instruction_p <= instruction_mem_dout;
+                instruction   <= instruction_p;
             end if;
         end if;
     end process instruction_proc;
                                                   
     -- Instruction decoding
-    instr_opcode   <= instruction(112 downto 112);
-    instr_push_return  <= instruction(104);
-    instr_src1     <= instruction(103 downto 96);
-    instr_src2     <= instruction(95 downto 88);
-    instr_dest1    <= instruction(87 downto 80);
-    instr_dest2    <= instruction(79 downto 72);
-    instr_dsp_cep_en <= instruction(68);
-    instr_dsp_cep  <= instruction(66 downto 64);
-    instr_imm1     <= instruction(63 downto 32);
-    instr_imm2     <= instruction(31 downto 0);
-    instr_op_sel   <= instruction(74 downto 72);
+    instr_opcode      <= instruction(112 downto 112);
+    instr_push_return <= instruction(104);
+    instr_src1        <= instruction(103 downto 96);
+    instr_src2        <= instruction(95 downto 88);
+    instr_dest1       <= instruction(87 downto 80);
+    instr_dest2       <= instruction(79 downto 72);
+    instr_dsp_cep_en  <= instruction(68);
+    instr_dsp_cep     <= instruction(66 downto 64);
+    instr_imm1        <= instruction(63 downto 32);
+    instr_imm2        <= instruction(31 downto 0);
+    instr_op_sel      <= instruction(74 downto 72);
     
     -- Enable or disable the destination decoders depending on the instruction opcode and the condition satisfaction
     dest1_en <= cond_satisfied when instr_opcode = OPCODE_STC else '1';
     dest2_en <= '0' when instr_opcode = OPCODE_STC else '1';
                             
     -- Multiplex the input source according to the instruction field
-    src1 <= r(instr_src1_sub)         when instr_src1_maj = SRC_REG      else
-            x"0000" & pc              when instr_src1_maj = SRC_PC       else
-            instr_imm1                when instr_src1_maj = SRC_IMM      else
-            -- test_val_d                when instr_src1_maj = SRC_TEST     else
-            hedgehog_flags            when instr_src1_maj = SRC_FLAGS    else
-            stack_rd_data             when instr_src1_maj = SRC_STACK    else
-            mem_bus_miso              when instr_src1_maj = SRC_BUS_DATA else
-            dsp_p_reg(instr_src1_sub) when instr_src1_maj = SRC_DSP_DATA else
+    src1 <= r(to_integer(unsigned(instr_src1_min)))         when instr_src1_maj = SRC_REG      else
+            x"0000" & pc                                    when instr_src1_maj = SRC_PC       else
+            instr_imm1                                      when instr_src1_maj = SRC_IMM      else
+            ext_in                                          when instr_src1_maj = SRC_EXT      else
+            stack_rd_data                                   when instr_src1_maj = SRC_STACK    else
+            mem_bus_miso                                    when instr_src1_maj = SRC_BUS_DATA else
+            dsp_p_reg(to_integer(unsigned(instr_src1_min))) when instr_src1_maj = SRC_DSP_DATA else
             (others => '0');
             
-    src2 <= r(instr_src2_sub)         when instr_src2_maj = SRC_REG      else
-            x"0000" & pc              when instr_src2_maj = SRC_PC       else
-            instr_imm2                when instr_src2_maj = SRC_IMM      else
-            -- test_val_d                when instr_src2_maj = SRC_TEST     else
-            hedgehog_flags            when instr_src2_maj = SRC_FLAGS    else
-            stack_rd_data             when instr_src2_maj = SRC_STACK    else
-            mem_bus_miso              when instr_src2_maj = SRC_BUS_DATA else
-            dsp_p_reg(instr_src2_sub) when instr_src2_maj = SRC_DSP_DATA else
+    src2 <= r(to_integer(unsigned(instr_src2_min)))         when instr_src2_maj = SRC_REG      else
+            x"0000" & pc                                    when instr_src2_maj = SRC_PC       else
+            instr_imm2                                      when instr_src2_maj = SRC_IMM      else
+            ext_in                                          when instr_src2_maj = SRC_EXT      else
+            stack_rd_data                                   when instr_src2_maj = SRC_STACK    else
+            mem_bus_miso                                    when instr_src2_maj = SRC_BUS_DATA else
+            dsp_p_reg(to_integer(unsigned(instr_src2_min))) when instr_src2_maj = SRC_DSP_DATA else
             (others => '0');
             
     -- Make general-purpose registers
@@ -283,24 +310,12 @@ begin
             if(nrst = '0') then
                 r <= (others => (others => '0'));
             elsif(instr_dest1_maj = DEST_REG and dest1_en = '1') then
-                r(instr_dest1_sub) <= src1;
+                r(to_integer(unsigned(instr_dest1_min))) <= src1;
             elsif(instr_dest2_maj = DEST_REG and dest2_en = '1') then
-                r(instr_dest2_sub) <= src2;
+                r(to_integer(unsigned(instr_dest2_min))) <= src2;
             end if;
         end if;
     end process reg_proc;
-    
-    -- Load the test value register when we are issuing a conditional operation
---    test_val_proc: process(clk) begin
---        if rising_edge(clk) then
---            test_val_d <= test_val;
---            if(nrst = '0') then
---                test_val <= (others => '0');
---            elsif(instr_opcode = OPCODE_STC) then
---                test_val <= src2;
---            end if;
---        end if;
---    end process test_val_proc;
     
     -- Manage the bus registers
     bus_regs_proc: process(clk) begin
@@ -347,21 +362,6 @@ begin
     mem_bus_wr   <= bus_wr_reg;
     mem_bus_en   <= bus_en_reg;
     mem_bus_clk  <= clk;
-    
-    -- Program counter
-    pc_proc: process(clk) begin
-        if(rising_edge(clk)) then
-            if(nrst = '0' or run = '0') then
-                pc <= (others => '0');
-            elsif(dest1_en = '1' and (instr_dest1_maj = DEST_PC or instr_dest1_maj = DEST_HOLD)) then
-                pc <= src1(15 downto 0);
-            elsif(dest2_en = '1' and (instr_dest2_maj = DEST_PC or instr_dest2_maj = DEST_HOLD)) then
-                pc <= src2(15 downto 0);
-            elsif(instruction_en = '1') then
-                pc <= std_logic_vector(unsigned(pc) + 1);
-            end if;
-        end if;
-    end process pc_proc;
     
     -- Process for conditional operation mask register
     mask_proc: process(clk) begin
@@ -448,9 +448,9 @@ begin
             dsp_cfg_reg_loop: for i in 0 to NUM_DSP-1 loop
                 if(nrst = '0') then
                     dsp_cfg_reg(i) <= (others => '0');
-                elsif(instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and instr_dest1_sub = i) then
+                elsif(instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and to_integer(unsigned(instr_dest1_min)) = i) then
                     dsp_cfg_reg(i) <= src1;
-                elsif(instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1' and instr_dest2_sub = i) then
+                elsif(instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1' and to_integer(unsigned(instr_dest2_min)) = i) then
                     dsp_cfg_reg(i) <= src2;
                 elsif(dsp_cfg_reg(i)(16 downto 15) = "11") then
                     -- If we're not actively loading the configuration register and
@@ -463,8 +463,8 @@ begin
     end process dsp_cfg_reg_proc;
                    
     dsp_rstp_gen: for i in 0 to NUM_DSP-1 generate
-        dsp_rstp(i) <= src1(14) when instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and instr_dest1_sub = i else
-                       src2(14) when instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1' and instr_dest2_sub = i else
+        dsp_rstp(i) <= src1(14) when instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and to_integer(unsigned(instr_dest1_min)) = i else
+                       src2(14) when instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1' and to_integer(unsigned(instr_dest2_min)) = i else
                        '0';
     end generate dsp_rstp_gen;
                              
@@ -490,11 +490,11 @@ begin
             if(nrst = '0') then
                 dsp_ab_reg <= (others => (others => '0'));
             elsif(instr_dest1_maj = DEST_DSP_AB and dest1_en = '1') then
-                dsp_ab_reg(instr_dest1_sub)(31 downto 0)  <= src1;
-                dsp_ab_reg(instr_dest1_sub)(47 downto 32) <= (others => src1(31));
+                dsp_ab_reg(to_integer(unsigned(instr_dest1_min)))(31 downto 0)  <= src1;
+                dsp_ab_reg(to_integer(unsigned(instr_dest1_min)))(47 downto 32) <= (others => src1(31));
             elsif(instr_dest2_maj = DEST_DSP_AB and dest2_en = '1') then
-                dsp_ab_reg(instr_dest2_sub)(31 downto 0)  <= src2;
-                dsp_ab_reg(instr_dest2_sub)(47 downto 32) <= (others => src2(31));
+                dsp_ab_reg(to_integer(unsigned(instr_dest2_min)))(31 downto 0)  <= src2;
+                dsp_ab_reg(to_integer(unsigned(instr_dest2_min)))(47 downto 32) <= (others => src2(31));
             end if;
         end if;
     end process dsp_ab_reg_proc;
@@ -505,11 +505,11 @@ begin
             if(nrst = '0') then
                 dsp_c_reg <= (others => (others => '0'));
             elsif(instr_dest1_maj = DEST_DSP_C and dest1_en = '1') then
-                dsp_c_reg(instr_dest1_sub)(31 downto 0)  <= src1;
-                dsp_c_reg(instr_dest1_sub)(47 downto 32) <= (others => src1(31));
+                dsp_c_reg(to_integer(unsigned(instr_dest1_min)))(31 downto 0)  <= src1;
+                dsp_c_reg(to_integer(unsigned(instr_dest1_min)))(47 downto 32) <= (others => src1(31));
             elsif(instr_dest2_maj = DEST_DSP_C and dest2_en = '1') then
-                dsp_c_reg(instr_dest2_sub)(31 downto 0)  <= src2;
-                dsp_c_reg(instr_dest2_sub)(47 downto 32) <= (others => src2(31));
+                dsp_c_reg(to_integer(unsigned(instr_dest2_min)))(31 downto 0)  <= src2;
+                dsp_c_reg(to_integer(unsigned(instr_dest2_min)))(47 downto 32) <= (others => src2(31));
             end if;
         end if;
     end process dsp_c_reg_proc;

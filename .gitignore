@@ -7,3 +7,4 @@ pyacadia/build/
 pyacadia/dist/
 pyacadia/pyacadia*/
 testing/
+docs/_build

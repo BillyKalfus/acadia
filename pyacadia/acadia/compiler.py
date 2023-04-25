@@ -12,7 +12,7 @@ __all__ = ["Operable",
            "Synchronizer"]
 
 import operator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import get_type_hints
 from types import MethodType
 from abc import ABC, abstractmethod
@@ -80,13 +80,32 @@ class Operable(type):
             return operation
         
         return op_func
+    
+    @staticmethod
+    def make_operator_functions(operators=None, support_handled_operators=True):
+        funcs = {}
+        if operators is not None:
+            supported_operators = operators
+            
+        else:
+            supported_operators = (Operable.NUMERIC_OPERATORS 
+                                   + Operable.MISC_OPERATORS)
+            if support_handled_operators:
+                supported_operators += Operable.HANDLED_OPERATORS
+        
+        # handlers = kwargs["handlers"] if "handlers" in kwargs else []
+        handlers = []
+        for op in supported_operators:
+            if op in handlers:
+                funcs[f"__{op}__"] = Operable.make_op_func(op, handler=handlers[op])
+            else:
+                funcs[f"__{op}__"] = Operable.make_op_func(op)
+                
+        return funcs
      
-    def __new__(cls, name, bases, dct, *args, **kwargs):
+    def __new__(cls, name, bases, dct, operators=None, support_handled_operators=True):
         """
-        Creates a new :class:`Operable` type. Certain keyword arguments
-        provided to this constructor will augment the behavior of the operator
-        methods, listed below as parameters (since they will be parameters of
-        the constructor, but will appear as entries in `dct`).
+        Creates a new :class:`Operable` type.
         
         :param operators: A list of operators that this :class:`Operable` will
         capture. The elements in this list should be the names of the operator
@@ -101,27 +120,7 @@ class Operable(type):
         will be called and passed the newly-created :class:`Operation` as its
         sole argument.
         """
-        if "OPERATORS" in dct:
-            supported_operators = dct["OPERATORS"]
-            
-        elif "SUPPORT_HANDLED_OPERATORS" in dct:
-            supported_operators = (Operable.NUMERIC_OPERATORS 
-                                   + Operable.MISC_OPERATORS)
-            if dct["SUPPORT_HANDLED_OPERATORS"]:
-                supported_operators += Operable.HANDLED_OPERATORS
-        else:
-            supported_operators = (Operable.NUMERIC_OPERATORS 
-                                   + Operable.MISC_OPERATORS 
-                                   + Operable.HANDLED_OPERATORS)
-            
-        handlers = dct["handlers"] if "handlers" in dct else []
-            
-        for op in supported_operators:
-            if op in handlers:
-                dct[f"__{op}__"] = Operable.make_op_func(op, handler=handlers[op])
-            else:
-                dct[f"__{op}__"] = Operable.make_op_func(op)
-                
+        dct.update(Operable.make_operator_functions(operators, support_handled_operators))
         return super().__new__(cls, name, bases, dct)
     
 class Operation(metaclass=Operable):
@@ -179,7 +178,7 @@ class Operation(metaclass=Operable):
         raise ValueError(f"Operation object {self} acted upon by augmenting"
                          f" operator with operation {operation}.")
     
-class Symbol(metaclass=Operable):
+class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):
     """
     A symbolic variable with a value not necessarily known to the user but 
     guaranteed to be available at the time of translation. A canonical example 
@@ -337,7 +336,7 @@ class ManagedResource(type):
         :return: A :class:`Symbol` that will be populated with the next instance of
         the resource once generated. 
         """
-        if not hasattr(type_self, "_next_instance_symbol") or type_self.next_instance_assigned():
+        if (not hasattr(type_self, "_next_instance_symbol")) or type_self.next_instance_assigned():
             type_self._next_instance_symbol = Symbol(value_type=type_self)
 
         return type_self._next_instance_symbol
@@ -498,7 +497,7 @@ class ProcessorInstruction:
     inline_block_end: bool = False
     inline_block_level: bool = False
     address: [Symbol, int] = None
-    compiled: list = None
+    compiled: list = field(default=None, repr=False)
     
     def __post_init__(self):
         # Do basic type-checking
@@ -908,6 +907,23 @@ class Processor:
             for idx_instruction,instruction in enumerate(block):
                 instruction.address.assign(len(self._compiled_program))
                 self._compiled_program.extend(instruction.compiled)
+                
+                
+    def insert_compiled_instructions(self, index, instructions):
+        """
+        Inserts instructions into a precompiled program and updates the 
+        addresses of all others to reflect the insertion.
+        """
+        # Iterate in reverse because when we insert an element at a particular 
+        # index, the existing element gets bumped forward
+        for instruction in reversed(instructions):
+            self._compiled_program.insert(index, instruction)
+            
+        # Update the addresses of Instruction instances (which will automatically
+        # be updated for any objects that reference them, including the compiled program)
+        for instruction in self.Instruction.instances:
+            if instruction.address.value() >= index:
+                instruction.address.assign(instruction.address.value() + len(instructions), force=True)
         
     def __eq__(self, other):
         """
@@ -977,7 +993,7 @@ class SynchronizedFunction:
     
 class Synchronizer:
     """
-    A class for organizing instructions across processors and implementing 
+    A class for orchestrating instructions across processors and implementing 
     synchronization routines. Specific routines are carried out by dedicated 
     subclasses for enforcing different types of synchronization, and an error 
     will be thrown if an instruction is placed into a synchronization block 
@@ -987,7 +1003,7 @@ class Synchronizer:
     within them define the operations to be synchronized in some way. In order
     for an operation to be considered a valid command for a given type of 
     :class:`Synchronizer`, it must be a function decorated with the 
-    :class:`Synchronizer` object's :meth:`synchronizer` decorator. This 
+    :class:`Synchronizer` object's :meth:`synchronized` decorator. This 
     decorator wraps the decorated function in a :class:`SynchronizedFunction` 
     object, whose purpose is solely to capture both the :class:`Synchronizer` 
     to which it belongs and the :class:`Processor` to which the 
@@ -1008,7 +1024,7 @@ class Synchronizer:
     an example to illustrate the interplay between the classes:
     
     ```
-    class SomeProcessor:
+    class Something:
         synchronizer = Synchronizer()
 
         @synchronizer.synchronized
@@ -1022,7 +1038,7 @@ class Synchronizer:
     A synchronization context is established like so:
     
     ```
-    p = SomeProcessor()
+    p = Something()
     
     with p.synchronizer():
         p.command()
@@ -1041,7 +1057,7 @@ class Synchronizer:
     :class:`SynchronizedFunction`, the :meth:`__call__` method is invoked on 
     the :class:`SynchronizedFunction`, which reports to its synchronizer that 
     the function was called and then calls the decorated function on the 
-    previously-captured :class:`Processor` object.
+    previously-captured :class:`Something` object.
     """
     def __init__(self, allow_standalone=False):
         self._active = False
