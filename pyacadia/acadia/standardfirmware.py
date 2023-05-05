@@ -73,7 +73,7 @@ class StandardFirmware(Firmware):
     DAC_MEMORY_SIZE_BITS = 128*8192
     DAC_MEMORY_BASE_ADDRESS = 0x00_B100_0000
     
-    CMACC_KERNEL_MEMORY_SIZE_BITS = 2048*128
+    CMACC_KERNEL_MEMORY_SIZE_BITS = 2048*32
     CMACC_KERNEL_MEMORY_BASE_ADDRESS = 0x00_B200_0000
 
     ADC_FIFO_DEPTH = 1024
@@ -87,6 +87,7 @@ class StandardFirmware(Firmware):
     NUM_PS_GDMA = 8
     
     GPIO_SEQUENCER_RUN = 90 # The GPIO bit connected to the sequencer run synchronizer
+    GPIO_CLK_SEL = 89 # The GPIO bit connected to the clock wizard clock select
     
     """
     The standard Acadia firmware. Handcrafted, artisanal FPGA logic with notes of silicon and garnished with hedgehog quills.
@@ -334,7 +335,7 @@ class StandardFirmware(Firmware):
             
         controller = AXIMemoryArray(f"cmacc_kernel", 
             size_bits=StandardFirmware.CMACC_KERNEL_MEMORY_SIZE_BITS, 
-            width=64, 
+            width=32, 
             axi_frequency=300e6, 
             elements=StandardFirmware.NUM_CMACC, 
             read_only=True,
@@ -419,6 +420,11 @@ class StandardFirmware(Firmware):
             connect_bd_intf_net(f, "hedgehog/CLK104_PL_CLK", "hedgehog/pl_clk_ibufds/CLK_IN_D")
             connect_bd_net(f, "hedgehog/pl_clk_ibufds/IBUF_OUT", "hedgehog/pl_clk_bufg/BUFG_I")
             
+            # Connect a second input clock to the clocking wizard for the 8A34001
+            create_ip(f, name="hedgehog/clk_8A34001_out3_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            set_property(f, name="hedgehog/clk_8A34001_out3_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
+            connect_bd_intf_net(f, "hedgehog/CLK_8A34001_Q3_OUT", "hedgehog/clk_8A34001_out3_ibufds/CLK_IN_D")
+            
             # We'll create an MMCM that will generate a 30 MHz clock 
             # for the decimated ADC along with a 300 MHz signal to clock everything else
             # (this is moreso for convenience, since then it"ll have a nice phase 
@@ -436,8 +442,13 @@ class StandardFirmware(Firmware):
                                         "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {300.000} "
                                         "CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {30.000} "
                                         "CONFIG.CLK_OUT1_PORT {seq_clk} "
-                                        "CONFIG.CLK_OUT2_PORT {clk_30} "
+                                        "CONFIG.CLK_OUT2_PORT {clk_adc_tile3} "
                                         "CONFIG.CLKIN1_JITTER_PS {33.330000000000005} "
+                                        "CONFIG.USE_INCLK_SWITCHOVER {false} "
+                                        "CONFIG.SECONDARY_IN_FREQ {300.000} "
+                                        "CONFIG.SECONDARY_SOURCE {Global_buffer} "
+                                        "CONFIG.CLKIN2_JITTER_PS {33.330000000000005} "
+                                        "CONFIG.MMCM_CLKIN2_PERIOD {3.333} "
                                         "CONFIG.CLKOUT1_DRIVES {Buffer} "
                                         "CONFIG.CLKOUT2_DRIVES {Buffer} "
                                         "CONFIG.CLKOUT3_DRIVES {Buffer} "
@@ -450,7 +461,6 @@ class StandardFirmware(Firmware):
                                         "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
                                         "CONFIG.MMCM_CLKFBOUT_MULT_F {4.000} "
                                         "CONFIG.MMCM_CLKIN1_PERIOD {3.333} "
-                                        "CONFIG.MMCM_CLKIN2_PERIOD {10.0} "
                                         "CONFIG.MMCM_COMPENSATION {AUTO} "
                                         "CONFIG.MMCM_CLKOUT0_DIVIDE_F {4.000} "
                                         "CONFIG.MMCM_CLKOUT1_DIVIDE {40} "
@@ -487,12 +497,25 @@ class StandardFirmware(Firmware):
             connect_bd_net(f, f"hedgehog/clk_wiz/s_axi_aclk", f"hedgehog/PS_clk_250")
             connect_bd_net(f, f"hedgehog/clk_wiz/s_axi_aresetn", f"hedgehog/proc_sys_reset_PS_clk_250/peripheral_aresetn")
 
-            # Connect the buffer output to the clock wizard and apply a constraint
+            # Connect the CLK104 PL clock buffer output to the clock wizard and apply a constraint
             connect_bd_net(f, f"hedgehog/pl_clk_bufg/BUFG_O", f"hedgehog/clk_wiz/clk_in1")
             self._hedgehog_constraints.append("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/pl_clk_bufg_BUFG_O]")
             self._hedgehog_constraints.append("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/clk_wiz/inst/CLK_CORE_DRP_I/clk_inst/clk_in1_acadia_bd_clk_wiz_0]")
-            
             f.write("set_property -dict [list CONFIG.FREQ_HZ {300000000}] [get_bd_intf_ports CLK104_PL_CLK]\n")
+            
+            # Connect the clock from the 8A34001 to the clocking wizard
+            # connect_bd_net(f, "hedgehog/clk_8A34001_out3_ibufds/IBUF_OUT", f"hedgehog/clk_wiz/clk_in2")
+            f.write("set_property -dict [list CONFIG.FREQ_HZ {300000000}] [get_bd_intf_ports CLK_8A34001_Q3_OUT]\n")
+            
+            # Slice the PS GPIO for the sequencer run signal
+            # create_slice(f, name=f"hedgehog/xlslice_clk_sel", 
+            #                  input_width=StandardFirmware.NUM_PS_GPIO, 
+            #                  input_from=StandardFirmware.GPIO_CLK_SEL,
+            #                  input_to=StandardFirmware.GPIO_CLK_SEL)
+            # connect_bd_net(f, f"hedgehog/xlslice_clk_sel/Din", "hedgehog/PS_GPIO_OUT")
+            # connect_bd_net(f, f"hedgehog/xlslice_clk_sel/Dout", "hedgehog/clk_wiz/clk_in_sel")
+            
+            
             
             # ------------------- SmartConnects -------------------- #
 
@@ -549,7 +572,368 @@ class StandardFirmware(Firmware):
             create_ip(f, name="hedgehog/rfdc", vlnv="xilinx.com:ip:usp_rf_data_converter:2.4")
             
             # Auto-generated config string by Vivado
-            rfdc_config_string = "CONFIG.ADC0_Clock_Source {2} CONFIG.ADC0_Fabric_Freq {300.000} CONFIG.ADC0_Outclk_Freq {150.000} CONFIG.ADC0_PLL_Enable {true} CONFIG.ADC0_Refclk_Freq {300.000} CONFIG.ADC0_Sampling_Rate {1.2} CONFIG.ADC1_Clock_Source {2} CONFIG.ADC1_Enable {1} CONFIG.ADC1_Fabric_Freq {300.000} CONFIG.ADC1_Outclk_Freq {300.000} CONFIG.ADC1_PLL_Enable {true} CONFIG.ADC1_Refclk_Freq {300.000} CONFIG.ADC1_Sampling_Rate {2.4} CONFIG.ADC2_Clock_Dist {1} CONFIG.ADC2_Clock_Source {2} CONFIG.ADC2_Enable {1} CONFIG.ADC2_Fabric_Freq {300.000} CONFIG.ADC2_Outclk_Freq {300.000} CONFIG.ADC2_PLL_Enable {true} CONFIG.ADC2_Refclk_Freq {300.000} CONFIG.ADC2_Sampling_Rate {2.4} CONFIG.ADC3_Clock_Source {2} CONFIG.ADC3_Enable {1} CONFIG.ADC3_Fabric_Freq {30.000} CONFIG.ADC3_Outclk_Freq {300.000} CONFIG.ADC3_PLL_Enable {true} CONFIG.ADC3_Refclk_Freq {300.000} CONFIG.ADC3_Sampling_Rate {2.4} CONFIG.ADC_Coarse_Mixer_Freq00 {0} CONFIG.ADC_Coarse_Mixer_Freq01 {0} CONFIG.ADC_Coarse_Mixer_Freq02 {0} CONFIG.ADC_Coarse_Mixer_Freq03 {0} CONFIG.ADC_Coarse_Mixer_Freq10 {0} CONFIG.ADC_Coarse_Mixer_Freq11 {0} CONFIG.ADC_Coarse_Mixer_Freq12 {0} CONFIG.ADC_Coarse_Mixer_Freq13 {0} CONFIG.ADC_Coarse_Mixer_Freq20 {0} CONFIG.ADC_Coarse_Mixer_Freq21 {0} CONFIG.ADC_Coarse_Mixer_Freq22 {0} CONFIG.ADC_Coarse_Mixer_Freq23 {0} CONFIG.ADC_Coarse_Mixer_Freq30 {0} CONFIG.ADC_Coarse_Mixer_Freq31 {0} CONFIG.ADC_Coarse_Mixer_Freq32 {0} CONFIG.ADC_Coarse_Mixer_Freq33 {0} CONFIG.ADC_DSA_RTS {false} CONFIG.ADC_Data_Type00 {1} CONFIG.ADC_Data_Type01 {1} CONFIG.ADC_Data_Type02 {1} CONFIG.ADC_Data_Type03 {1} CONFIG.ADC_Data_Type10 {1} CONFIG.ADC_Data_Type11 {1} CONFIG.ADC_Data_Type12 {1} CONFIG.ADC_Data_Type13 {1} CONFIG.ADC_Data_Type20 {1} CONFIG.ADC_Data_Type21 {1} CONFIG.ADC_Data_Type22 {1} CONFIG.ADC_Data_Type23 {1} CONFIG.ADC_Data_Type30 {1} CONFIG.ADC_Data_Type31 {1} CONFIG.ADC_Data_Type32 {1} CONFIG.ADC_Data_Type33 {1} CONFIG.ADC_Data_Width00 {8} CONFIG.ADC_Decimation_Mode01 {1} CONFIG.ADC_Decimation_Mode02 {1} CONFIG.ADC_Decimation_Mode03 {1} CONFIG.ADC_Decimation_Mode10 {2} CONFIG.ADC_Decimation_Mode11 {2} CONFIG.ADC_Decimation_Mode12 {2} CONFIG.ADC_Decimation_Mode13 {2} CONFIG.ADC_Decimation_Mode20 {2} CONFIG.ADC_Decimation_Mode21 {2} CONFIG.ADC_Decimation_Mode22 {2} CONFIG.ADC_Decimation_Mode23 {2} CONFIG.ADC_Decimation_Mode30 {20} CONFIG.ADC_Decimation_Mode31 {20} CONFIG.ADC_Decimation_Mode32 {20} CONFIG.ADC_Decimation_Mode33 {20} CONFIG.ADC_Dither00 {false} CONFIG.ADC_Dither01 {false} CONFIG.ADC_Dither02 {false} CONFIG.ADC_Dither03 {false} CONFIG.ADC_Dither10 {false} CONFIG.ADC_Dither11 {false} CONFIG.ADC_Dither12 {false} CONFIG.ADC_Dither13 {false} CONFIG.ADC_Dither20 {false} CONFIG.ADC_Dither21 {false} CONFIG.ADC_Dither22 {false} CONFIG.ADC_Dither23 {false} CONFIG.ADC_Dither30 {false} CONFIG.ADC_Dither31 {false} CONFIG.ADC_Dither32 {false} CONFIG.ADC_Dither33 {false} CONFIG.ADC_Mixer_Mode00 {0} CONFIG.ADC_Mixer_Mode01 {0} CONFIG.ADC_Mixer_Mode02 {0} CONFIG.ADC_Mixer_Mode03 {0} CONFIG.ADC_Mixer_Mode10 {0} CONFIG.ADC_Mixer_Mode11 {0} CONFIG.ADC_Mixer_Mode12 {0} CONFIG.ADC_Mixer_Mode13 {0} CONFIG.ADC_Mixer_Mode20 {0} CONFIG.ADC_Mixer_Mode21 {0} CONFIG.ADC_Mixer_Mode22 {0} CONFIG.ADC_Mixer_Mode23 {0} CONFIG.ADC_Mixer_Mode30 {0} CONFIG.ADC_Mixer_Mode31 {0} CONFIG.ADC_Mixer_Mode32 {0} CONFIG.ADC_Mixer_Mode33 {0} CONFIG.ADC_Mixer_Type00 {2} CONFIG.ADC_Mixer_Type01 {2} CONFIG.ADC_Mixer_Type02 {2} CONFIG.ADC_Mixer_Type03 {2} CONFIG.ADC_Mixer_Type10 {2} CONFIG.ADC_Mixer_Type11 {2} CONFIG.ADC_Mixer_Type12 {2} CONFIG.ADC_Mixer_Type13 {2} CONFIG.ADC_Mixer_Type20 {2} CONFIG.ADC_Mixer_Type21 {2} CONFIG.ADC_Mixer_Type22 {2} CONFIG.ADC_Mixer_Type23 {2} CONFIG.ADC_Mixer_Type30 {2} CONFIG.ADC_Mixer_Type31 {2} CONFIG.ADC_Mixer_Type32 {2} CONFIG.ADC_Mixer_Type33 {2} CONFIG.ADC_NCO_RTS {true} CONFIG.ADC_OBS03 {false} CONFIG.ADC_OBS11 {false} CONFIG.ADC_OBS12 {false} CONFIG.ADC_OBS13 {false} CONFIG.ADC_OBS21 {false} CONFIG.ADC_OBS22 {false} CONFIG.ADC_OBS23 {false} CONFIG.ADC_OBS31 {false} CONFIG.ADC_OBS32 {false} CONFIG.ADC_OBS33 {false} CONFIG.ADC_RESERVED_1_00 {false} CONFIG.ADC_RESERVED_1_01 {false} CONFIG.ADC_RESERVED_1_02 {false} CONFIG.ADC_RESERVED_1_03 {false} CONFIG.ADC_RESERVED_1_10 {false} CONFIG.ADC_RESERVED_1_11 {false} CONFIG.ADC_RESERVED_1_12 {false} CONFIG.ADC_RESERVED_1_13 {false} CONFIG.ADC_RESERVED_1_20 {false} CONFIG.ADC_RESERVED_1_21 {false} CONFIG.ADC_RESERVED_1_22 {false} CONFIG.ADC_RESERVED_1_23 {false} CONFIG.ADC_RESERVED_1_30 {false} CONFIG.ADC_RESERVED_1_31 {false} CONFIG.ADC_RESERVED_1_32 {false} CONFIG.ADC_RESERVED_1_33 {false} CONFIG.ADC_RTS {false} CONFIG.ADC_Slice01_Enable {true} CONFIG.ADC_Slice02_Enable {true} CONFIG.ADC_Slice03_Enable {true} CONFIG.ADC_Slice10_Enable {true} CONFIG.ADC_Slice11_Enable {true} CONFIG.ADC_Slice12_Enable {true} CONFIG.ADC_Slice13_Enable {true} CONFIG.ADC_Slice20_Enable {true} CONFIG.ADC_Slice21_Enable {true} CONFIG.ADC_Slice22_Enable {true} CONFIG.ADC_Slice23_Enable {true} CONFIG.ADC_Slice30_Enable {true} CONFIG.ADC_Slice31_Enable {true} CONFIG.ADC_Slice32_Enable {true} CONFIG.ADC_Slice33_Enable {true} CONFIG.Axiclk_Freq {250} CONFIG.DAC0_Clock_Source {6} CONFIG.DAC0_Enable {1} CONFIG.DAC0_Fabric_Freq {300.000} CONFIG.DAC0_Outclk_Freq {300.000} CONFIG.DAC0_PLL_Enable {true} CONFIG.DAC0_Refclk_Freq {300.000} CONFIG.DAC0_Sampling_Rate {4.8} CONFIG.DAC1_Clock_Source {6} CONFIG.DAC1_Enable {1} CONFIG.DAC1_Fabric_Freq {300.000} CONFIG.DAC1_Outclk_Freq {300.000} CONFIG.DAC1_PLL_Enable {true} CONFIG.DAC1_Refclk_Freq {300.000} CONFIG.DAC1_Sampling_Rate {4.8} CONFIG.DAC2_Clock_Dist {1} CONFIG.DAC2_Enable {1} CONFIG.DAC2_Fabric_Freq {300.000} CONFIG.DAC2_Outclk_Freq {300.000} CONFIG.DAC2_PLL_Enable {true} CONFIG.DAC2_Refclk_Freq {300.000} CONFIG.DAC2_Sampling_Rate {9.6} CONFIG.DAC2_VOP {40.0} CONFIG.DAC3_Clock_Source {6} CONFIG.DAC3_Enable {1} CONFIG.DAC3_Fabric_Freq {300.000} CONFIG.DAC3_Outclk_Freq {300.000} CONFIG.DAC3_PLL_Enable {true} CONFIG.DAC3_Refclk_Freq {300.000} CONFIG.DAC3_Sampling_Rate {9.6} CONFIG.DAC3_VOP {40.0} CONFIG.DAC_Coarse_Mixer_Freq00 {3} CONFIG.DAC_Coarse_Mixer_Freq01 {3} CONFIG.DAC_Coarse_Mixer_Freq02 {3} CONFIG.DAC_Coarse_Mixer_Freq03 {3} CONFIG.DAC_Coarse_Mixer_Freq10 {3} CONFIG.DAC_Coarse_Mixer_Freq11 {3} CONFIG.DAC_Coarse_Mixer_Freq12 {3} CONFIG.DAC_Coarse_Mixer_Freq13 {3} CONFIG.DAC_Coarse_Mixer_Freq20 {3} CONFIG.DAC_Coarse_Mixer_Freq21 {3} CONFIG.DAC_Coarse_Mixer_Freq22 {3} CONFIG.DAC_Coarse_Mixer_Freq23 {3} CONFIG.DAC_Coarse_Mixer_Freq30 {3} CONFIG.DAC_Coarse_Mixer_Freq31 {3} CONFIG.DAC_Coarse_Mixer_Freq32 {3} CONFIG.DAC_Coarse_Mixer_Freq33 {3} CONFIG.DAC_Data_Width00 {8} CONFIG.DAC_Data_Width01 {8} CONFIG.DAC_Data_Width02 {8} CONFIG.DAC_Data_Width03 {8} CONFIG.DAC_Data_Width10 {8} CONFIG.DAC_Data_Width11 {8} CONFIG.DAC_Data_Width12 {8} CONFIG.DAC_Data_Width13 {8} CONFIG.DAC_Data_Width20 {8} CONFIG.DAC_Data_Width21 {8} CONFIG.DAC_Data_Width22 {8} CONFIG.DAC_Data_Width23 {8} CONFIG.DAC_Data_Width30 {8} CONFIG.DAC_Data_Width31 {8} CONFIG.DAC_Data_Width32 {8} CONFIG.DAC_Data_Width33 {8} CONFIG.DAC_Interpolation_Mode00 {4} CONFIG.DAC_Interpolation_Mode01 {4} CONFIG.DAC_Interpolation_Mode02 {4} CONFIG.DAC_Interpolation_Mode03 {4} CONFIG.DAC_Interpolation_Mode10 {4} CONFIG.DAC_Interpolation_Mode11 {4} CONFIG.DAC_Interpolation_Mode12 {4} CONFIG.DAC_Interpolation_Mode13 {4} CONFIG.DAC_Interpolation_Mode20 {4} CONFIG.DAC_Interpolation_Mode21 {4} CONFIG.DAC_Interpolation_Mode22 {4} CONFIG.DAC_Interpolation_Mode23 {4} CONFIG.DAC_Interpolation_Mode30 {4} CONFIG.DAC_Interpolation_Mode31 {4} CONFIG.DAC_Interpolation_Mode32 {4} CONFIG.DAC_Interpolation_Mode33 {4} CONFIG.DAC_Mixer_Mode00 {0} CONFIG.DAC_Mixer_Mode01 {0} CONFIG.DAC_Mixer_Mode02 {0} CONFIG.DAC_Mixer_Mode03 {0} CONFIG.DAC_Mixer_Mode10 {0} CONFIG.DAC_Mixer_Mode11 {0} CONFIG.DAC_Mixer_Mode12 {0} CONFIG.DAC_Mixer_Mode13 {0} CONFIG.DAC_Mixer_Mode20 {0} CONFIG.DAC_Mixer_Mode21 {0} CONFIG.DAC_Mixer_Mode22 {0} CONFIG.DAC_Mixer_Mode23 {0} CONFIG.DAC_Mixer_Mode30 {0} CONFIG.DAC_Mixer_Mode31 {0} CONFIG.DAC_Mixer_Mode32 {0} CONFIG.DAC_Mixer_Mode33 {0} CONFIG.DAC_Mixer_Type00 {2} CONFIG.DAC_Mixer_Type01 {2} CONFIG.DAC_Mixer_Type02 {2} CONFIG.DAC_Mixer_Type03 {2} CONFIG.DAC_Mixer_Type10 {2} CONFIG.DAC_Mixer_Type11 {2} CONFIG.DAC_Mixer_Type12 {2} CONFIG.DAC_Mixer_Type13 {2} CONFIG.DAC_Mixer_Type20 {2} CONFIG.DAC_Mixer_Type21 {2} CONFIG.DAC_Mixer_Type22 {2} CONFIG.DAC_Mixer_Type23 {2} CONFIG.DAC_Mixer_Type30 {2} CONFIG.DAC_Mixer_Type31 {2} CONFIG.DAC_Mixer_Type32 {2} CONFIG.DAC_Mixer_Type33 {2} CONFIG.DAC_Mode00 {0} CONFIG.DAC_Mode01 {0} CONFIG.DAC_Mode02 {0} CONFIG.DAC_Mode03 {0} CONFIG.DAC_Mode10 {0} CONFIG.DAC_Mode11 {0} CONFIG.DAC_Mode12 {0} CONFIG.DAC_Mode13 {0} CONFIG.DAC_Mode20 {1} CONFIG.DAC_Mode21 {1} CONFIG.DAC_Mode22 {1} CONFIG.DAC_Mode23 {1} CONFIG.DAC_Mode30 {1} CONFIG.DAC_Mode31 {1} CONFIG.DAC_Mode32 {1} CONFIG.DAC_Mode33 {1} CONFIG.DAC_NCO_RTS {true} CONFIG.DAC_Nyquist20 {1} CONFIG.DAC_Nyquist21 {1} CONFIG.DAC_Nyquist22 {1} CONFIG.DAC_Nyquist23 {1} CONFIG.DAC_Nyquist30 {1} CONFIG.DAC_Nyquist31 {1} CONFIG.DAC_Nyquist32 {1} CONFIG.DAC_Nyquist33 {1} CONFIG.DAC_RESERVED_1_00 {false} CONFIG.DAC_RESERVED_1_01 {false} CONFIG.DAC_RESERVED_1_02 {false} CONFIG.DAC_RESERVED_1_03 {false} CONFIG.DAC_RESERVED_1_10 {false} CONFIG.DAC_RESERVED_1_11 {false} CONFIG.DAC_RESERVED_1_12 {false} CONFIG.DAC_RESERVED_1_13 {false} CONFIG.DAC_RESERVED_1_20 {false} CONFIG.DAC_RESERVED_1_21 {false} CONFIG.DAC_RESERVED_1_22 {false} CONFIG.DAC_RESERVED_1_23 {false} CONFIG.DAC_RESERVED_1_30 {false} CONFIG.DAC_RESERVED_1_31 {false} CONFIG.DAC_RESERVED_1_32 {false} CONFIG.DAC_RESERVED_1_33 {false} CONFIG.DAC_RTS {false} CONFIG.DAC_Slice00_Enable {true} CONFIG.DAC_Slice01_Enable {true} CONFIG.DAC_Slice02_Enable {true} CONFIG.DAC_Slice03_Enable {true} CONFIG.DAC_Slice10_Enable {true} CONFIG.DAC_Slice11_Enable {true} CONFIG.DAC_Slice12_Enable {true} CONFIG.DAC_Slice13_Enable {true} CONFIG.DAC_Slice20_Enable {true} CONFIG.DAC_Slice21_Enable {true} CONFIG.DAC_Slice22_Enable {true} CONFIG.DAC_Slice23_Enable {true} CONFIG.DAC_Slice30_Enable {true} CONFIG.DAC_Slice31_Enable {true} CONFIG.DAC_Slice32_Enable {true} CONFIG.DAC_Slice33_Enable {true} CONFIG.DAC_VOP_RTS {false} CONFIG.ADC0_Multi_Tile_Sync {true} CONFIG.DAC0_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS00 {1} CONFIG.DAC_TDD_RTS01 {1} CONFIG.DAC_TDD_RTS02 {1} CONFIG.DAC_TDD_RTS03 {1} CONFIG.DAC1_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS10 {1} CONFIG.DAC_TDD_RTS11 {1} CONFIG.DAC_TDD_RTS12 {1} CONFIG.DAC_TDD_RTS13 {1} CONFIG.DAC2_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS20 {1} CONFIG.DAC_TDD_RTS21 {1} CONFIG.DAC_TDD_RTS22 {1} CONFIG.DAC_TDD_RTS23 {1} CONFIG.DAC3_Multi_Tile_Sync {true} CONFIG.DAC_TDD_RTS30 {1} CONFIG.DAC_TDD_RTS31 {1} CONFIG.DAC_TDD_RTS32 {1} CONFIG.DAC_TDD_RTS33 {1} CONFIG.ADC_RTS {true} CONFIG.DAC_RTS {true} CONFIG.DAC_VOP_RTS {true} CONFIG.ADC_DSA_RTS {true}"
+            rfdc_config_string = ("CONFIG.ADC0_Clock_Source {2} "
+                                   "CONFIG.ADC0_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC0_Multi_Tile_Sync {true} "
+                                   "CONFIG.ADC0_Outclk_Freq {150.000} "
+                                   "CONFIG.ADC0_PLL_Enable {true} "
+                                   "CONFIG.ADC0_Refclk_Freq {300.000} "
+                                   "CONFIG.ADC0_Sampling_Rate {1.2} "
+                                   "CONFIG.ADC1_Clock_Source {2} "
+                                   "CONFIG.ADC1_Enable {1} "
+                                   "CONFIG.ADC1_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC1_Multi_Tile_Sync {true} "
+                                   "CONFIG.ADC1_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC1_PLL_Enable {true} "
+                                   "CONFIG.ADC1_Refclk_Freq {300.000} "
+                                   "CONFIG.ADC1_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC2_Clock_Dist {1} "
+                                   "CONFIG.ADC2_Clock_Source {2} "
+                                   "CONFIG.ADC2_Enable {1} "
+                                   "CONFIG.ADC2_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC2_Multi_Tile_Sync {true} "
+                                   "CONFIG.ADC2_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC2_PLL_Enable {true} "
+                                   "CONFIG.ADC2_Refclk_Freq {300.000} "
+                                   "CONFIG.ADC2_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC3_Clock_Source {2} "
+                                   "CONFIG.ADC3_Enable {1} "
+                                   "CONFIG.ADC3_Fabric_Freq {30.000} "
+                                   "CONFIG.ADC3_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC3_PLL_Enable {true} "
+                                   "CONFIG.ADC3_Refclk_Freq {300.000} "
+                                   "CONFIG.ADC3_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq00 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq01 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq02 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq03 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq10 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq11 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq12 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq13 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq20 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq21 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq22 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq23 {3} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq30 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq31 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq32 {0} "
+                                   "CONFIG.ADC_Coarse_Mixer_Freq33 {0} "
+                                   "CONFIG.ADC_DSA_RTS {true} "
+                                   "CONFIG.ADC_Data_Type00 {1} "
+                                   "CONFIG.ADC_Data_Type01 {1} "
+                                   "CONFIG.ADC_Data_Type02 {1} "
+                                   "CONFIG.ADC_Data_Type03 {1} "
+                                   "CONFIG.ADC_Data_Type10 {1} "
+                                   "CONFIG.ADC_Data_Type11 {1} "
+                                   "CONFIG.ADC_Data_Type12 {1} "
+                                   "CONFIG.ADC_Data_Type13 {1} "
+                                   "CONFIG.ADC_Data_Type20 {1} "
+                                   "CONFIG.ADC_Data_Type21 {1} "
+                                   "CONFIG.ADC_Data_Type22 {1} "
+                                   "CONFIG.ADC_Data_Type23 {1} "
+                                   "CONFIG.ADC_Data_Type30 {1} "
+                                   "CONFIG.ADC_Data_Type31 {1} "
+                                   "CONFIG.ADC_Data_Type32 {1} "
+                                   "CONFIG.ADC_Data_Type33 {1} "
+                                   "CONFIG.ADC_Data_Width00 {8} "
+                                   "CONFIG.ADC_Decimation_Mode00 {1} "
+                                   "CONFIG.ADC_Decimation_Mode01 {1} "
+                                   "CONFIG.ADC_Decimation_Mode02 {1} "
+                                   "CONFIG.ADC_Decimation_Mode03 {1} "
+                                   "CONFIG.ADC_Decimation_Mode10 {2} "
+                                   "CONFIG.ADC_Decimation_Mode11 {2} "
+                                   "CONFIG.ADC_Decimation_Mode12 {2} "
+                                   "CONFIG.ADC_Decimation_Mode13 {2} "
+                                   "CONFIG.ADC_Decimation_Mode20 {2} "
+                                   "CONFIG.ADC_Decimation_Mode21 {2} "
+                                   "CONFIG.ADC_Decimation_Mode22 {2} "
+                                   "CONFIG.ADC_Decimation_Mode23 {2} "
+                                   "CONFIG.ADC_Decimation_Mode30 {20} "
+                                   "CONFIG.ADC_Decimation_Mode31 {20} "
+                                   "CONFIG.ADC_Decimation_Mode32 {20} "
+                                   "CONFIG.ADC_Decimation_Mode33 {20} "
+                                   "CONFIG.ADC_Dither00 {false} "
+                                   "CONFIG.ADC_Dither01 {false} "
+                                   "CONFIG.ADC_Dither02 {false} "
+                                   "CONFIG.ADC_Dither03 {false} "
+                                   "CONFIG.ADC_Dither10 {false} "
+                                   "CONFIG.ADC_Dither11 {false} "
+                                   "CONFIG.ADC_Dither12 {false} "
+                                   "CONFIG.ADC_Dither13 {false} "
+                                   "CONFIG.ADC_Dither20 {false} "
+                                   "CONFIG.ADC_Dither21 {false} "
+                                   "CONFIG.ADC_Dither22 {false} "
+                                   "CONFIG.ADC_Dither23 {false} "
+                                   "CONFIG.ADC_Dither30 {false} "
+                                   "CONFIG.ADC_Dither31 {false} "
+                                   "CONFIG.ADC_Dither32 {false} "
+                                   "CONFIG.ADC_Dither33 {false} "
+                                   "CONFIG.ADC_Mixer_Mode00 {0} "
+                                   "CONFIG.ADC_Mixer_Mode01 {0} "
+                                   "CONFIG.ADC_Mixer_Mode02 {0} "
+                                   "CONFIG.ADC_Mixer_Mode03 {0} "
+                                   "CONFIG.ADC_Mixer_Mode10 {0} "
+                                   "CONFIG.ADC_Mixer_Mode11 {0} "
+                                   "CONFIG.ADC_Mixer_Mode12 {0} "
+                                   "CONFIG.ADC_Mixer_Mode13 {0} "
+                                   "CONFIG.ADC_Mixer_Mode20 {0} "
+                                   "CONFIG.ADC_Mixer_Mode21 {0} "
+                                   "CONFIG.ADC_Mixer_Mode22 {0} "
+                                   "CONFIG.ADC_Mixer_Mode23 {0} "
+                                   "CONFIG.ADC_Mixer_Mode30 {0} "
+                                   "CONFIG.ADC_Mixer_Mode31 {0} "
+                                   "CONFIG.ADC_Mixer_Mode32 {0} "
+                                   "CONFIG.ADC_Mixer_Mode33 {0} "
+                                   "CONFIG.ADC_Mixer_Type00 {2} "
+                                   "CONFIG.ADC_Mixer_Type01 {2} "
+                                   "CONFIG.ADC_Mixer_Type02 {2} "
+                                   "CONFIG.ADC_Mixer_Type03 {2} "
+                                   "CONFIG.ADC_Mixer_Type10 {2} "
+                                   "CONFIG.ADC_Mixer_Type11 {2} "
+                                   "CONFIG.ADC_Mixer_Type12 {2} "
+                                   "CONFIG.ADC_Mixer_Type13 {2} "
+                                   "CONFIG.ADC_Mixer_Type20 {2} "
+                                   "CONFIG.ADC_Mixer_Type21 {2} "
+                                   "CONFIG.ADC_Mixer_Type22 {2} "
+                                   "CONFIG.ADC_Mixer_Type23 {2} "
+                                   "CONFIG.ADC_Mixer_Type30 {2} "
+                                   "CONFIG.ADC_Mixer_Type31 {2} "
+                                   "CONFIG.ADC_Mixer_Type32 {2} "
+                                   "CONFIG.ADC_Mixer_Type33 {2} "
+                                   "CONFIG.ADC_NCO_RTS {true} "
+                                   "CONFIG.ADC_OBS03 {false} "
+                                   "CONFIG.ADC_OBS11 {false} "
+                                   "CONFIG.ADC_OBS12 {false} "
+                                   "CONFIG.ADC_OBS13 {false} "
+                                   "CONFIG.ADC_OBS21 {false} "
+                                   "CONFIG.ADC_OBS22 {false} "
+                                   "CONFIG.ADC_OBS23 {false} "
+                                   "CONFIG.ADC_OBS31 {false} "
+                                   "CONFIG.ADC_OBS32 {false} "
+                                   "CONFIG.ADC_OBS33 {false} "
+                                   "CONFIG.ADC_RESERVED_1_00 {false} "
+                                   "CONFIG.ADC_RESERVED_1_01 {false} "
+                                   "CONFIG.ADC_RESERVED_1_02 {false} "
+                                   "CONFIG.ADC_RESERVED_1_03 {false} "
+                                   "CONFIG.ADC_RESERVED_1_10 {false} "
+                                   "CONFIG.ADC_RESERVED_1_11 {false} "
+                                   "CONFIG.ADC_RESERVED_1_12 {false} "
+                                   "CONFIG.ADC_RESERVED_1_13 {false} "
+                                   "CONFIG.ADC_RESERVED_1_20 {false} "
+                                   "CONFIG.ADC_RESERVED_1_21 {false} "
+                                   "CONFIG.ADC_RESERVED_1_22 {false} "
+                                   "CONFIG.ADC_RESERVED_1_23 {false} "
+                                   "CONFIG.ADC_RESERVED_1_30 {false} "
+                                   "CONFIG.ADC_RESERVED_1_31 {false} "
+                                   "CONFIG.ADC_RESERVED_1_32 {false} "
+                                   "CONFIG.ADC_RESERVED_1_33 {false} "
+                                   "CONFIG.ADC_RTS {true} "
+                                   "CONFIG.ADC_Slice01_Enable {true} "
+                                   "CONFIG.ADC_Slice02_Enable {true} "
+                                   "CONFIG.ADC_Slice03_Enable {true} "
+                                   "CONFIG.ADC_Slice10_Enable {true} "
+                                   "CONFIG.ADC_Slice11_Enable {true} "
+                                   "CONFIG.ADC_Slice12_Enable {true} "
+                                   "CONFIG.ADC_Slice13_Enable {true} "
+                                   "CONFIG.ADC_Slice20_Enable {true} "
+                                   "CONFIG.ADC_Slice21_Enable {true} "
+                                   "CONFIG.ADC_Slice22_Enable {true} "
+                                   "CONFIG.ADC_Slice23_Enable {true} "
+                                   "CONFIG.ADC_Slice30_Enable {true} "
+                                   "CONFIG.ADC_Slice31_Enable {true} "
+                                   "CONFIG.ADC_Slice32_Enable {true} "
+                                   "CONFIG.ADC_Slice33_Enable {true} "
+                                   "CONFIG.Axiclk_Freq {250} "
+                                   "CONFIG.DAC0_Clock_Source {6} "
+                                   "CONFIG.DAC0_Enable {1} "
+                                   "CONFIG.DAC0_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC0_Multi_Tile_Sync {true} "
+                                   "CONFIG.DAC0_Outclk_Freq {46.875} "
+                                   "CONFIG.DAC0_PLL_Enable {true} "
+                                   "CONFIG.DAC0_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC0_Sampling_Rate {6} "
+                                   "CONFIG.DAC1_Clock_Source {6} "
+                                   "CONFIG.DAC1_Enable {1} "
+                                   "CONFIG.DAC1_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC1_Multi_Tile_Sync {true} "
+                                   "CONFIG.DAC1_Outclk_Freq {46.875} "
+                                   "CONFIG.DAC1_PLL_Enable {true} "
+                                   "CONFIG.DAC1_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC1_Sampling_Rate {6} "
+                                   "CONFIG.DAC2_Clock_Dist {1} "
+                                   "CONFIG.DAC2_Enable {1} "
+                                   "CONFIG.DAC2_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC2_Multi_Tile_Sync {true} "
+                                   "CONFIG.DAC2_Outclk_Freq {46.875} "
+                                   "CONFIG.DAC2_PLL_Enable {true} "
+                                   "CONFIG.DAC2_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC2_Sampling_Rate {6} "
+                                   "CONFIG.DAC2_VOP {40.0} "
+                                   "CONFIG.DAC3_Clock_Source {6} "
+                                   "CONFIG.DAC3_Enable {1} "
+                                   "CONFIG.DAC3_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC3_Multi_Tile_Sync {true} "
+                                   "CONFIG.DAC3_Outclk_Freq {46.875} "
+                                   "CONFIG.DAC3_PLL_Enable {true} "
+                                   "CONFIG.DAC3_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC3_Sampling_Rate {6} "
+                                   "CONFIG.DAC3_VOP {40.0} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq00 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq01 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq02 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq03 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq10 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq11 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq12 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq13 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq20 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq21 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq22 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq23 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq30 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq31 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq32 {3} "
+                                   "CONFIG.DAC_Coarse_Mixer_Freq33 {3} "
+                                   "CONFIG.DAC_Data_Width00 {8} "
+                                   "CONFIG.DAC_Data_Width01 {8} "
+                                   "CONFIG.DAC_Data_Width02 {8} "
+                                   "CONFIG.DAC_Data_Width03 {8} "
+                                   "CONFIG.DAC_Data_Width10 {8} "
+                                   "CONFIG.DAC_Data_Width11 {8} "
+                                   "CONFIG.DAC_Data_Width12 {8} "
+                                   "CONFIG.DAC_Data_Width13 {8} "
+                                   "CONFIG.DAC_Data_Width20 {8} "
+                                   "CONFIG.DAC_Data_Width21 {8} "
+                                   "CONFIG.DAC_Data_Width22 {8} "
+                                   "CONFIG.DAC_Data_Width23 {8} "
+                                   "CONFIG.DAC_Data_Width30 {8} "
+                                   "CONFIG.DAC_Data_Width31 {8} "
+                                   "CONFIG.DAC_Data_Width32 {8} "
+                                   "CONFIG.DAC_Data_Width33 {8} "
+                                   "CONFIG.DAC_Interpolation_Mode00 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode01 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode02 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode03 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode10 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode11 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode12 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode13 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode20 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode21 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode22 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode23 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode30 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode31 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode32 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode33 {5} "
+                                   "CONFIG.DAC_Mixer_Mode00 {0} "
+                                   "CONFIG.DAC_Mixer_Mode01 {0} "
+                                   "CONFIG.DAC_Mixer_Mode02 {0} "
+                                   "CONFIG.DAC_Mixer_Mode03 {0} "
+                                   "CONFIG.DAC_Mixer_Mode10 {0} "
+                                   "CONFIG.DAC_Mixer_Mode11 {0} "
+                                   "CONFIG.DAC_Mixer_Mode12 {0} "
+                                   "CONFIG.DAC_Mixer_Mode13 {0} "
+                                   "CONFIG.DAC_Mixer_Mode20 {0} "
+                                   "CONFIG.DAC_Mixer_Mode21 {0} "
+                                   "CONFIG.DAC_Mixer_Mode22 {0} "
+                                   "CONFIG.DAC_Mixer_Mode23 {0} "
+                                   "CONFIG.DAC_Mixer_Mode30 {0} "
+                                   "CONFIG.DAC_Mixer_Mode31 {0} "
+                                   "CONFIG.DAC_Mixer_Mode32 {0} "
+                                   "CONFIG.DAC_Mixer_Mode33 {0} "
+                                   "CONFIG.DAC_Mixer_Type00 {2} "
+                                   "CONFIG.DAC_Mixer_Type01 {2} "
+                                   "CONFIG.DAC_Mixer_Type02 {2} "
+                                   "CONFIG.DAC_Mixer_Type03 {2} "
+                                   "CONFIG.DAC_Mixer_Type10 {2} "
+                                   "CONFIG.DAC_Mixer_Type11 {2} "
+                                   "CONFIG.DAC_Mixer_Type12 {2} "
+                                   "CONFIG.DAC_Mixer_Type13 {2} "
+                                   "CONFIG.DAC_Mixer_Type20 {2} "
+                                   "CONFIG.DAC_Mixer_Type21 {2} "
+                                   "CONFIG.DAC_Mixer_Type22 {2} "
+                                   "CONFIG.DAC_Mixer_Type23 {2} "
+                                   "CONFIG.DAC_Mixer_Type30 {2} "
+                                   "CONFIG.DAC_Mixer_Type31 {2} "
+                                   "CONFIG.DAC_Mixer_Type32 {2} "
+                                   "CONFIG.DAC_Mixer_Type33 {2} "
+                                   "CONFIG.DAC_Mode00 {0} "
+                                   "CONFIG.DAC_Mode01 {0} "
+                                   "CONFIG.DAC_Mode02 {0} "
+                                   "CONFIG.DAC_Mode03 {0} "
+                                   "CONFIG.DAC_Mode10 {0} "
+                                   "CONFIG.DAC_Mode11 {0} "
+                                   "CONFIG.DAC_Mode12 {0} "
+                                   "CONFIG.DAC_Mode13 {0} "
+                                   "CONFIG.DAC_Mode20 {0} "
+                                   "CONFIG.DAC_Mode21 {0} "
+                                   "CONFIG.DAC_Mode22 {0} "
+                                   "CONFIG.DAC_Mode23 {0} "
+                                   "CONFIG.DAC_Mode30 {0} "
+                                   "CONFIG.DAC_Mode31 {0} "
+                                   "CONFIG.DAC_Mode32 {0} "
+                                   "CONFIG.DAC_Mode33 {0} "
+                                   "CONFIG.DAC_NCO_RTS {true} "
+                                   "CONFIG.DAC_Nyquist20 {1} "
+                                   "CONFIG.DAC_Nyquist21 {1} "
+                                   "CONFIG.DAC_Nyquist22 {1} "
+                                   "CONFIG.DAC_Nyquist23 {1} "
+                                   "CONFIG.DAC_Nyquist30 {1} "
+                                   "CONFIG.DAC_Nyquist31 {1} "
+                                   "CONFIG.DAC_Nyquist32 {1} "
+                                   "CONFIG.DAC_Nyquist33 {1} "
+                                   "CONFIG.DAC_RESERVED_1_00 {false} "
+                                   "CONFIG.DAC_RESERVED_1_01 {false} "
+                                   "CONFIG.DAC_RESERVED_1_02 {false} "
+                                   "CONFIG.DAC_RESERVED_1_03 {false} "
+                                   "CONFIG.DAC_RESERVED_1_10 {false} "
+                                   "CONFIG.DAC_RESERVED_1_11 {false} "
+                                   "CONFIG.DAC_RESERVED_1_12 {false} "
+                                   "CONFIG.DAC_RESERVED_1_13 {false} "
+                                   "CONFIG.DAC_RESERVED_1_20 {false} "
+                                   "CONFIG.DAC_RESERVED_1_21 {false} "
+                                   "CONFIG.DAC_RESERVED_1_22 {false} "
+                                   "CONFIG.DAC_RESERVED_1_23 {false} "
+                                   "CONFIG.DAC_RESERVED_1_30 {false} "
+                                   "CONFIG.DAC_RESERVED_1_31 {false} "
+                                   "CONFIG.DAC_RESERVED_1_32 {false} "
+                                   "CONFIG.DAC_RESERVED_1_33 {false} "
+                                   "CONFIG.DAC_RTS {true} "
+                                   "CONFIG.DAC_Slice00_Enable {true} "
+                                   "CONFIG.DAC_Slice01_Enable {true} "
+                                   "CONFIG.DAC_Slice02_Enable {true} "
+                                   "CONFIG.DAC_Slice03_Enable {true} "
+                                   "CONFIG.DAC_Slice10_Enable {true} "
+                                   "CONFIG.DAC_Slice11_Enable {true} "
+                                   "CONFIG.DAC_Slice12_Enable {true} "
+                                   "CONFIG.DAC_Slice13_Enable {true} "
+                                   "CONFIG.DAC_Slice20_Enable {true} "
+                                   "CONFIG.DAC_Slice21_Enable {true} "
+                                   "CONFIG.DAC_Slice22_Enable {true} "
+                                   "CONFIG.DAC_Slice23_Enable {true} "
+                                   "CONFIG.DAC_Slice30_Enable {true} "
+                                   "CONFIG.DAC_Slice31_Enable {true} "
+                                   "CONFIG.DAC_Slice32_Enable {true} "
+                                   "CONFIG.DAC_Slice33_Enable {true} "
+                                   "CONFIG.DAC_TDD_RTS00 {1} "
+                                   "CONFIG.DAC_TDD_RTS01 {1} "
+                                   "CONFIG.DAC_TDD_RTS02 {1} "
+                                   "CONFIG.DAC_TDD_RTS03 {1} "
+                                   "CONFIG.DAC_TDD_RTS10 {1} "
+                                   "CONFIG.DAC_TDD_RTS11 {1} "
+                                   "CONFIG.DAC_TDD_RTS12 {1} "
+                                   "CONFIG.DAC_TDD_RTS13 {1} "
+                                   "CONFIG.DAC_TDD_RTS20 {1} "
+                                   "CONFIG.DAC_TDD_RTS21 {1} "
+                                   "CONFIG.DAC_TDD_RTS22 {1} "
+                                   "CONFIG.DAC_TDD_RTS23 {1} "
+                                   "CONFIG.DAC_TDD_RTS30 {1} "
+                                   "CONFIG.DAC_TDD_RTS31 {1} "
+                                   "CONFIG.DAC_TDD_RTS32 {1} "
+                                   "CONFIG.DAC_TDD_RTS33 {1} "
+                                   "CONFIG.DAC_VOP_RTS {true}")
             
             set_property(f, name="hedgehog/rfdc", properties=rfdc_config_string)
             
@@ -570,7 +954,7 @@ class StandardFirmware(Firmware):
             for i in range(4):
                 connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")        
-                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{'clk_30' if i == 3 else 'seq_clk'}")
+                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{'clk_adc_tile3' if i == 3 else 'seq_clk'}")
                 connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")
 
             # Connect RFDC to the smartconnect through an AXI register slice and assign address space
@@ -928,13 +1312,18 @@ class StandardFirmware(Firmware):
             for d in range(4):
 
                 # ------------------- The CMACC modules -------------------- #
-                create_module(f, f"hedgehog/cmacc{d}", "acadia_fast_complex_macc")
+                create_module(f, f"hedgehog/cmacc{d}", "acadia_complex_macc")
                 connect_bd_net(f, f"hedgehog/cmacc{d}/clk", f"hedgehog/clk_wiz/seq_clk")
-
-                # Connect the CMACC signal input to the ADC switch through a slice
+                
+                # Create a slice for this CMACC and connect it to the ADC switch
                 create_slice(f, f"hedgehog/xlslice_cmacc{d}", input_width=128*8, input_to=(d+4)*128, input_from=(d+4)*128 + 127)
                 connect_bd_net(f, f"hedgehog/axis_switch_adc/m_axis_tdata", f"hedgehog/xlslice_cmacc{d}/Din")
-                connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}/Dout", f"hedgehog/cmacc{d}/signal_in")  
+                
+                # Create a sample adder and connect it to the slice and CMACC input
+                create_module(f, f"hedgehog/cmacc_adder{d}", "acadia_sample_adder")
+                connect_bd_net(f, f"hedgehog/clk_wiz/seq_clk", f"hedgehog/cmacc_adder{d}/clk") 
+                connect_bd_net(f, f"hedgehog/xlslice_cmacc{d}/Dout", f"hedgehog/cmacc_adder{d}/signal_in") 
+                connect_bd_net(f, f"hedgehog/cmacc_adder{d}/signal_out", f"hedgehog/cmacc{d}/signal_in") 
                 
                 # Connect the accumulator reset signal
                 connect_bd_net(f, f"hedgehog/cmacc{d}/rst", f"hedgehog/cmacc_reset_dataport/cmacc{d}")
@@ -982,7 +1371,7 @@ class StandardFirmware(Firmware):
                 # ------------------- DataMover FIFOs -------------------- #
 
                 create_module(f, f"hedgehog/fifo_cmacc_dm{d}", "acadia_adc_fifo")
-                set_property(f, f"hedgehog/fifo_cmacc_dm{d}", properties={"WIDTH": 128, "TKEEP_WIDTH": 16, "DEPTH": StandardFirmware.CMACC_FIFO_DEPTH})
+                set_property(f, f"hedgehog/fifo_cmacc_dm{d}", properties={"WIDTH": 32, "TKEEP_WIDTH": 4, "DEPTH": StandardFirmware.CMACC_FIFO_DEPTH})
 
                 connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
@@ -1296,7 +1685,7 @@ class VOPDSASynchronizer(Synchronizer):
 
             if vop_dsa_update_reg != 0:
                 proc.bus_write(address=rts_address + 0x6D, data=vop_dsa_update_reg)
-        else:
+        elif proc is not None:
             raise TypeError(f"Invalid processor for VOP/DSA synchronization: {proc}")
             
         super().__exit__(exc_type, exc_val, exc_tb)
@@ -1691,9 +2080,11 @@ class Channel:
         elif isinstance(proc, Sequencer):
             vop_reg = Acadia.firmware["rfdc_rts_regs"].address().value() + 0x70 + self.num
             proc.bus_write(address=vop_reg, data=vop)
-            
-        raise TypeError("DAC VOP can only be set in"
-                        " `PythonProcessor` or `Sequencer` contexts.")
+        
+        else:
+            raise TypeError(f"DAC VOP can only be set in"
+                            f" `PythonProcessor` or `Sequencer` contexts"
+                            f" (detected {proc}).")
     
     @vop_dsa_synchronizer.synchronized
     def set_dsa(self, dsa):
@@ -1714,7 +2105,25 @@ class Channel:
             # Do nothing, the synchronizer will manage writing the codes
             # into the registers
             pass
+        else:    
+            raise TypeError("ADC DSA can only be set in"
+                            " `PythonProcessor` or `Sequencer` contexts.")
             
+    def get_dsa(self):
+        """
+        Sets the digital step attenuator (DSA).
+        :param dsa: Attenuation in dB
+        :type dsa: float
+        """
+        if self.is_dac:
+            raise TypeError("DSA can only be read on ADC channels.")
+            
+        proc = Processor.active_processor()
+        if proc is None or isinstance(proc, PythonProcessor):
+            settings = self.RFDC_struct("XRFdc_DSA_Settings*")
+            self.RFDC_call("GetDSA", self.tile, self.block, settings)
+            return settings
+        
         raise TypeError("ADC DSA can only be set in"
                         " `PythonProcessor` or `Sequencer` contexts.")
     
@@ -2972,10 +3381,10 @@ class Acadia:
         :param sequence: The Sequence resource to run.
         :type sequence: Sequence
         """
-        if sequence is not None:
-            jump_instruction = STP(src1=sequence._resource_id, 
-                                    dest1=Destination.PC).assemble()
-            self._sequencer_instruction_memory[0:16] = jump_instruction.to_bytes(16, "little")
+        # if sequence is not None:
+        #     jump_instruction = STP(src1=sequence._resource_id, 
+        #                             dest1=Destination.PC).assemble()
+        #     self._sequencer_instruction_memory[0:16] = jump_instruction.to_bytes(16, "little")
             
         with open(f"/sys/class/gpio/gpio{self._sequencer_gpio}/value", "w") as f:
             f.write(f"1\n")

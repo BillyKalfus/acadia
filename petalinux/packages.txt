@@ -39,7 +39,11 @@ CONFIG_util-linux-mount
 CONFIG_util-linux-lscpu
 CONFIG_kmod
 CONFIG_libkmod
-CONFID_kmod-dev
+CONFIG_kmod-dev
+CONFIG_wget
+CONFIG_curl
+CONFIG_ntp
+CONFIG_ntpq
 CONFIG_python3
 CONFIG_python3-numpy
 CONFIG_python3-io

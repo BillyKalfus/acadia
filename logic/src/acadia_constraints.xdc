@@ -37,31 +37,31 @@ set_property IOSTANDARD  LVCMOS18  [get_ports "CLK104_SYNC_IN"] ;       # Bank  
 # set_property IOSTANDARD  DIFF_SSTL12_DCI [get_ports "USER_SI570_C0_P"] ; # Bank  65 VCCO - VCC1V2   - IO_L12P_T1U_N10_GC_65
 
 # 8A34001 connections
-set_property PACKAGE_PIN Y40         [get_ports "CLK_8A34001_Q1_OUT_N"] ;  # Bank 128 - MGTYRXN3_128
-set_property PACKAGE_PIN Y39         [get_ports "CLK_8A34001_Q1_OUT_P"] ;  # Bank 128 - MGTYRXP3_128
-set_property PACKAGE_PIN AT24        [get_ports "CLK_8A34001_Q2_OUT_N"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
-set_property IOSTANDARD  LVCMOS18    [get_ports "CLK_8A34001_Q2_OUT_N"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
-set_property PACKAGE_PIN AT23        [get_ports "CLK_8A34001_Q2_OUT_P"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
-set_property IOSTANDARD  LVCMOS18    [get_ports "CLK_8A34001_Q2_OUT_P"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
-set_property PACKAGE_PIN G30         [get_ports "CLK_8A34001_Q3_OUT_N"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
-set_property IOSTANDARD  LVCMOS18    [get_ports "CLK_8A34001_Q3_OUT_N"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
-set_property PACKAGE_PIN H30         [get_ports "CLK_8A34001_Q3_OUT_P"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
-set_property IOSTANDARD  LVCMOS18    [get_ports "CLK_8A34001_Q3_OUT_P"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
-set_property PACKAGE_PIN T35         [get_ports "CLK_8A34001_Q7_OUT_N"] ;  # Bank 129 - MGTREFCLK1N_129
-set_property PACKAGE_PIN T34         [get_ports "CLK_8A34001_Q7_OUT_P"] ;  # Bank 129 - MGTREFCLK1P_129
-set_property PACKAGE_PIN H21         [get_ports "CLK_8A34001_Q8_OUT_N"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
-set_property IOSTANDARD  DIFF_SSTL12 [get_ports "CLK_8A34001_Q8_OUT_N"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
-set_property PACKAGE_PIN J21         [get_ports "CLK_8A34001_Q8_OUT_P"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
-set_property IOSTANDARD  DIFF_SSTL12 [get_ports "CLK_8A34001_Q8_OUT_P"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
-set_property PACKAGE_PIN Y35         [get_ports "CLK_8A34001_Q11_OUT_N"] ; # Bank 128 - MGTREFCLK1N_128
-set_property PACKAGE_PIN Y34         [get_ports "CLK_8A34001_Q11_OUT_P"] ; # Bank 128 - MGTREFCLK1P_128
+set_property PACKAGE_PIN Y40         [get_ports "CLK_8A34001_Q1_OUT_clk_n"] ;  # Bank 128 - MGTYRXN3_128
+set_property PACKAGE_PIN Y39         [get_ports "CLK_8A34001_Q1_OUT_clk_p"] ;  # Bank 128 - MGTYRXP3_128
+set_property PACKAGE_PIN AT24        [get_ports "CLK_8A34001_Q2_OUT_clk_n"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
+set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q2_OUT_clk_n"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
+set_property PACKAGE_PIN AT23        [get_ports "CLK_8A34001_Q2_OUT_clk_p"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
+set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q2_OUT_clk_p"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
+set_property PACKAGE_PIN G30         [get_ports "CLK_8A34001_Q3_OUT_clk_n"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
+set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q3_OUT_clk_n"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
+set_property PACKAGE_PIN H30         [get_ports "CLK_8A34001_Q3_OUT_clk_p"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
+set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q3_OUT_clk_p"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
+set_property PACKAGE_PIN T35         [get_ports "CLK_8A34001_Q7_OUT_clk_n"] ;  # Bank 129 - MGTREFCLK1N_129
+set_property PACKAGE_PIN T34         [get_ports "CLK_8A34001_Q7_OUT_clk_p"] ;  # Bank 129 - MGTREFCLK1P_129
+set_property PACKAGE_PIN H21         [get_ports "CLK_8A34001_Q8_OUT_clk_n"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
+set_property IOSTANDARD  DIFF_SSTL12 [get_ports "CLK_8A34001_Q8_OUT_clk_n"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
+set_property PACKAGE_PIN J21         [get_ports "CLK_8A34001_Q8_OUT_clk_p"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
+set_property IOSTANDARD  DIFF_SSTL12 [get_ports "CLK_8A34001_Q8_OUT_clk_p"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
+set_property PACKAGE_PIN Y35         [get_ports "CLK_8A34001_Q11_OUT_clk_n"] ; # Bank 128 - MGTREFCLK1N_128
+set_property PACKAGE_PIN Y34         [get_ports "CLK_8A34001_Q11_OUT_clk_p"] ; # Bank 128 - MGTREFCLK1P_128
 
-set_property PACKAGE_PIN R37       [get_ports "CLK_8A34001_CLK1_IN_N"] ; # Bank 128 - MGTYTXN3_128
-set_property PACKAGE_PIN R36       [get_ports "CLK_8A34001_CLK1_IN_P"] ; # Bank 128 - MGTYTXP3_128
-set_property PACKAGE_PIN AA37      [get_ports "CLK_8A34001_CLK5_IN_N"] ; # Bank 128 - MGTREFCLK0N_128
-set_property PACKAGE_PIN AA36      [get_ports "CLK_8A34001_CLK5_IN_P"] ; # Bank 128 - MGTREFCLK0P_128
-set_property PACKAGE_PIN V35       [get_ports "CLK_8A34001_CLK6_IN_N"] ; # Bank 129 - MGTREFCLK0N_129
-set_property PACKAGE_PIN V34       [get_ports "CLK_8A34001_CLK6_IN_P"] ; # Bank 129 - MGTREFCLK0P_129
+set_property PACKAGE_PIN R37       [get_ports "CLK_8A34001_CLK1_IN_clk_n"] ; # Bank 128 - MGTYTXN3_128
+set_property PACKAGE_PIN R36       [get_ports "CLK_8A34001_CLK1_IN_clk_p"] ; # Bank 128 - MGTYTXP3_128
+set_property PACKAGE_PIN AA37      [get_ports "CLK_8A34001_CLK5_IN_clk_n"] ; # Bank 128 - MGTREFCLK0N_128
+set_property PACKAGE_PIN AA36      [get_ports "CLK_8A34001_CLK5_IN_clk_p"] ; # Bank 128 - MGTREFCLK0P_128
+set_property PACKAGE_PIN V35       [get_ports "CLK_8A34001_CLK6_IN_clk_n"] ; # Bank 129 - MGTREFCLK0N_129
+set_property PACKAGE_PIN V34       [get_ports "CLK_8A34001_CLK6_IN_clk_p"] ; # Bank 129 - MGTREFCLK0P_129
 
 # 8A34001 GPIO
 # We won't make these into a bus, because they may need different directions

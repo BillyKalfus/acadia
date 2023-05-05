@@ -216,7 +216,7 @@ begin
             end if;
             
             -- Control the memory master port
-            mem_control_rst <= not running_int or descriptor_blank;
+            mem_control_rst <= (not running_int) or descriptor_blank;
             mem_control_en  <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
         
             if(descriptor_fixed = '1') then

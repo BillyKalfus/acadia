@@ -211,7 +211,7 @@ begin
         if(rising_edge(clk)) then
             if(nrst = '0' or run = '0') then
                 pc            <= (others => '0');
-                pc_wr         <= '0';
+                pc_wr         <= '1';
                 instruction_p <= (others => '0');
                 instruction   <= (others => '0');
             elsif(dest1_en = '1' and instr_dest1_maj = DEST_PC) then

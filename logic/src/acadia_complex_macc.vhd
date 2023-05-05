@@ -27,7 +27,7 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
-entity acadia_fast_complex_macc is
+entity acadia_complex_macc is
     port (
         clk                    : in  std_logic;
         rst                    : in  std_logic;
@@ -62,9 +62,9 @@ entity acadia_fast_complex_macc is
     );
     
     attribute USE_DSP : string;
-end acadia_fast_complex_macc;
+end acadia_complex_macc;
 
-architecture rtl of acadia_fast_complex_macc is
+architecture rtl of acadia_complex_macc is
     
     attribute USE_DSP of rtl : architecture is "YES";
     
