@@ -373,23 +373,22 @@ class ManagedMemory(ManagedResource):
                  type_name, 
                  type_bases, 
                  type_dct, 
-                 pool_size,
+                 memory_size,
                  word_width,
                  base_word_address=None,
                  base_byte_address=None):
         """
         Creates a new type of managed memory. The total region of memory
-        (also referred to as the "pool") is comprised of a finite number of 
-        entries, referred to as "words". Words may have arbitrary widths.
-        It is assumed that this memory is shared and that the memory has 
-        (possibly disjoint) address mappings in the spaces into which it is
-        mapped. It is assumed that one space is word-addressed and the other
-        is byte-addressed, with given offsets in both address spaces.
+        is comprised of a finite number of entries, referred to as "words".
+        Words may have arbitrary widths. It is assumed that this memory is 
+        shared and that the memory has (possibly disjoint) address mappings 
+        in the spaces into which it is mapped. It is assumed that one space
+        is word-addressed and the other is byte-addressed, with given offsets
+        in both address spaces.
         
-        :param pool_size: The total size of the memory region in number of 
-        words.
-        :type pool_size: int
-        :param word_width: Width of a word in the memory pool.
+        :param memory_size: The total size of the memory region in bytes.
+        :type memory_size: int
+        :param word_width: Width of a word in bits.
         :type word_width: int
         :param base_word_address: The starting address of the memory region in
         the word-addressed space.
@@ -401,7 +400,7 @@ class ManagedMemory(ManagedResource):
                                         type_bases, 
                                         type_dct)
         
-        type_instance.pool_size = pool_size
+        type_instance.memory_size = memory_size
         type_instance.word_width = word_width
         type_instance.base_word_address = base_word_address
         type_instance.base_byte_address = base_byte_address
@@ -411,14 +410,18 @@ class ManagedMemory(ManagedResource):
             :return: The length of the array in words
             :rtype int:
             """
-            return self.size
+            width = self.word_width
+            l = self.byte_length() * 8 / (width() if callable(width) else width)
+            if round(l, 3) != l:
+                raise ValueError(f"Non-integer word length ({l}) in array {self}.")
+            return int(round(l, 3))
 
         def res_byte_length(self):
             """
             :return: The length of the array in bytes
             :rtype: int
             """
-            return self.word_length() * (self.word_width // 8)
+            return self.size
 
         def res_word_address(self):
             """
@@ -426,7 +429,11 @@ class ManagedMemory(ManagedResource):
             space
             :rtype: int
             """
-            return self.base_word_address + self._resource_id
+            width = self.word_width
+            a = self.base_word_address + (self._resource_id * 8 / (width() if callable(width) else width))
+            if round(a, 3) != a:
+                raise ValueError(f"Non-integer address ({a}) in array {self}.")
+            return int(round(a, 3))
 
         def res_byte_address(self):
             """
@@ -434,7 +441,7 @@ class ManagedMemory(ManagedResource):
             space
             :rtype: int
             """
-            return self.base_byte_address + (self._resource_id * (self.word_width // 8))
+            return self.base_byte_address + self._resource_id 
         
         type_instance.word_length = res_word_length
         type_instance.byte_length = res_byte_length
@@ -442,6 +449,7 @@ class ManagedMemory(ManagedResource):
         type_instance.byte_address = res_byte_address
         
         return type_instance
+            
     
 @dataclass
 class ProcessorInstruction:
@@ -976,20 +984,21 @@ class SynchronizedFunction:
     instances of their invocations. See the documentation for 
     :class:`Synchronizer` for a description of this class' role.
     """
-    def __init__(self, synchronizer, func):
+    def __init__(self, synchronizer, name, func, func_self=None):
         self._synchronizer = synchronizer
         self._func = func
-        
-    def __get__(self, obj, objtype=None):
-        self._parent = obj
-        return self
+        self._name = name
+        self._func_self = func_self
     
-    def __call__(self, *args, **kwargs):            
-        self._synchronizer.add({"function": self._func.__name__, 
-                                "parent": self._parent, 
+    def __call__(self, *args, **kwargs):
+        self._synchronizer.add({"function": self._name, 
+                                "func_self": self._func_self,
                                 "args": args, 
                                 "kwargs": kwargs})
-        self._func(self._parent, *args, **kwargs)
+        if self._func_self is not None:
+            self._func(self._func_self, *args, **kwargs)
+        else:
+            self._func(*args, **kwargs)
     
 class Synchronizer:
     """
@@ -1063,8 +1072,10 @@ class Synchronizer:
         self._active = False
         self._allow_standalone = allow_standalone
     
-    def synchronized(self, func):
-        return SynchronizedFunction(self, func)
+    def synchronized(self, name):
+        def make(func):
+            return SynchronizedFunction(self, name, func)
+        return make
     
     def __call__(self, *args, **kwargs):
         """
@@ -1078,7 +1089,7 @@ class Synchronizer:
             self._calls.append(obj)
         elif self._allow_standalone:
             self._calls = [obj]
-            self.__exit__()
+            self.__exit__(None, None, None)
         else:
             raise ValueError("Attempted call to a synchronized function"
                              " outside of a synchronization context.")

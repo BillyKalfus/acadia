@@ -1092,7 +1092,7 @@ begin
 
     xpm_cdc_array_single_dac_nco_freq : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1140,7 +1140,7 @@ begin
                   
     xpm_cdc_array_single_adc_nco_freq : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1187,7 +1187,7 @@ begin
 
     xpm_cdc_array_single_nco_phase : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1266,7 +1266,7 @@ begin
 
     xpm_cdc_array_single_nco_update_en : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1321,7 +1321,7 @@ begin
 
     xpm_cdc_array_single_nco_phase_rst : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1369,7 +1369,7 @@ begin
                   
     xpm_cdc_array_single_tdd_mode : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1417,7 +1417,7 @@ begin
                   
     xpm_cdc_array_single_nco_update_req : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1441,7 +1441,7 @@ begin
                   
     xpm_cdc_array_single_dac_vop_code : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1488,7 +1488,7 @@ begin
                   
     xpm_cdc_array_single_dsa_code : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1523,7 +1523,7 @@ begin
                   
     xpm_cdc_array_single_update_vop_dsa : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1559,7 +1559,7 @@ begin
                   
     xpm_cdc_array_dac_fast_shutdown : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1594,7 +1594,7 @@ begin
                   
     xpm_cdc_array_single_pl_event : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
@@ -1642,7 +1642,7 @@ begin
                   
     xpm_cdc_array_single_master_bus_miso : xpm_cdc_array_single
         generic map (
-            DEST_SYNC_FF   => 2,
+            DEST_SYNC_FF   => 3,
             INIT_SYNC_FF   => 0,
             SIM_ASSERT_CHK => 0,
             SRC_INPUT_REG  => 1,
