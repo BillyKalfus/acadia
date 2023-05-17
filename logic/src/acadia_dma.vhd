@@ -33,8 +33,9 @@ entity acadia_dma is
     port (
         clk                 : in  std_logic;
         nrst                : in  std_logic;
+
         trigger             : in  std_logic;
-        
+
         -- Descriptor memory interface
         descriptor_mem_dout : in  std_logic_vector(63 downto 0);
         descriptor_mem_addr : out std_logic_vector(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0);
@@ -84,6 +85,7 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_INFO of addr_tlast          : SIGNAL is "xilinx.com:interface:axis:1.0 ADDR TLAST";
     ATTRIBUTE X_INTERFACE_INFO of addr_tvalid         : SIGNAL is "xilinx.com:interface:axis:1.0 ADDR TVALID";
     ATTRIBUTE X_INTERFACE_MODE of addr_tdata          : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of addr_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 2";
     
     ATTRIBUTE X_INTERFACE_INFO of mem_control_addr    : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL ADDR";
     ATTRIBUTE X_INTERFACE_INFO of mem_control_rst     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL RST";

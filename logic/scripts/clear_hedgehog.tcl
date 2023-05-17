@@ -1,6 +1,0 @@
-f.write(f"delete_bd_objs [get_bd_cells hedgehog/* -filter {{TYPE == ip}}]\n")
-f.write(f"delete_bd_objs [get_bd_nets hedgehog/*]\n")
-f.write("update_compile_order -fileset sources_1\n")
-f.write("reset_target all [get_files /home/billy/acadia/acadia/acadia.srcs/sources_1/bd/acadia_bd/acadia_bd.bd]\n")
-f.write("export_ip_user_files -of_objects [get_files /home/billy/acadia/acadia/acadia.srcs/sources_1/bd/acadia_bd/acadia_bd.bd] -sync -no_script -force -quiet\n")
-f.write("delete_ip_run [get_files -of_objects [get_fileset sources_1] /home/billy/acadia/acadia/acadia.srcs/sources_1/bd/acadia_bd/acadia_bd.bd]\n")

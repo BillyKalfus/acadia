@@ -35,6 +35,8 @@ entity acadia_adc_fifo is
     port (
         clk           : in  std_logic;
         nrst          : in  std_logic;
+        
+        overflow      : out std_logic;
          
         din           : in  std_logic_vector(WIDTH-1 downto 0);
         wr_en         : in  std_logic;
@@ -48,8 +50,9 @@ entity acadia_adc_fifo is
 end acadia_adc_fifo;
 
 architecture rtl of acadia_adc_fifo is
-    ATTRIBUTE X_INTERFACE_INFO : STRING;
-    ATTRIBUTE X_INTERFACE_MODE : STRING;
+    ATTRIBUTE X_INTERFACE_INFO      : STRING;
+    ATTRIBUTE X_INTERFACE_MODE      : STRING;
+    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
     
     ATTRIBUTE X_INTERFACE_INFO of m_axis_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TDATA";
     ATTRIBUTE X_INTERFACE_INFO of m_axis_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TVALID";
@@ -57,13 +60,28 @@ architecture rtl of acadia_adc_fifo is
     ATTRIBUTE X_INTERFACE_INFO of m_axis_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TLAST";
     ATTRIBUTE X_INTERFACE_INFO of m_axis_tkeep  : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TKEEP";
     ATTRIBUTE X_INTERFACE_MODE of m_axis_tdata  : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of m_axis_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 1,HAS_TSTRB 0,HAS_TREADY 1,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(WIDTH/8);
 
-    signal rst : std_logic;
+    ATTRIBUTE X_INTERFACE_PARAMETER of clk: SIGNAL is "ASSOCIATED_BUSIF m_axis";
+        
+    signal rst          : std_logic;
+    signal overflow_int : std_logic;
 begin
     
     rst          <= not nrst;
     m_axis_tlast <= '0';
     m_axis_tkeep <= (others => '1');
+
+    -- Latch the overflow signal so that we can know if it happened at any point during the capture
+    overflow_proc: process(clk) begin
+        if rising_edge(clk) then
+            if(nrst = '0') then
+                overflow <= '0';
+            elsif(overflow_int = '1') then
+                overflow <= '1';
+            end if;
+        end if;
+    end process overflow_proc;
 
     fifo_inst : xpm_fifo_sync
         generic map (
@@ -80,7 +98,7 @@ begin
             READ_DATA_WIDTH     => WIDTH,
             READ_MODE           => "fwft",
             SIM_ASSERT_CHK      => 0,      -- DECIMAL; 0=disable simulation messages, 1=enable simulation messages
-            USE_ADV_FEATURES    => "1000", -- Use only the data_valid signal
+            USE_ADV_FEATURES    => "1001", -- Use only the data_valid and overflow signal
             WAKEUP_TIME         => 0,
             WRITE_DATA_WIDTH    => WIDTH,
             WR_DATA_COUNT_WIDTH => 1
@@ -88,6 +106,8 @@ begin
         port map (
             wr_clk        => clk,
             rst           => rst,
+            
+            overflow      => overflow_int,
             
             din           => din,
             wr_en         => wr_en,
@@ -101,7 +121,6 @@ begin
             dbiterr       => open,
             empty         => open,
             full          => open,
-            overflow      => open,
             prog_empty    => open,
             prog_full     => open,
             rd_data_count => open,

@@ -68,8 +68,11 @@ architecture rtl of acadia_complex_macc is
     
     attribute USE_DSP of rtl : architecture is "YES";
     
-    ATTRIBUTE X_INTERFACE_INFO : STRING;
-    ATTRIBUTE X_INTERFACE_MODE : STRING;
+    ATTRIBUTE X_INTERFACE_INFO      : STRING;
+    ATTRIBUTE X_INTERFACE_MODE      : STRING;
+    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
+
+    ATTRIBUTE X_INTERFACE_PARAMETER of clk: SIGNAL is "ASSOCIATED_BUSIF KERNEL_MEM_ADDR:SIGNAL_OUT:ACCUMULATOR";
     
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_dout: SIGNAL is "xilinx.com:interface:bram:1.0 KERNEL_MEM DOUT";
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr: SIGNAL is "xilinx.com:interface:bram:1.0 KERNEL_MEM ADDR";
@@ -80,16 +83,20 @@ architecture rtl of acadia_complex_macc is
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 KERNEL_MEM_ADDR TDATA";
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 KERNEL_MEM_ADDR TLAST";
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 KERNEL_MEM_ADDR TVALID";
+    ATTRIBUTE X_INTERFACE_PARAMETER of kernel_mem_addr_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 4";
+
 
     ATTRIBUTE X_INTERFACE_INFO of signal_out_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_OUT TDATA";
     ATTRIBUTE X_INTERFACE_INFO of signal_out_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_OUT TLAST";
     ATTRIBUTE X_INTERFACE_INFO of signal_out_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_OUT TVALID";
     ATTRIBUTE X_INTERFACE_MODE of signal_out_tdata  : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of signal_out_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 4";
     
     ATTRIBUTE X_INTERFACE_INFO of accumulator_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 ACCUMULATOR TDATA";
     ATTRIBUTE X_INTERFACE_INFO of accumulator_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 ACCUMULATOR TLAST";
     ATTRIBUTE X_INTERFACE_INFO of accumulator_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 ACCUMULATOR TVALID";
     ATTRIBUTE X_INTERFACE_MODE of accumulator_tdata  : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of accumulator_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 8";
     
     -- First stage: input loading
     signal a_re : signed(15 downto 0);
