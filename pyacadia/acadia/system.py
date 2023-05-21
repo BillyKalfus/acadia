@@ -82,8 +82,10 @@ class Firmware:
     CMACC_KERNEL_MEMORY_BASE_ADDRESS = 0x00_B200_0000
 
     # depth for the FIFOs at the output of ths AXIS stream switch
-    ADC_FIFO_DEPTH = 1024
+    ADC_FIFO_DEPTH = 4096
+    ADC_FIFO_PRIMITIVE = "ultra"
     CMACC_FIFO_DEPTH = 1024
+    CMACC_FIFO_PRIMITIVE = "auto"
     
     # The width of the AXI interface at the output of the DataMovers
     ADC_DM_AXI_WIDTHS = [128]*NUM_ADC
@@ -208,7 +210,7 @@ class Firmware:
                                   "offset": i,
                                   "width": 1,
                                   "gate": BusDataport.GATE_RESET,
-                                  "pipeline": 2}]
+                                  "pipeline": 1}]
 
     cmacc_reset_port = BusDataport(name=f"cmacc_reset", ports=_cmacc_reset_ports)
     sequencer_bus_decoder.add(cmacc_reset_port)
@@ -292,7 +294,7 @@ class Firmware:
                                    "pipeline": 2}]
 
     clk104_sync_in = BusDataport(name="clk104_sync_in", ports=_clk104_sync_in_dataports)
-    sequencer_bus_decoder.add(clk104_sync_in)
+    sequencer_bus_decoder.add(clk104_sync_in, pipeline=True)
     hdl_modules.append(clk104_sync_in)
 
     # Create cache and connect it to the sequencer bus
@@ -303,7 +305,7 @@ class Firmware:
                                                   [f"adc_dm{i}" for i in range(4)] + 
                                                   [f"cmacc_dm{i}" for i in range(4)] + 
                                                   ["cfg_dm_mm2s", "cfg_dm_s2mm"], addr_bits=40)
-    sequencer_bus_decoder.add(datamover_controller)
+    sequencer_bus_decoder.add(datamover_controller, pipeline=True)
     hdl_modules.append(datamover_controller)
     
     # Assign decoder addresses
@@ -321,8 +323,8 @@ class Firmware:
         read_only=False,
         use_rst=False,
         primitive="block", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,                              
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,                              
         user_port_input_pipeline=0,
         user_port_output_pipeline=1)
     hdl_modules.append(cache_memory_controller)
@@ -335,8 +337,8 @@ class Firmware:
         read_only=True,
         use_rst=False,
         primitive="block", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,
         user_port_input_pipeline=0,
         user_port_output_pipeline=0)
     hdl_modules.append(instruction_memory_controller)
@@ -349,8 +351,8 @@ class Firmware:
         read_only=True,
         use_rst=True,
         primitive="ultra", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,   
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,   
         user_port_input_pipeline=1,
         user_port_output_pipeline=2)
     hdl_modules.append(dac_memory_controller)
@@ -363,8 +365,8 @@ class Firmware:
         read_only=True,
         use_rst=True,
         primitive="block", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,   
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,   
         user_port_input_pipeline=0,
         user_port_output_pipeline=1)
     hdl_modules.append(cmacc_kernel_memory_controller)
@@ -377,8 +379,8 @@ class Firmware:
         read_only=True,
         use_rst=False,
         primitive="block", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,   
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,   
         user_port_input_pipeline=0,
         user_port_output_pipeline=1)
     hdl_modules.append(dac_dma_descriptor_memory_controller)
@@ -391,8 +393,8 @@ class Firmware:
         read_only=True,
         use_rst=False,
         primitive="block", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,   
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,   
         user_port_input_pipeline=0,
         user_port_output_pipeline=1)
     hdl_modules.append(adc_dma_descriptor_memory_controller)
@@ -405,8 +407,8 @@ class Firmware:
         read_only=True,
         use_rst=False,
         primitive="block", 
-        controller_port_input_pipeline=3,
-        controller_port_output_pipeline=3,   
+        controller_port_input_pipeline=2,
+        controller_port_output_pipeline=2,   
         user_port_input_pipeline=0,
         user_port_output_pipeline=1)
     hdl_modules.append(cmacc_dma_descriptor_memory_controller)
@@ -1314,7 +1316,10 @@ class Firmware:
                 # ------------------- Stream FIFOs -------------------- #
 
                 create_module(f, f"hedgehog/fifo_adc_dm{d}", "acadia_adc_fifo")
-                set_property(f, name=f"hedgehog/fifo_adc_dm{d}", properties={"WIDTH": 128, "TKEEP_WIDTH": 16, "DEPTH": Firmware.ADC_FIFO_DEPTH})
+                set_property(f, name=f"hedgehog/fifo_adc_dm{d}", properties={"WIDTH": 128, 
+                                                                             "TKEEP_WIDTH": 16, 
+                                                                             "DEPTH": Firmware.ADC_FIFO_DEPTH, 
+                                                                             "MEMORY_TYPE": Firmware.ADC_FIFO_PRIMITIVE})
 
                 connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
@@ -1349,6 +1354,7 @@ class Firmware:
                                             f"CONFIG.c_m_axi_s2mm_data_width {{{Firmware.ADC_DM_AXI_WIDTHS[d]}}} "
                                             "CONFIG.c_s_axis_s2mm_tdata_width {128} "
                                             "CONFIG.c_s2mm_btt_used {23} "
+                                            "CONFIG.c_s2mm_burst_size {256} "
                                             "CONFIG.c_s2mm_support_indet_btt {true} "
                                             "CONFIG.c_mm2s_include_sf {false} "
                                             "CONFIG.c_s2mm_include_sf {false} "
@@ -1446,7 +1452,10 @@ class Firmware:
                 # ------------------- DataMover FIFOs -------------------- #
 
                 create_module(f, f"hedgehog/fifo_cmacc_dm{d}", "acadia_adc_fifo")
-                set_property(f, f"hedgehog/fifo_cmacc_dm{d}", properties={"WIDTH": 32, "TKEEP_WIDTH": 4, "DEPTH": Firmware.CMACC_FIFO_DEPTH})
+                set_property(f, f"hedgehog/fifo_cmacc_dm{d}", properties={"WIDTH": 32, 
+                                                                          "TKEEP_WIDTH": 4, 
+                                                                          "DEPTH": Firmware.CMACC_FIFO_DEPTH,
+                                                                          "MEMORY_TYPE": Firmware.CMACC_FIFO_PRIMITIVE})
 
                 connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
@@ -1467,6 +1476,7 @@ class Firmware:
                                             f"CONFIG.c_m_axi_s2mm_data_width {{{Firmware.CMACC_DM_AXI_WIDTHS[d]}}} "
                                             "CONFIG.c_s_axis_s2mm_tdata_width {32} "
                                             "CONFIG.c_s2mm_btt_used {23} "
+                                            "CONFIG.c_s2mm_burst_size {256} "
                                             "CONFIG.c_s2mm_support_indet_btt {true} "
                                             "CONFIG.c_mm2s_include_sf {false} "
                                             "CONFIG.c_s2mm_include_sf {false} "
@@ -1821,7 +1831,8 @@ class Acadia:
         self._active_sequencer = None
                 
         # Make DMAs
-        self._dac_dmas = [DMA() for i in range(16)]
+        DACDMA = type("DACDMA", (DMA,), {"DMA_NUM_OFFSET": 0})
+        self._dac_dmas = [DACDMA() for i in range(16)]
         
         # Create DMAs for ADCs and CMACCs
         # Also patch in some attributes for storing the offsets within DMA registers
@@ -1891,7 +1902,7 @@ class Acadia:
                 self._DAC_channels.append(dac_channel)
                 
                 adc_channel = Channel(tile=tile, block=block, is_dac=False)
-                adc_channel.analog_sample_frequency = 1.2e9 if tile == 0 else 2.4e9
+                adc_channel.analog_sample_frequency = 2.4e9
                 adc_channel.interface_sample_frequency = 1.2e9
                 adc_channel.complex_samples = True
                 
@@ -2471,9 +2482,9 @@ class Acadia:
         :type channel: :class:`Channel`
         """
         dma = channel.dma
-        mask = 1 << (type(dma).DMA_NUM_OFFSET + dma._resource_id)
+        bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
         bus_address = Firmware.dma_fifo_almost_empty.address().value()
-        return self._active_sequencer.bus_read(bus_address) & mask != 0
+        return self._active_sequencer.bus_read(bus_address) & Symbol(1 << bit_position) != 0
     
     def channel_running(self, channel):
         """
@@ -2558,8 +2569,6 @@ class Acadia:
     
     ########################### UTILITY METHODS ##############################
             
-    
-        
     def _create_cache(self):
         def _cache_getitem(cache_self, key):
             proc = Processor.active_processor()
@@ -2567,7 +2576,8 @@ class Acadia:
                 return cache_self.memory[key]
             elif isinstance(proc, Sequencer):
                 return proc.bus_read(Firmware.sequencer_bus_decoder["cache"].address().value() + key)
-            raise TypeError(f"Unable to access cache on processor {proc}.")
+            else:
+                raise TypeError(f"Unable to access cache on processor {proc}.")
             
         def _cache_setitem(cache_self, key, value):
             proc = Processor.active_processor()
@@ -2576,7 +2586,8 @@ class Acadia:
             elif isinstance(proc, Sequencer):
                 proc.bus_write(address=Firmware.sequencer_bus_decoder["cache"].address().value() + key,
                                data=value)
-            raise TypeError(f"Unable to access cache on processor {proc}.")
+            else:
+                raise TypeError(f"Unable to access cache on processor {proc}.")
         
         self.CacheArray = ManagedMemory("CacheArray", 
             (), 

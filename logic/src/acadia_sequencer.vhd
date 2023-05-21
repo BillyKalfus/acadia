@@ -140,6 +140,7 @@ architecture rtl of acadia_sequencer is
     -- Instruction control signals
     signal instruction       : std_logic_vector(127 downto 0);
     signal instruction_p     : std_logic_vector(127 downto 0);
+    signal instruction_pp    : std_logic_vector(127 downto 0);
     
     -- Instruction fields
     signal instr_opcode      : std_logic_vector(0 downto 0);
@@ -166,11 +167,12 @@ architecture rtl of acadia_sequencer is
         
     -- Stack                          
     signal stack             : word_array(0 to STACK_SIZE-1);
-    signal stack_wr_addr     : std_logic_vector(LOG2_STACK_SIZE-1 downto 0);
-    signal stack_rd_addr     : std_logic_vector(LOG2_STACK_SIZE-1 downto 0);
-    signal stack_rd_data     : std_logic_vector(WORD_SIZE-1 downto 0);
+    signal stack_ptr         : std_logic_vector(LOG2_STACK_SIZE-1 downto 0);
+    signal stack_out         : std_logic_vector(WORD_SIZE-1 downto 0);
+    signal stack_in          : std_logic_vector(WORD_SIZE-1 downto 0);
     signal stack_pop         : std_logic;
     signal stack_push        : std_logic;
+    signal stack_push_d      : std_logic;
     signal stack_overflow    : std_logic;
     signal stack_underflow   : std_logic;
                               
@@ -210,16 +212,18 @@ begin
     instruction_proc: process(clk) begin
         if(rising_edge(clk)) then
             if(nrst = '0' or run = '0') then
-                pc            <= (others => '0');
-                pc_wr         <= '1';
-                instruction_p <= (others => '0');
-                instruction   <= (others => '0');
+                pc             <= (others => '0');
+                pc_wr          <= '1';
+                instruction_p  <= (others => '0');
+                instruction_pp <= (others => '0');
+                instruction    <= (others => '0');
             elsif(dest1_en = '1' and instr_dest1_maj = DEST_PC) then
                 -- Indicate for the next cycle that the PC has been updated
                 pc_wr <= '1';
                 
                 -- Reset the instruction pipeline
-                instruction_p <= (others => '0');
+                instruction_p  <= (others => '0');
+                instruction_pp <= (others => '0');
                              
                 -- Update the PC depending on the branch mode
                 if(instr_dest1_min(0) = '0') then
@@ -228,7 +232,7 @@ begin
                     pc <= std_logic_vector(unsigned(pc) + unsigned(src1(15 downto 0)));
                 end if;
                            
-                -- Optionally reset the instruction register
+                -- Reset the instruction register if we're holding
                 if(instr_dest1_min(1) = '0') then
                     instruction <= (others => '0');
                 end if;
@@ -237,7 +241,8 @@ begin
                 pc_wr <= '1';
                 
                 -- Reset the instruction pipeline
-                instruction_p <= (others => '0');
+                instruction_p  <= (others => '0');
+                instruction_pp <= (others => '0');
                              
                 -- Update the PC depending on the branch mode
                 if(instr_dest2_min(0) = '0') then
@@ -246,24 +251,26 @@ begin
                     pc <= std_logic_vector(unsigned(pc) + unsigned(src2(15 downto 0)));
                 end if;
                            
-                -- Optionally reset the instruction register
+                -- Reset the instruction register if we're holding
                 if(instr_dest2_min(1) = '0') then
                     instruction <= (others => '0');
                 end if;
             elsif(pc_wr = '1') then
-                -- If the PC was just updated in the prvious cycle, we need one more
+                -- If the PC was just updated in the previous cycle, we need one more
                 -- cycle of nothing before we can load the output of the memory
                 -- However, if we're here then the PC is no longer being written to,
                 -- so clear the flag and continue incrmeneting it as normal
-                pc            <= std_logic_vector(unsigned(pc) + 1);
-                pc_wr         <= '0';
-                instruction_p <= (others => '0');
-                instruction   <= instruction_p;
+                pc             <= std_logic_vector(unsigned(pc) + 1);
+                pc_wr          <= '0';
+                instruction_p  <= (others => '0');
+                instruction_pp <= instruction_p;
+                instruction    <= instruction_pp;
             else
-                pc            <= std_logic_vector(unsigned(pc) + 1);
-                pc_wr         <= '0';
-                instruction_p <= instruction_mem_dout;
-                instruction   <= instruction_p;
+                pc             <= std_logic_vector(unsigned(pc) + 1);
+                pc_wr          <= '0';
+                instruction_p  <= instruction_mem_dout;
+                instruction_pp <= instruction_p;
+                instruction    <= instruction_pp;
             end if;
         end if;
     end process instruction_proc;
@@ -290,7 +297,7 @@ begin
             x"0000" & pc                                    when instr_src1_maj = SRC_PC       else
             instr_imm1                                      when instr_src1_maj = SRC_IMM      else
             ext_in                                          when instr_src1_maj = SRC_EXT      else
-            stack_rd_data                                   when instr_src1_maj = SRC_STACK    else
+            stack_out                                       when instr_src1_maj = SRC_STACK    else
             mem_bus_miso                                    when instr_src1_maj = SRC_BUS_DATA else
             dsp_p_reg(to_integer(unsigned(instr_src1_min))) when instr_src1_maj = SRC_DSP_DATA else
             (others => '0');
@@ -299,7 +306,7 @@ begin
             x"0000" & pc                                    when instr_src2_maj = SRC_PC       else
             instr_imm2                                      when instr_src2_maj = SRC_IMM      else
             ext_in                                          when instr_src2_maj = SRC_EXT      else
-            stack_rd_data                                   when instr_src2_maj = SRC_STACK    else
+            stack_out                                   when instr_src2_maj = SRC_STACK    else
             mem_bus_miso                                    when instr_src2_maj = SRC_BUS_DATA else
             dsp_p_reg(to_integer(unsigned(instr_src2_min))) when instr_src2_maj = SRC_DSP_DATA else
             (others => '0');
@@ -393,45 +400,55 @@ begin
                              or instr_push_return = '1'
                         else '0';
                              
-    stack_overflow  <= '1' when to_integer(unsigned(stack_wr_addr)) = STACK_SIZE-1 and stack_push = '1' else '0';
-    stack_underflow <= '1' when to_integer(unsigned(stack_wr_addr)) = 0 and stack_pop = '1' else '0';
+    stack_overflow  <= '1' when to_integer(unsigned(stack_ptr)) = STACK_SIZE-1 and stack_push = '1' else '0';
+    stack_underflow <= '1' when to_integer(unsigned(stack_ptr)) = 0 and stack_pop = '1' else '0';
 
     -- Update the stack pointers when pushed or popped (but not both!)
-    stack_addr_proc: process(clk) begin
+    stack_ptr_proc: process(clk) begin
         if rising_edge(clk) then
             if(nrst = '0') then
-                stack_wr_addr <= (others => '0');
-                stack_rd_addr <= (others => '1');
+                stack_ptr <= (others => '0');
             elsif(stack_push = '1' and stack_pop = '0') then
-                stack_wr_addr <= std_logic_vector(unsigned(stack_wr_addr) + 1);
-                stack_rd_addr <= stack_wr_addr;
+                stack_ptr <= std_logic_vector(unsigned(stack_ptr) + 1);
             elsif(stack_push = '0' and stack_pop = '1') then
-                stack_wr_addr <= stack_rd_addr;
-                stack_rd_addr <= std_logic_vector(unsigned(stack_rd_addr) - 1);
+                stack_ptr <= std_logic_vector(unsigned(stack_ptr) - 1);
             end if;
         end if;
-    end process stack_addr_proc;
+    end process stack_ptr_proc;
     
-    -- Control writing to the stack
-    stack_wr_proc: process(clk) begin
+    -- Control pushing to the stack
+    stack_in_proc: process(clk) begin
         if rising_edge(clk) then
             if(instr_dest1_maj = DEST_STACK and dest1_en = '1') then
-                stack(to_integer(unsigned(stack_wr_addr))) <= src1;
+                stack_in <= src1;
             elsif(instr_dest2_maj = DEST_STACK and dest2_en = '1') then
-                stack(to_integer(unsigned(stack_wr_addr))) <= src2;
+                stack_in <= src2;
             elsif(instr_push_return = '1') then
                 -- Minus 1 because we lose 2 instructions due to instruction memory latency
-                stack(to_integer(unsigned(stack_wr_addr))) <= x"0000" & std_logic_vector(unsigned(pc) - 1);
+                stack_in <= x"0000" & std_logic_vector(unsigned(pc) - 1);
             end if;
         end if;
-    end process stack_wr_proc;
-           
-    -- Control reading from the stack
-    stack_rd_proc: process(clk) begin
+    end process stack_in_proc;
+
+    stack_push_proc: process(clk) begin
         if rising_edge(clk) then
-            stack_rd_data <= stack(to_integer(unsigned(stack_rd_addr)));
+            -- When stack_push is high, the stack pointer will advance
+            -- and we can write to the stack memory in the following cycle
+            stack_push_d <= stack_push;
+
+            -- Actually write to the stack if stack_in was written to in the
+            -- previous cycle
+            if(stack_push_d = '1') then
+                stack(to_integer(unsigned(stack_ptr))) <= stack_in;
+            end if;
         end if;
-    end process stack_rd_proc;
+    end process stack_push_proc;
+
+    stack_out_proc: process(clk) begin
+        if rising_edge(clk) then
+            stack_out <= stack(to_integer(unsigned(stack_ptr)));
+        end if;
+    end process stack_out_proc;
     
     -- DSP slices
          
