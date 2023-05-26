@@ -34,45 +34,40 @@ def is_numeric(obj):
         return True
     return False    
 
-class SequencerDatapathPort(type):
+@dataclass
+class SequencerDatapathPort:
+    major: "" = None
+    minor: "" = 0
 
-    def __new__(meta_cls, name, bases, dct):
+    def __post_init__(self):
+        if not isinstance(self.major, type(self).Major):
+            raise TypeError(f"Expecting type {type(self).Major} for field major;"
+                            f" received {self.major}.")
+
+        if not isinstance(self.minor, int):
+            raise TypeError(f"Expecting int for field minor;"
+                            f" received {self.minor}.")
+
+    def value(self):
+        minor_value = self.minor.value() if "value" in dir(self.minor) else self.minor
+        return (self.major.value << 3) + minor_value
+
+    def __str__(self):
+        if self.major is type(self).Major.REG:
+            minor_str = self.minor
+        elif "DSP" in self.major.name:
+            minor_str = self.minor
+        else:
+            minor_str = ""
+        return f"{self.major.name}{minor_str}"
+
+    def __repr__(self):
+        return str(self)
         
-        def field_init(self, major, minor=0):
-            self.major = major
-            self.minor = minor
+        # def field_getattr(self, attr):
+        #     return self(getattr(self.Major, attr))
             
-            if not isinstance(self.major, type(self).Major):
-                raise TypeError(f"Expecting type {type(self).Major} for field major;"
-                                f" received {self.major}.")
-
-            if not isinstance(self.minor, int):
-                raise TypeError(f"Expecting int for field minor;"
-                                f" received {self.minor}.")
-
-        def field_value(self):
-            minor_value = self.minor.value() if "value" in dir(self.minor) else self.minor
-            return (self.major.value << 3) + minor_value
-
-        def field_str(self):
-            minor_str = self.minor if self.major is type(self).Major.REG or "DSP" in self.major.name else ""
-            return f"{self.major.name}{minor_str}"
-
-        def field_repr(self):
-            return str(self)
-        
-        def field_getattr(self, attr):
-            return self(getattr(self.Major, attr))
-        
-        dct["__init__"] = field_init
-        dct["value"] = field_value
-        dct["__str__"] = field_str
-        dct["__repr__"] = field_repr
-        meta_cls.__getattr__ = field_getattr
-
-        return super(SequencerDatapathPort, meta_cls).__new__(meta_cls, name, bases, dct)
-    
-class Source(metaclass=SequencerDatapathPort):
+class Source(SequencerDatapathPort):
     class Major(Enum):
         REG = 0
         PC = 1
@@ -83,7 +78,7 @@ class Source(metaclass=SequencerDatapathPort):
         DSP_PATTERN = 6
         DSP_P = 7
             
-class Destination(metaclass=SequencerDatapathPort):
+class Destination(SequencerDatapathPort):
     PC_ABSOLUTE_BRANCH = 0b00
     PC_RELATIVE_BRANCH = 0b01
     PC_ABSOLUTE_HOLD   = 0b10
@@ -101,6 +96,29 @@ class Destination(metaclass=SequencerDatapathPort):
         DSP_AB = 8
         DSP_C = 9
 
+    def __str__(self):
+        if self.major is Destination.Major.REG:
+            minor_str = self.minor
+        elif "DSP" in self.major.name:
+            minor_str = self.minor
+        elif self.major is Destination.Major.PC:
+            if self.minor == Destination.PC_ABSOLUTE_BRANCH:
+                minor_str = " (absolute branch)"
+            elif self.minor == Destination.PC_RELATIVE_BRANCH:
+                minor_str = " (relative branch)"
+            elif self.minor == Destination.PC_ABSOLUTE_HOLD:
+                minor_str = " (absolute hold)"
+            elif self.minor == Destination.PC_RELATIVE_HOLD:
+                minor_str = " (relative hold)"
+            else:
+                raise ValueError(f"Invalid minor value {self.minor}")
+        else:
+            minor_str = ""
+        return f"{self.major.name}{minor_str}"
+    
+    def __repr__(self):
+        return str(self)
+
 # DSP operating modes
 # All constants come from Xilinx UG579
 @dataclass
@@ -112,9 +130,6 @@ class DSPMode:
     alumode: int = 0
     cin: int = 0
     name: str = ""
-    
-    def __contains__(self, key):
-        return key in name
 
 DSP_MODES = {}
 for z_name,z in [("", 0),("P", 0b010), ("C",0b011), ("I", 0b001), ("S", 0b110)]:
@@ -303,10 +318,10 @@ class DSPConfiguration:
 # Create dataclasses for abstracting machine code
 @dataclass
 class STP:
-    src1: Source = Source.REG
-    src2: Source = Source.REG
-    dest1: Destination = Destination.REG
-    dest2: Destination = Destination.REG
+    src1: Source = Source(Source.Major.REG)
+    src2: Source = Source(Source.Major.REG)
+    dest1: Destination = Destination(Destination.Major.REG)
+    dest2: Destination = Destination(Destination.Major.REG)
     imm1: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
     imm2: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
     dsp_cep: [Source, Destination, int] = None
@@ -318,14 +333,14 @@ class STP:
         self.name = "STP"
         if is_numeric(self.src1):
             self.imm1 = self.src1
-            self.src1 = Source.IMM
+            self.src1 = Source(Source.Major.IMM)
         if not isinstance(self.src1, Source):
             raise TypeError(f"STP field src1 must be of type Source;"
                             f" received {self.src1}.")
         
         if is_numeric(self.src2):
             self.imm2 = self.src2
-            self.src2 = Source.IMM
+            self.src2 = Source(Source.Major.IMM)
             
         # Do basic type-checking
         for field,field_type in get_type_hints(self).items(): 
@@ -393,9 +408,9 @@ class STP:
 
 @dataclass
 class STC:
-    src_stval: Source = Source.REG
-    src_tval: Source = Source.REG
-    dest_stval: Destination = Destination.REG
+    src_stval: Source = Source(Source.Major.REG)
+    src_tval: Source = Source(Source.Major.REG)
+    dest_stval: Destination = Destination(Destination.Major.REG)
     op: int = 0
     imm_stval: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
     imm_tval: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
@@ -408,14 +423,14 @@ class STC:
         # Check types
         if is_numeric(self.src_stval):
             self.imm_stval = self.src_stval
-            self.src_stval = Source.IMM
+            self.src_stval = Source(Source.Major.IMM)
         if not isinstance(self.src_stval, Source):
             raise TypeError(f"STP field src_stval must be of type Source;"
                             f" received {self.src_stval}.")
         
         if is_numeric(self.src_tval):
             self.imm_tval = self.src_tval
-            self.src_tval = Source.IMM
+            self.src_tval = Source(Source.Major.IMM)
         if not isinstance(self.src_tval, Source):
             raise TypeError(f"STP field src_tval must be of type Source;"
                             f" received {self.src_tval}.")
@@ -458,7 +473,7 @@ class STC:
                 if callable(imm_stval_value.value):
                     imm_stval_value = imm_stval_value.value()
                 else:
-                    imm_stval_value = imm1_stval_value.value
+                    imm_stval_value = imm_stval_value.value
             if hasattr(imm_stval_value, "address"):
                 if callable(imm_stval_value.address):
                     imm_stval_value = imm_stval_value.address()
@@ -633,18 +648,19 @@ class Sequencer(Processor):
             if address is None:
                 raise ValueError("Address must be provided when"
                                  " `write_address=True`.")
-            self.STP(src1=address, dest1=Destination.BUS_ADDR)
+            self.STP(src1=address, 
+                     dest1=Destination(Destination.Major.BUS_ADDR))
         
-        return Source.BUS_DATA
+        return Source(Source.Major.BUS_DATA)
     
     def bus_write(self, address, data):
         """
         Writes a value to the bus.
         """
         self.STP(src1=address, 
-                dest1=Destination.BUS_ADDR,
+                dest1=Destination(Destination.Major.BUS_ADDR),
                 src2=data, 
-                dest2=Destination.BUS_DATA)
+                dest2=Destination(Destination.Major.BUS_DATA))
         
     def halt(self):
         """
@@ -659,14 +675,69 @@ class Sequencer(Processor):
                                                 Destination.PC_ABSOLUTE_BRANCH))
         
     def nop(self):
-        self.store(src=Source.REG, dest=Destination.REG)
+        self.store(src=Source(Source.Major.REG), 
+                   dest=Destination(Destination.Major.REG))
             
     @Processor.instruction()
     def STP(self, instruction_resource):
         """
-        A direct abstraction of the STP instruction.
+        A direct abstraction of the STP instruction with additional source
+        compilation.
         """
-        instruction_resource.compiled = [STP(**instruction_resource.kwargs)]
+        kwargs = instruction_resource.kwargs
+        instructions = []
+        resources = []
+
+        # We'll use lists to aggregate the two separate assignments so that
+        # in case only src2/dest2 is specified, it gets prioritized to src1/dest1
+        srcs = []
+        dests = []
+    
+        for num in range(1,3):
+            # Compile the source
+            if f"src{num}" in kwargs:
+                if f"dest{num}" not in kwargs:
+                    raise ValueError(f"src{num} missing destination.")
+                src,src_instrs,src_resources = self.compile_source(kwargs[f"src{num}"])
+                srcs.append(src)
+                instructions += src_instrs
+                resources += src_resources
+
+            # Resolve the destination if necessary
+            if f"dest{num}" in kwargs:
+                if f"src{num}" not in kwargs:
+                    raise ValueError(f"dest{num} missing source.")
+                
+                dest = kwargs[f"dest{num}"]
+                if isinstance(dest, self.Register) or isinstance(dest, self.DSP):
+                    dests.append(dest.destination()) 
+                else:
+                    dests.append(dest)
+
+        # Make sure that we didn't mess anything up
+        if len(srcs) != len(dests):
+            raise ValueError(f"Found {len(srcs)} sources and {len(dests)} destinations.")
+        
+        # Determine whether the operation was determined to be trivial
+        if len(srcs) > 0:
+            new_kwargs = {k:v for k,v in kwargs.items() if "src" not in k and "dest" not in k}
+            for i in range(len(srcs)):
+                new_kwargs[f"src{i+1}"] = srcs[i]
+                new_kwargs[f"dest{i+1}"] = dests[i]
+
+            instructions.append(STP(**new_kwargs))
+        elif len(instructions) != 0:
+            raise ValueError("Trivial STP generated with nonzero instruction buffer.")
+
+        # Propagate any provided comment to the compiled instructions
+        if "comment" in kwargs:
+            for instr in instructions:
+                instr.comment = kwargs["comment"]
+
+        instruction_resource.compiled = instructions
+
+        for res in resources:
+            res._released = True
         
     @Processor.instruction()
     def store(self, instruction_resource):
@@ -721,7 +792,7 @@ class Sequencer(Processor):
             instructions += condition_instructions
         
         if isinstance(src, Operation):    
-            # If the destination is a DSP, we may be able to do the calculation in-place
+            # If the destination is a DSP, we may+ be able to do the calculation in-place
             if isinstance(dest, self.DSP):    
                 compiled_src,src_instructions,src_resources = self.compile_source(src, dsp=dest)
                 instructions += src_instructions
@@ -743,7 +814,7 @@ class Sequencer(Processor):
                     raise ValueError(f"Cannot conditionally write to DSP P port.")
                     
                 # Load P through AB
-                instructions.append(STP(src1=Source.IMM, 
+                instructions.append(STP(src1=Source(Source.Major.IMM), 
                                          dest1=dest["CFG"], 
                                          imm1=DSPConfiguration(mode="AB", 
                                                                dsp_cep="pulse"),
@@ -767,6 +838,10 @@ class Sequencer(Processor):
             for res in condition_resources:
                 res._released = True
                 
+        if "comment" in kwargs:
+            for instr in instructions:
+                instr.comment = kwargs["comment"]
+
         instruction_resource.compiled = instructions
     
     def compile_source(self, obj, dsp=None):
@@ -919,7 +994,7 @@ class Sequencer(Processor):
             # If arg1 or arg2 are C, this means we're still loading some 
             # external input. Otherwise we might just be performing an
             # operation between registers inside the slice
-            stp_args = {"src1": Source.IMM,
+            stp_args = {"src1": Source(Source.Major.IMM),
                         "imm1": DSPConfiguration(mode=dsp_mode_key, dsp_cep="pulse"),
                         "dest1": current_dsp["CFG"]}
             if arg_inputs[0] == "C":
@@ -1053,32 +1128,40 @@ class Sequencer(Processor):
             
             
         # Next, let's look at the arguments and compile as necessary
-        # If one of them is a numeric, we'll prefer to put that in the mask
-        # since that's not time-sensitive 
+        # If one of them is a numeric or a register, we'll prefer to 
+        # put that in the mask since those don't need to be monitored as closely 
         instructions = []
         
         if mask is not None:
             if mask == "left":
                 compiled_mask,mask_instructions,mask_resources = self.compile_source(condition._args[0])
                 instructions += mask_instructions
-                instructions.append(STP(src1=compiled_mask, dest1=Destination.MASK))
+                instructions.append(STP(src1=compiled_mask, 
+                                        dest1=Destination(Destination.Major.MASK)))
                 for res in mask_resources:
                     res._released = True
                 compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
             elif mask == "right":
                 compiled_mask,mask_instructions,mask_resources = self.compile_source(condition._args[1])
                 instructions += mask_instructions
-                instructions.append(STP(src1=compiled_mask, dest1=Destination.MASK))
+                instructions.append(STP(src1=compiled_mask, 
+                                        dest1=Destination(Destination.Major.MASK)))
                 for res in mask_resources:
                     res._released = True
                 compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
             else:
                 raise ValueError(f"Mask directive must be one of \"left\" or \"right\"; received {mask}.")
         elif is_numeric(condition._args[0]):
-            instructions.append(STP(src1=condition._args[0], dest1=Destination.MASK))
+            instructions.append(STP(src1=condition._args[0], 
+                                    dest1=Destination(Destination.Major.MASK)))
+            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
+        elif isinstance(condition._args[0], self.Register):
+            instructions.append(STP(src1=condition._args[0].source(), 
+                                    dest1=Destination(Destination.Major.MASK)))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
         else:
-            instructions.append(STP(src1=condition._args[1], dest1=Destination.MASK))
+            instructions.append(STP(src1=condition._args[1], 
+                                    dest1=Destination(Destination.Major.MASK)))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
         
         stc_kwargs["src_tval"] = compiled_src
@@ -1159,7 +1242,7 @@ class Sequencer(Processor):
 
                     # If we're writing to the bus address register, we need to
                     # make sure to give the bus enough time to respond
-                    if dest.major is Destination.Major.BUS_ADDR:
+                    elif dest.major is Destination.Major.BUS_ADDR:
                         counts["BUS"] = bus_count_init
 
                 # Now check the sources. If we are depending on the value 
@@ -1173,7 +1256,7 @@ class Sequencer(Processor):
 
                 # If we're getting data from the bus, we need to make sure 
                 # that we've given the bus enough time to shuttle the data
-                if src.major is Source.BUS_DATA:
+                elif src.major is Source.Major.BUS_DATA:
                     if counts[f"BUS"] > 0:
                         nops = [STP(comment=f"Pipeline latency for bus")]*counts[f"BUS"]
                         self.insert_compiled_instructions(idx_instr, nops)
@@ -1239,8 +1322,9 @@ class Sequencer(Processor):
             jump_target = self.Instruction.next_instance()
         else:
             # Return from the block
-            self.store(src=Source.STACK, dest=Destination(Destination.Major.PC, 
-                                                          Destination.PC_ABSOLUTE_BRANCH))
+            self.store(src=Source(Source.Major.STACK), 
+                       dest=Destination(Destination.Major.PC, 
+                                        Destination.PC_ABSOLUTE_BRANCH))
  
         jump.kwargs["src"] = jump_target
         
@@ -1284,22 +1368,30 @@ class Sequencer(Processor):
         Repeats a block of code multiple times. There are multiple valid call 
         signatures which must be used positionally (i.e., keyword arguments
         are not supported):
+        `loop()`
         `loop(stop)`
         `loop(start, stop)
         `loop(start, stop, step)`
         where the behavior and definitions of these parameters are identical to
-        those of `range`. 
+        those of `range`, and when no parameters are provided the loop will 
+        execute forever. 
         The loop is implemented with a DSP, and the context target yielded by
         this function is the allocated DSP object (which will inherently 
         contain the iteration variable)
         """
-        dsp = self.DSP()
-        if len(args) == 1:
+        dsp = None
+        if len(args) == 0:
+            # Do nothing
+            pass
+
+        elif len(args) == 1:
+            dsp = self.DSP()
             start = 0
             stop = args[0]
             step = 1
             self.store(dsp["CFG"], DSPConfiguration("P+1", rst_p=True))
         elif len(args) == 2:
+            dsp = self.DSP()
             start = args[0]
             stop = args[1]
             step = 1
@@ -1309,11 +1401,12 @@ class Sequencer(Processor):
             dsp.load(start)
             self.store(dsp["CFG"], DSPConfiguration("P+1"))
         elif len(args) == 3:
+            dsp = self.DSP()
             start = args[0]
             stop = args[1]
             step = args[2]
             dsp.load(start)
-            self.STP(src1=Source.IMM1, 
+            self.STP(src1=Source(Source.Major.IMM), 
                      dest1=dsp["CFG"], 
                      imm1=DSPConfiguration("P+AB"),
                      src2=step,
@@ -1327,12 +1420,14 @@ class Sequencer(Processor):
         yield dsp
             
         block_empty = not self.Instruction.next_instance_assigned()
-        if not block_empty:
+        if not block_empty and len(args) > 0:
             loop_block_start.kwargs["dsp_cep"] = dsp.source()
             
-        stc = self.store(src=loop_block_start, 
+        end_condition = (dsp != stop) if len(args) > 0 else None
+
+        jump = self.store(src=loop_block_start, 
                          dest=Destination(Destination.Major.PC, 
                                           Destination.PC_ABSOLUTE_BRANCH), 
-                         when=(dsp != stop))
-        if block_empty:
-            stc.kwargs["dsp_cep"] = dsp.source()
+                         when=end_condition)
+        if block_empty and len(args) > 0:
+            jump.kwargs["dsp_cep"] = dsp.source()

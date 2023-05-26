@@ -83,13 +83,13 @@ class Firmware:
 
     # depth for the FIFOs at the output of ths AXIS stream switch
     ADC_FIFO_DEPTH = 4096
-    ADC_FIFO_PRIMITIVE = "ultra"
+    ADC_FIFO_PRIMITIVE = "auto"
     CMACC_FIFO_DEPTH = 1024
     CMACC_FIFO_PRIMITIVE = "auto"
     
     # The width of the AXI interface at the output of the DataMovers
-    ADC_DM_AXI_WIDTHS = [128]*NUM_ADC
-    CMACC_DM_AXI_WIDTHS = [128]*NUM_CMACC
+    ADC_DM_AXI_WIDTHS = [256]*NUM_ADC
+    CMACC_DM_AXI_WIDTHS = [64]*NUM_CMACC
     
     DAC_PIPELINE_STAGES = [1]*NUM_DAC # Pipeline stages between the RFDC and DAC memory
     ADC_PIPELINE_STAGES_BEFORE_SWITCH = [1]*16 # Pipeline stages between RFDC and AXIS switch
@@ -101,9 +101,95 @@ class Firmware:
     GPIO_CLK_SEL = 88 # The GPIO bit connected to the clock wizard clock select
     GPIO_CLK104_SYNC = 87
         
-    INPUT_CLK = 300e6
-    SEQUENCER_CLK = 300e6
-    ADC_TILE3_CLK = 300e6
+    CLK_CONFIG_4CLKS_300MHz = ("CONFIG.PRIMITIVE {MMCM} "
+                            "CONFIG.USE_DYN_RECONFIG {true} "
+                            "CONFIG.USE_PHASE_ALIGNMENT {true} "
+                            "CONFIG.PRIM_SOURCE {Global_buffer} "
+                            "CONFIG.PRIM_IN_FREQ {300.0} "
+                            "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
+                            "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
+                            "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
+                            "CONFIG.MMCM_CLKFBOUT_MULT_F {5.000} "
+                            "CONFIG.MMCM_CLKIN1_PERIOD {3.333} "
+                            "CONFIG.MMCM_COMPENSATION {AUTO} "
+                            "CONFIG.PLL_CLKIN_PERIOD {3.333} "
+                            "CONFIG.CLKIN1_JITTER_PS {33.330000000000005} "
+                            "CONFIG.USE_INCLK_SWITCHOVER {false} "
+                            "CONFIG.SECONDARY_IN_FREQ {300.0} "
+                            "CONFIG.SECONDARY_SOURCE {Global_buffer} "
+                            "CONFIG.CLKIN2_JITTER_PS {33.330000000000005} "
+                            "CONFIG.MMCM_CLKIN2_PERIOD {3.333} "
+
+                            "CONFIG.NUM_OUT_CLKS {4} "
+
+                            "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {300.0} "
+                            "CONFIG.CLK_OUT1_PORT {seq_clk} "
+                            "CONFIG.CLKOUT1_JITTER {76.789} "
+                            "CONFIG.CLKOUT1_PHASE_ERROR {71.599} "
+                            "CONFIG.MMCM_CLKOUT0_DIVIDE_F {5.000} "
+                            "CONFIG.CLKOUT1_DRIVES {Buffer} "
+
+                            "CONFIG.CLKOUT2_USED {true} "
+                            "CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {300.0} "
+                            "CONFIG.CLK_OUT2_PORT {adc_tile3_clk} "
+                            "CONFIG.CLKOUT2_JITTER {76.789} "
+                            "CONFIG.CLKOUT2_PHASE_ERROR {71.599} "
+                            "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
+                            "CONFIG.CLKOUT2_DRIVES {Buffer} "
+
+                            "CONFIG.CLKOUT3_USED {true} "
+                            "CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT3_PORT {datamover_axi_clk} "
+                            "CONFIG.CLKOUT3_JITTER {79.566} "
+                            "CONFIG.CLKOUT3_PHASE_ERROR {71.599} "
+                            "CONFIG.MMCM_CLKOUT2_DIVIDE {6} "
+                            "CONFIG.CLKOUT3_DRIVES {Buffer} "
+
+                            "CONFIG.CLKOUT4_USED {true} "
+                            "CONFIG.CLKOUT4_REQUESTED_OUT_FREQ {150.0} "
+                            "CONFIG.CLK_OUT4_PORT {datamover_cmd_clk} "
+                            "CONFIG.CLKOUT4_JITTER {87.900} "
+                            "CONFIG.CLKOUT4_PHASE_ERROR {71.599} "
+                            "CONFIG.MMCM_CLKOUT3_DIVIDE {10} "
+                            "CONFIG.CLKOUT4_DRIVES {Buffer}")
+    
+    CLK_CONFIG_2CLKS_250MHz = ("CONFIG.PRIMITIVE {MMCM} "
+                            "CONFIG.USE_DYN_RECONFIG {true} "
+                            "CONFIG.USE_PHASE_ALIGNMENT {true} "
+                            "CONFIG.PRIM_SOURCE {Global_buffer} "
+                            "CONFIG.PRIM_IN_FREQ {250.0} "
+                            "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
+                            "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
+                            "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
+                            "CONFIG.MMCM_CLKFBOUT_MULT_F {5.000} "
+                            "CONFIG.MMCM_CLKIN1_PERIOD {4.0} "
+                            "CONFIG.MMCM_COMPENSATION {AUTO} "
+                            "CONFIG.PLL_CLKIN_PERIOD {4.0} "
+                            "CONFIG.CLKIN1_JITTER_PS {40.0} "
+                            "CONFIG.USE_INCLK_SWITCHOVER {false} "
+                            "CONFIG.SECONDARY_IN_FREQ {250.0} "
+                            "CONFIG.SECONDARY_SOURCE {Global_buffer} "
+                            "CONFIG.CLKIN2_JITTER_PS {40.0} "
+                            "CONFIG.MMCM_CLKIN2_PERIOD {4.0} "
+
+                            "CONFIG.NUM_OUT_CLKS {2} "
+
+                            "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT1_PORT {seq_clk} "
+                            "CONFIG.CLKOUT1_JITTER {85.736} "
+                            "CONFIG.CLKOUT1_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT0_DIVIDE_F {5.000} "
+                            "CONFIG.CLKOUT1_DRIVES {Buffer} "
+
+                            "CONFIG.CLKOUT2_USED {true} "
+                            "CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT2_PORT {adc_tile3_clk} "
+                            "CONFIG.CLKOUT2_JITTER {85.736} "
+                            "CONFIG.CLKOUT2_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
+                            "CONFIG.CLKOUT2_DRIVES {Buffer}")
+    
+    
     
     ###########################################################################
     # Create objects abstracting HDL modules
@@ -122,6 +208,7 @@ class Firmware:
     _dma_fifo_almost_empty_ports = []
     _dma_running_ports = []
     _axis_switch_fifo_overflow_ports = []
+    _axis_switch_fifo_reset_ports = []
 
     for label,count in [("dac", NUM_DAC), ("adc", NUM_ADC), ("cmacc", NUM_CMACC)]:
         for idx in range(count):
@@ -155,6 +242,13 @@ class Firmware:
                                           "offset": _bit,
                                           "width": 1,
                                           "pipeline": 1}]
+                
+                _axis_switch_fifo_reset_ports += [{"name": f"{label}_dm{idx}", 
+                                          "direction": BusDataport.OUTPUT, 
+                                          "offset": _bit,
+                                          "gate": BusDataport.GATE_RESET,
+                                          "width": 1,
+                                          "pipeline": 1}]
             _bit += 1
 
             fifo_port = BusDevice(name=f"{label}_dma{idx}_fifo", size=1)
@@ -165,20 +259,24 @@ class Firmware:
     hdl_modules.append(dma_trigger)
     
     dma_fifo_empty = BusDataport(name="dma_fifo_empty", ports=_dma_fifo_empty_ports)
-    sequencer_bus_decoder.add(dma_fifo_empty)
+    sequencer_bus_decoder.add(dma_fifo_empty, pipeline=True)
     hdl_modules.append(dma_fifo_empty)
 
     dma_fifo_almost_empty = BusDataport(name="dma_fifo_almost_empty", ports=_dma_fifo_almost_empty_ports)
-    sequencer_bus_decoder.add(dma_fifo_almost_empty)
+    sequencer_bus_decoder.add(dma_fifo_almost_empty, pipeline=True)
     hdl_modules.append(dma_fifo_almost_empty) 
 
     dma_running = BusDataport(name="dma_running", ports=_dma_running_ports)
-    sequencer_bus_decoder.add(dma_running)
+    sequencer_bus_decoder.add(dma_running, pipeline=True)
     hdl_modules.append(dma_running)
     
     axis_switch_fifo_overflow = BusDataport(name="axis_switch_fifo_overflow", ports=_axis_switch_fifo_overflow_ports)
-    sequencer_bus_decoder.add(axis_switch_fifo_overflow)
+    sequencer_bus_decoder.add(axis_switch_fifo_overflow, pipeline=True)
     hdl_modules.append(axis_switch_fifo_overflow)
+
+    axis_switch_fifo_reset = BusDataport(name="axis_switch_fifo_reset", ports=_axis_switch_fifo_reset_ports)
+    sequencer_bus_decoder.add(axis_switch_fifo_reset, pipeline=True)
+    hdl_modules.append(axis_switch_fifo_reset)
 
     # Create dataports for controlling accumulator offsets and output values
     for i in range(NUM_CMACC):
@@ -198,7 +296,7 @@ class Firmware:
                                    "pipeline": 1}]
 
             _cmacc_port = BusDataport(name=f"cmacc{i}_{quad}", ports=_cmacc_dataports)
-            sequencer_bus_decoder.add(_cmacc_port)
+            sequencer_bus_decoder.add(_cmacc_port, pipeline=True)
             hdl_modules.append(_cmacc_port)
 
     # Add a reset port
@@ -213,7 +311,7 @@ class Firmware:
                                   "pipeline": 1}]
 
     cmacc_reset_port = BusDataport(name=f"cmacc_reset", ports=_cmacc_reset_ports)
-    sequencer_bus_decoder.add(cmacc_reset_port)
+    sequencer_bus_decoder.add(cmacc_reset_port, pipeline=True)
     hdl_modules.append(cmacc_reset_port)
 
     # Create dataports for monitoring the CMACCs for completion
@@ -256,7 +354,7 @@ class Firmware:
                                    "pipeline": 2}]
 
         _ps_gpio = BusDataport(name=f"ps_gpio{gpio_num}", ports=_ps_gpio_dataports)
-        sequencer_bus_decoder.add(_ps_gpio)
+        sequencer_bus_decoder.add(_ps_gpio, pipeline=True)
         hdl_modules.append(_ps_gpio)
 
     _ps_irq_dataports = []
@@ -275,7 +373,7 @@ class Firmware:
                            "pipeline": 2}]
 
     ps_irq = BusDataport(name="ps_irq", ports=_ps_irq_dataports)
-    sequencer_bus_decoder.add(ps_irq)
+    sequencer_bus_decoder.add(ps_irq, pipeline=True)
     hdl_modules.append(ps_irq)
 
     # Create a register file for RFDC real-time updates and connect it to the sequencer bus
@@ -318,7 +416,7 @@ class Firmware:
         size_bits=CACHE_MEMORY_SIZE_BITS, 
         width=32, 
         controller_width=128,
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=1, 
         read_only=False,
         use_rst=False,
@@ -332,7 +430,7 @@ class Firmware:
     instruction_memory_controller = AXIMemoryArray("instruction", 
         size_bits=INSTRUCTION_MEMORY_SIZE_BITS, 
         width=128, 
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=1, 
         read_only=True,
         use_rst=False,
@@ -346,7 +444,7 @@ class Firmware:
     dac_memory_controller = AXIMemoryArray(f"dac", 
         size_bits=DAC_MEMORY_SIZE_BITS, 
         width=128, 
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=NUM_DAC, 
         read_only=True,
         use_rst=True,
@@ -360,7 +458,7 @@ class Firmware:
     cmacc_kernel_memory_controller = AXIMemoryArray(f"cmacc_kernel", 
         size_bits=CMACC_KERNEL_MEMORY_SIZE_BITS, 
         width=32, 
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=NUM_CMACC, 
         read_only=True,
         use_rst=True,
@@ -374,7 +472,7 @@ class Firmware:
     dac_dma_descriptor_memory_controller = AXIMemoryArray(f"dac_dma_descriptor", 
         size_bits=DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS, 
         width=64, 
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=NUM_DAC, 
         read_only=True,
         use_rst=False,
@@ -388,7 +486,7 @@ class Firmware:
     adc_dma_descriptor_memory_controller = AXIMemoryArray(f"adc_dma_descriptor", 
         size_bits=ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS, 
         width=64, 
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=NUM_ADC, 
         read_only=True,
         use_rst=False,
@@ -402,7 +500,7 @@ class Firmware:
     cmacc_dma_descriptor_memory_controller = AXIMemoryArray(f"cmacc_dma_descriptor", 
         size_bits=CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS, 
         width=64, 
-        axi_frequency=300e6, 
+        axi_frequency=250e6, 
         elements=NUM_CMACC, 
         read_only=True,
         use_rst=False,
@@ -475,44 +573,7 @@ class Firmware:
             # that reflect this)
             create_ip(f, name="hedgehog/clk_wiz", vlnv="xilinx.com:ip:clk_wiz:6.0")
             set_property(f, name="hedgehog/clk_wiz", properties={"PRIM_IN_FREQ.VALUE_SRC": "USER"})
-            set_property(f, name="hedgehog/clk_wiz",
-                             properties="CONFIG.PRIMITIVE {MMCM} "
-                                        "CONFIG.USE_DYN_RECONFIG {true} "
-                                        "CONFIG.USE_PHASE_ALIGNMENT {true} "
-                                        "CONFIG.PRIM_SOURCE {Global_buffer} "
-                                        f"CONFIG.PRIM_IN_FREQ {{{round(Firmware.INPUT_CLK*1e-6, 3)}}} "
-                                        "CONFIG.CLKOUT2_USED {true} "
-                                        f"CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {{{round(Firmware.SEQUENCER_CLK*1e-6, 3)}}} "
-                                        f"CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {{{round(Firmware.ADC_TILE3_CLK*1e-6, 3)}}} "
-                                        "CONFIG.CLK_OUT1_PORT {seq_clk} "
-                                        "CONFIG.CLK_OUT2_PORT {clk_adc_tile3} "
-                                        "CONFIG.CLKIN1_JITTER_PS {33.330000000000005} "
-                                        "CONFIG.USE_INCLK_SWITCHOVER {false} "
-                                        f"CONFIG.SECONDARY_IN_FREQ {{{round(Firmware.INPUT_CLK*1e-6, 3)}}} "
-                                        "CONFIG.SECONDARY_SOURCE {Global_buffer} "
-                                        "CONFIG.CLKIN2_JITTER_PS {33.330000000000005} "
-                                        "CONFIG.MMCM_CLKIN2_PERIOD {3.333} "
-                                        "CONFIG.CLKOUT1_DRIVES {Buffer} "
-                                        "CONFIG.CLKOUT2_DRIVES {Buffer} "
-                                        "CONFIG.CLKOUT3_DRIVES {Buffer} "
-                                        "CONFIG.CLKOUT4_DRIVES {Buffer} "
-                                        "CONFIG.CLKOUT5_DRIVES {Buffer} "
-                                        "CONFIG.CLKOUT6_DRIVES {Buffer} "
-                                        "CONFIG.CLKOUT7_DRIVES {Buffer} "
-                                        "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
-                                        "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
-                                        "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
-                                        "CONFIG.MMCM_CLKFBOUT_MULT_F {4.000} "
-                                        "CONFIG.MMCM_CLKIN1_PERIOD {3.333} "
-                                        "CONFIG.MMCM_COMPENSATION {AUTO} "
-                                        "CONFIG.MMCM_CLKOUT0_DIVIDE_F {4.000} "
-                                        "CONFIG.MMCM_CLKOUT1_DIVIDE {40} "
-                                        "CONFIG.PLL_CLKIN_PERIOD {3.333} "
-                                        "CONFIG.NUM_OUT_CLKS {2} "
-                                        "CONFIG.CLKOUT1_JITTER {81.814} "
-                                        "CONFIG.CLKOUT1_PHASE_ERROR {77.836} "
-                                        "CONFIG.CLKOUT2_JITTER {81.814} "
-                                        "CONFIG.CLKOUT2_PHASE_ERROR {77.836}")
+            set_property(f, name="hedgehog/clk_wiz", properties=Firmware.CLK_CONFIG_2CLKS_250MHz)
             
             # Create reset synchronizers for the various clock domains
             create_ip(f, name="hedgehog/proc_sys_reset_PS_clk_250", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
@@ -544,11 +605,11 @@ class Firmware:
             connect_bd_net(f, f"hedgehog/pl_clk_bufg/BUFG_O", f"hedgehog/clk_wiz/clk_in1")
             constraints.write("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/pl_clk_bufg_BUFG_O]\n")
             constraints.write("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/clk_wiz/inst/CLK_CORE_DRP_I/clk_inst/clk_in1_acadia_bd_clk_wiz_0]\n")
-            f.write("set_property -dict [list CONFIG.FREQ_HZ {300000000}] [get_bd_intf_ports CLK104_PL_CLK]\n")
+            f.write("set_property -dict [list CONFIG.FREQ_HZ {250000000}] [get_bd_intf_ports CLK104_PL_CLK]\n")
             
             # Connect the clock from the 8A34001 to the clocking wizard
             # connect_bd_net(f, "hedgehog/clk_8A34001_out3_ibufds/IBUF_OUT", f"hedgehog/clk_wiz/clk_in2")
-            f.write("set_property -dict [list CONFIG.FREQ_HZ {300000000}] [get_bd_intf_ports CLK_8A34001_Q3_OUT]\n")
+            f.write("set_property -dict [list CONFIG.FREQ_HZ {250000000}] [get_bd_intf_ports CLK_8A34001_Q3_OUT]\n")
             
             # Slice the PS GPIO for the clock wizard select pin
             # create_slice(f, name=f"hedgehog/xlslice_clk_sel", 
@@ -626,37 +687,37 @@ class Firmware:
             
             # Auto-generated config string by Vivado
             rfdc_config_string = ("CONFIG.ADC0_Clock_Source {2} "
-                                   "CONFIG.ADC0_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC0_Fabric_Freq {250.000} "
                                    "CONFIG.ADC0_Multi_Tile_Sync {true} "
-                                   "CONFIG.ADC0_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC0_Outclk_Freq {250.000} "
                                    "CONFIG.ADC0_PLL_Enable {true} "
-                                   "CONFIG.ADC0_Refclk_Freq {300.000} "
-                                   "CONFIG.ADC0_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC0_Refclk_Freq {250.000} "
+                                   "CONFIG.ADC0_Sampling_Rate {2.0} "
                                    "CONFIG.ADC1_Clock_Source {2} "
                                    "CONFIG.ADC1_Enable {1} "
-                                   "CONFIG.ADC1_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC1_Fabric_Freq {250.000} "
                                    "CONFIG.ADC1_Multi_Tile_Sync {true} "
-                                   "CONFIG.ADC1_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC1_Outclk_Freq {250.000} "
                                    "CONFIG.ADC1_PLL_Enable {true} "
-                                   "CONFIG.ADC1_Refclk_Freq {300.000} "
-                                   "CONFIG.ADC1_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC1_Refclk_Freq {250.000} "
+                                   "CONFIG.ADC1_Sampling_Rate {2.0} "
                                    "CONFIG.ADC2_Clock_Dist {1} "
                                    "CONFIG.ADC2_Clock_Source {2} "
                                    "CONFIG.ADC2_Enable {1} "
-                                   "CONFIG.ADC2_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC2_Fabric_Freq {250.000} "
                                    "CONFIG.ADC2_Multi_Tile_Sync {true} "
-                                   "CONFIG.ADC2_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC2_Outclk_Freq {250.000} "
                                    "CONFIG.ADC2_PLL_Enable {true} "
-                                   "CONFIG.ADC2_Refclk_Freq {300.000} "
-                                   "CONFIG.ADC2_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC2_Refclk_Freq {250.000} "
+                                   "CONFIG.ADC2_Sampling_Rate {2.0} "
                                    "CONFIG.ADC3_Clock_Source {2} "
                                    "CONFIG.ADC3_Enable {1} "
-                                   "CONFIG.ADC3_Fabric_Freq {300.000} "
+                                   "CONFIG.ADC3_Fabric_Freq {250.000} "
                                    "CONFIG.ADC3_Multi_Tile_Sync {true} "
-                                   "CONFIG.ADC3_Outclk_Freq {300.000} "
+                                   "CONFIG.ADC3_Outclk_Freq {250.000} "
                                    "CONFIG.ADC3_PLL_Enable {true} "
-                                   "CONFIG.ADC3_Refclk_Freq {300.000} "
-                                   "CONFIG.ADC3_Sampling_Rate {2.4} "
+                                   "CONFIG.ADC3_Refclk_Freq {250.000} "
+                                   "CONFIG.ADC3_Sampling_Rate {2.0} "
                                    "CONFIG.ADC_Coarse_Mixer_Freq00 {0} "
                                    "CONFIG.ADC_Coarse_Mixer_Freq01 {0} "
                                    "CONFIG.ADC_Coarse_Mixer_Freq02 {0} "
@@ -801,36 +862,36 @@ class Firmware:
                                    "CONFIG.Axiclk_Freq {250} "
                                    "CONFIG.DAC0_Clock_Source {6} "
                                    "CONFIG.DAC0_Enable {1} "
-                                   "CONFIG.DAC0_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC0_Fabric_Freq {250.000} "
                                    "CONFIG.DAC0_Multi_Tile_Sync {true} "
                                    "CONFIG.DAC0_Outclk_Freq {375.000} "
                                    "CONFIG.DAC0_PLL_Enable {true} "
-                                   "CONFIG.DAC0_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC0_Refclk_Freq {250.000} "
                                    "CONFIG.DAC0_Sampling_Rate {6} "
                                    "CONFIG.DAC1_Clock_Source {6} "
                                    "CONFIG.DAC1_Enable {1} "
-                                   "CONFIG.DAC1_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC1_Fabric_Freq {250.000} "
                                    "CONFIG.DAC1_Multi_Tile_Sync {true} "
                                    "CONFIG.DAC1_Outclk_Freq {375.000} "
                                    "CONFIG.DAC1_PLL_Enable {true} "
-                                   "CONFIG.DAC1_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC1_Refclk_Freq {250.000} "
                                    "CONFIG.DAC1_Sampling_Rate {6} "
                                    "CONFIG.DAC2_Clock_Dist {1} "
                                    "CONFIG.DAC2_Enable {1} "
-                                   "CONFIG.DAC2_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC2_Fabric_Freq {250.000} "
                                    "CONFIG.DAC2_Multi_Tile_Sync {true} "
                                    "CONFIG.DAC2_Outclk_Freq {375.000} "
                                    "CONFIG.DAC2_PLL_Enable {true} "
-                                   "CONFIG.DAC2_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC2_Refclk_Freq {250.000} "
                                    "CONFIG.DAC2_Sampling_Rate {6} "
                                    "CONFIG.DAC2_VOP {40.0} "
                                    "CONFIG.DAC3_Clock_Source {6} "
                                    "CONFIG.DAC3_Enable {1} "
-                                   "CONFIG.DAC3_Fabric_Freq {300.000} "
+                                   "CONFIG.DAC3_Fabric_Freq {250.000} "
                                    "CONFIG.DAC3_Multi_Tile_Sync {true} "
                                    "CONFIG.DAC3_Outclk_Freq {375.000} "
                                    "CONFIG.DAC3_PLL_Enable {true} "
-                                   "CONFIG.DAC3_Refclk_Freq {300.000} "
+                                   "CONFIG.DAC3_Refclk_Freq {250.000} "
                                    "CONFIG.DAC3_Sampling_Rate {6} "
                                    "CONFIG.DAC3_VOP {40.0} "
                                    "CONFIG.DAC_Coarse_Mixer_Freq00 {3} "
@@ -865,22 +926,22 @@ class Firmware:
                                    "CONFIG.DAC_Data_Width31 {8} "
                                    "CONFIG.DAC_Data_Width32 {8} "
                                    "CONFIG.DAC_Data_Width33 {8} "
-                                   "CONFIG.DAC_Interpolation_Mode00 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode01 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode02 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode03 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode10 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode11 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode12 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode13 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode20 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode21 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode22 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode23 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode30 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode31 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode32 {5} "
-                                   "CONFIG.DAC_Interpolation_Mode33 {5} "
+                                   "CONFIG.DAC_Interpolation_Mode00 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode01 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode02 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode03 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode10 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode11 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode12 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode13 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode20 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode21 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode22 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode23 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode30 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode31 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode32 {6} "
+                                   "CONFIG.DAC_Interpolation_Mode33 {6} "
                                    "CONFIG.DAC_Mixer_Mode00 {0} "
                                    "CONFIG.DAC_Mixer_Mode01 {0} "
                                    "CONFIG.DAC_Mixer_Mode02 {0} "
@@ -1008,7 +1069,7 @@ class Firmware:
             for i in range(4):
                 connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")        
-                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{'clk_adc_tile3' if i == 3 else 'seq_clk'}")
+                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{'adc_tile3_clk' if i == 3 else 'seq_clk'}")
                 connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")
 
             # Connect RFDC to the smartconnect through an AXI register slice and assign address space
@@ -1240,7 +1301,7 @@ class Firmware:
             # First, create the bus-driven DataMover Controller and connect it to the bus
             create_module(f, f"hedgehog/datamover_controller", "datamover_controller")
             connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/datamover_controller", f"hedgehog/datamover_controller/master_bus")
-            connect_bd_net(f, f"hedgehog/datamover_controller/clk", "hedgehog/clk_wiz/seq_clk")
+            connect_bd_net(f, f"hedgehog/datamover_controller/datamover_cmd_clk", "hedgehog/clk_wiz/seq_clk")
             connect_bd_net(f, f"hedgehog/datamover_controller/nrst", "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
 
             # Create the DataMover itself
@@ -1317,13 +1378,15 @@ class Firmware:
 
                 create_module(f, f"hedgehog/fifo_adc_dm{d}", "acadia_adc_fifo")
                 set_property(f, name=f"hedgehog/fifo_adc_dm{d}", properties={"WIDTH": 128, 
-                                                                             "TKEEP_WIDTH": 16, 
                                                                              "DEPTH": Firmware.ADC_FIFO_DEPTH, 
-                                                                             "MEMORY_TYPE": Firmware.ADC_FIFO_PRIMITIVE})
+                                                                             "MEMORY_TYPE": Firmware.ADC_FIFO_PRIMITIVE,
+                                                                             "ASYNCHRONOUS": "false"})
 
-                connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/clk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/signal_clk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/m_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-                connect_bd_net(f, f"hedgehog/axis_switch_fifo_overflow_dataport/adc_dm{d}", f"hedgehog/fifo_adc_dm{d}/overflow")
+                connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/aux_rst", f"hedgehog/axis_switch_fifo_reset_dataport/adc_dm{d}")
+                connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/overflow", f"hedgehog/axis_switch_fifo_overflow_dataport/adc_dm{d}")
                 
                 # Create an AXIS pipeline stage and connect it to the switch
                 create_module(f, f"hedgehog/adc_dma{d}_pipeline", "acadia_axis_pipeline")
@@ -1340,7 +1403,7 @@ class Firmware:
                                   f"hedgehog/adc_dma{d}_pipeline/m_axis_tdata")
                 
                 # Connect the ADC DMA AXIS handshaking signals to the AXIS FIFO handshaking inputs
-                connect_bd_net(f, f"hedgehog/fifo_adc_dm{d}/wr_en", f"hedgehog/adc_dma{d}/addr_tvalid")
+                connect_bd_intf_net(f, f"hedgehog/fifo_adc_dm{d}/dma", f"hedgehog/adc_dma{d}/addr")
 
                 # ------------------- AXI DataMovers -------------------- #
 
@@ -1354,7 +1417,7 @@ class Firmware:
                                             f"CONFIG.c_m_axi_s2mm_data_width {{{Firmware.ADC_DM_AXI_WIDTHS[d]}}} "
                                             "CONFIG.c_s_axis_s2mm_tdata_width {128} "
                                             "CONFIG.c_s2mm_btt_used {23} "
-                                            "CONFIG.c_s2mm_burst_size {256} "
+                                            f"CONFIG.c_s2mm_burst_size {{{256 if Firmware.ADC_DM_AXI_WIDTHS[d] <= 128 else 256*128//Firmware.ADC_DM_AXI_WIDTHS[d]}}} "
                                             "CONFIG.c_s2mm_support_indet_btt {true} "
                                             "CONFIG.c_mm2s_include_sf {false} "
                                             "CONFIG.c_s2mm_include_sf {false} "
@@ -1453,17 +1516,20 @@ class Firmware:
 
                 create_module(f, f"hedgehog/fifo_cmacc_dm{d}", "acadia_adc_fifo")
                 set_property(f, f"hedgehog/fifo_cmacc_dm{d}", properties={"WIDTH": 32, 
-                                                                          "TKEEP_WIDTH": 4, 
                                                                           "DEPTH": Firmware.CMACC_FIFO_DEPTH,
-                                                                          "MEMORY_TYPE": Firmware.CMACC_FIFO_PRIMITIVE})
+                                                                          "MEMORY_TYPE": Firmware.CMACC_FIFO_PRIMITIVE,
+                                                                          "ASYNCHRONOUS": "false"})
 
-                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/clk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/signal_clk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/m_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-                connect_bd_net(f, f"hedgehog/axis_switch_fifo_overflow_dataport/cmacc_dm{d}", f"hedgehog/fifo_cmacc_dm{d}/overflow")
+                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/aux_rst", f"hedgehog/axis_switch_fifo_reset_dataport/cmacc_dm{d}")
+                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/overflow", f"hedgehog/axis_switch_fifo_overflow_dataport/cmacc_dm{d}")
 
                 # Connect the FIFO stream input to the CMACC signal passthrough
-                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/din", f"hedgehog/cmacc{d}/signal_out_tdata")
-                connect_bd_net(f, f"hedgehog/fifo_cmacc_dm{d}/wr_en", f"hedgehog/cmacc{d}/signal_out_tvalid")
+                connect_bd_net(f, f"hedgehog/cmacc{d}/signal_out_tdata", f"hedgehog/fifo_cmacc_dm{d}/din")
+                connect_bd_net(f, f"hedgehog/cmacc{d}/signal_out_tvalid", f"hedgehog/fifo_cmacc_dm{d}/dma_tvalid")
+                connect_bd_net(f, f"hedgehog/cmacc{d}/signal_out_tlast", f"hedgehog/fifo_cmacc_dm{d}/dma_tlast")
 
                 # ------------------- AXI DataMovers -------------------- #
 
@@ -1873,7 +1939,7 @@ class Acadia:
             for block in range(4):
                 dac_channel = Channel(tile=tile, block=block, is_dac=True)
                 dac_channel.analog_sample_frequency = 6e9
-                dac_channel.interface_sample_frequency = 1.2e9
+                dac_channel.interface_sample_frequency = 1e9
                 dac_channel.complex_samples = True
                 
                 # Patch in methods that will synchronize relevant calls to this
@@ -1902,8 +1968,8 @@ class Acadia:
                 self._DAC_channels.append(dac_channel)
                 
                 adc_channel = Channel(tile=tile, block=block, is_dac=False)
-                adc_channel.analog_sample_frequency = 2.4e9
-                adc_channel.interface_sample_frequency = 1.2e9
+                adc_channel.analog_sample_frequency = 2e9
+                adc_channel.interface_sample_frequency = 1e9
                 adc_channel.complex_samples = True
                 
                 adc_channel.update_nco_frequency = SynchronizedFunction(self.synchronizer,
@@ -1989,9 +2055,9 @@ class Acadia:
                 address=0xFD50_0000 + (instance._resource_id*0x1_0000),
                 size=0x1_0000))
             
-        # Connect to the GPIO registers
-        PSGPIO.attach(self._attach_memory(0xFF0A0000, 0x400))
-        
+        # Connect to the GPIO registers and store sequencer bus addresses for the GPIO dataports
+        self._psgpio_mem = self._attach_memory(0xFF0A0000, 0x400, mem_cast="I")
+
         # Connect to the clock wizard
         self.clk_wiz = self._attach_memory(address=Firmware.CLK_WIZ_ADDRESS, size=2**18)  
             
@@ -2193,9 +2259,9 @@ class Acadia:
         RFClk.LMK.reset()
         RFClk.LMK.set_config()
         RFClk.LMK.set_input(0 if reference == "external" else 1)
-        RFClk.LMK.set_output_divider(RFClk.LMK.DCLK_PL, 10)
-        RFClk.LMK.set_output_divider(RFClk.LMK.DCLK_RFDC_DAC, 10)
-        RFClk.LMK.set_output_divider(RFClk.LMK.DCLK_RFDC_ADC, 10)
+        RFClk.LMK.set_output_divider(RFClk.LMK.DCLK_PL, 12)
+        RFClk.LMK.set_output_divider(RFClk.LMK.DCLK_RFDC_DAC, 12)
+        RFClk.LMK.set_output_divider(RFClk.LMK.DCLK_RFDC_ADC, 12)
         
     def get_clock_status(self, clkin=10e6):
         """
@@ -2221,7 +2287,18 @@ class Acadia:
         for clk in ["PL", "ADC_ref", "DAC_ref", "ADC_LMX", "DAC_LMX"]:
             d[f"{clk}_clk_frequency"] = d["PLL2_out_frequency"] / d[f"{clk}_clk_divider"]
         
-        d["PL_clocks_locked"] = self.clk_wiz[4] == 1
+        d["clk_wiz_locked"] = self.clk_wiz[4] == 1
+        d["clk_wiz_divclk_divide"] = self.clk_wiz[0x200]
+        d["clk_wiz_fbout_mult"] = self.clk_wiz[0x201]
+        d["clk_wiz_fbout_frac"] = int.from_bytes(self.clk_wiz[0x203:0x202], 'little') & (2**10 - 1)
+        d["clk_wiz_vco_frequency_over_input_frequency"] = (d["clk_wiz_fbout_mult"] + 1e-3*d["clk_wiz_fbout_frac"]) / d["clk_wiz_divclk_divide"]
+        
+        for output in range(7):
+            base = 0x208 + output*12
+            d[f"clk_wiz_clkout{output}_div"] = self.clk_wiz[base]
+            if output == 0:
+                d[f"clk_wiz_clkout{output}_frac"] = int.from_bytes(self.clk_wiz[base+2:base+1], 'little') & (2**10 - 1)
+            d[f"clk_wiz_clkout{output}_phase"] = int.from_bytes(self.clk_wiz[base+8:base+4], 'little')
         
         rfdc_status = Channel.RFDC_status()
         for tile,status in rfdc_status.items():
@@ -2566,6 +2643,57 @@ class Acadia:
         dma_running = self._active_sequencer.bus_read(dma_running_device.address().value())
         with self._active_sequencer.wait_until(dma_running & mask == 0):
             pass
+
+    def gpio_set_direction(self, port, directions):
+        """
+        Set the GPIO directions for the signals in a given port.
+        :param port: The port number (either 3 or 4).
+        :type port: int
+        :param directions: Each set bit configures the corresponding
+        pin as an output.
+        :type directions: int
+        """
+        proc = Processor.active_processor()
+        if proc is None:
+            self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3] = directions
+        else:
+            raise TypeError(f"Unable to configure GPIO on processor {proc}.")
+        
+    def gpio_read(self, port):
+        """
+        Read the value of a 32-bit GPIO port. 
+        :param port: The port number (either 3 or 4).
+        :type port: int
+        """
+        if port not in [3,4]:
+            raise ValueError(f"Invalid GPIO port {port}.")
+        proc = Processor.active_processor()
+        if proc is None:
+            return self._psgpio_mem[(PSGPIO.PSGPIO3_IN_PSREG >> 2) + port - 3]
+        elif isinstance(proc, Sequencer):
+            addr = Firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
+            return proc.bus_read(addr)
+        else:
+            raise TypeError(f"Unable to access GPIO on processor {proc}.")
+        
+    def gpio_write(self, port, data):
+        """
+        Write data to a 32-bit GPIO port. 
+        :param port: The port number (either 3 or 4).
+        :type port: int
+        :param data: The value to write
+        :type data: int or bytes
+        """
+        if port not in [3,4]:
+            raise ValueError(f"Invalid GPIO port {port}.")
+        proc = Processor.active_processor()
+        if proc is None:
+            self._psgpio_mem[(PSGPIO.PSGPIO3_OUT_PSREG >> 2) + port - 3] = data
+        elif isinstance(proc, Sequencer):
+            addr = Firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
+            return proc.bus_write(address=addr, data=data)
+        else:
+            raise TypeError(f"Unable to access GPIO on processor {proc}.")
     
     ########################### UTILITY METHODS ##############################
             

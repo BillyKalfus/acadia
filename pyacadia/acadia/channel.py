@@ -170,14 +170,23 @@ class Channel:
             d["decoder_mode"] = (s.AnalogDataPathStatus >> 4) & 0xF
             d["fifo_enabled"] = s.DigitalDataPathStatus & 0xF
             d["interpolation_factor"] = (s.DigitalDataPathStatus >> 4) & 0xF
-            d["mixer_mode"] = (s.DigitalDataPathStatus >> 8) & 0xF
+            d["adder_status"] = (s.DigitalDataPathStatus >> 8) & 0xF
+            mixer_mode = (s.DigitalDataPathStatus >> 12) & 0xF
+            
         else:
             d["converter_enabled"] = s.AnalogDataPathStatus
             d["fifo_enabled"] = s.DigitalDataPathStatus & 0xF
             d["decimation_factor"] = (s.DigitalDataPathStatus >> 4) & 0xF
-            d["adder_status"] = (s.DigitalDataPathStatus >> 8) & 0xF
-            d["mixer_mode"] = (s.DigitalDataPathStatus >> 12) & 0xF
-            
+            mixer_mode = (s.DigitalDataPathStatus >> 8) & 0xF
+
+        for mode in ["OFF", "C2C", "C2R", "R2C"]:
+            if mixer_mode == self.RFDC_def(f"XRFDC_MIXER_MODE_{mode}"):
+                d["mixer_mode"] = mode
+                break
+
+        if "mixer_mode" not in d:
+            raise ValueError(f"Invalid mixer mode {mixer_mode}")
+
         return d
     
     def startup(self):
@@ -260,9 +269,9 @@ class Channel:
                                      f" {clock_settings.DistributedClock}")
                 result[f"{dc}{tile}"] = d
             
-        return result   
+        return result
         
-    def configure_nco(self, enable=None, frequency=None, phase=None, update_source=None):
+    def configure_nco(self, mixer_type=None, frequency=None, phase=None, update_source=None, mixer_mode=None):
         """
         Configures the modulator and NCO settings for the channel. The frequency
         and phase of the NCO will be cleared.
@@ -277,8 +286,8 @@ class Channel:
         :type update_source: str, optional
         """
         if (update_source is not None 
-              and update_source not in ["immediate", "slice", "tile", "sysref", "pl"]):
-            raise ValueError(f"Invalid source {source}.")
+              and update_source.upper() not in ["IMMEDIATE", "SLICE", "TILE", "SYSREF", "PL", "MARKER"]):
+            raise ValueError(f"Invalid source {update_source}.")
             
         settings = self.RFDC_struct("XRFdc_Mixer_Settings*")
         self.RFDC_call_checked("GetMixerSettings",
@@ -297,9 +306,12 @@ class Channel:
             settings.EventSource = self.RFDC_def(f"XRFDC_EVNT_SRC_{update_source.upper()}")
         else:
             settings.EventSource = self.RFDC_def(f"XRFDC_EVNT_SRC_IMMEDIATE")
+
+        if mixer_mode is not None:
+            settings.MixerMode = self.RFDC_def(f"XRFDC_MIXER_MODE_{mixer_mode.upper()}")
             
-        if enable is not None:
-            settings.MixerType = self.RFDC_def(f"XRFDC_MIXER_TYPE_{'FINE' if (enable is not None) and enable else 'OFF'}")
+        if mixer_type is not None:
+            settings.MixerType = self.RFDC_def(f"XRFDC_MIXER_TYPE_{mixer_type.upper()}")
             
         self.RFDC_call_checked("SetMixerSettings",
                        self.converter_type(), 
@@ -307,24 +319,11 @@ class Channel:
                        self.block,
                        settings)
         
-    def get_nco_frequency(self):
-        """
-        :return: The frequency of the NCO in Hz
-        :rtype: float
-        """
-        settings = self.RFDC_struct("XRFdc_Mixer_Settings*")
-        self.RFDC_call_checked("GetMixerSettings",
-                       self.converter_type(), 
-                       self.tile, 
-                       self.block,
-                       settings)
-        
-        return settings.Freq*1e6
     
-    def get_nco_phase(self):
+    def get_nco_settings(self):
         """
-        :return: The phase of the NCO in Hz
-        :rtype: float
+        :return: A dict with NCO settings
+        :rtype: dict
         """
         settings = self.RFDC_struct("XRFdc_Mixer_Settings*")
         self.RFDC_call_checked("GetMixerSettings",
@@ -332,9 +331,49 @@ class Channel:
                        self.tile, 
                        self.block,
                        settings)
+        d = {"frequency": settings.Freq*1e6,
+             "phase": settings.PhaseOffset}
         
-        return settings.Phase
+        for event_source in ["IMMEDIATE", "SLICE", "TILE", "SYSREF", "MARKER", "PL"]:
+            if settings.EventSource == self.RFDC_def(f"XRFDC_EVNT_SRC_{event_source}"):
+                d["event_source"] = event_source
+                break
+        if "event_source" not in d:
+            raise ValueError(f"Received invalid event source {settings.EventSource}")
         
+        for coarse_mix_freq in ["OFF", 
+                                "SAMPLE_FREQ_BY_TWO", 
+                                "SAMPLE_FREQ_BY_FOUR", 
+                                "MIN_SAMPLE_FREQ_BY_FOUR", 
+                                "BYPASS"]:
+            if settings.CoarseMixFreq == self.RFDC_def(f"XRFDC_COARSE_MIX_{coarse_mix_freq}"):
+                d["coarse_mixer_frequency"] = coarse_mix_freq
+        if "coarse_mixer_frequency" not in d:
+            raise ValueError(f"Invalid coarse mixer frequency {settings.CoarseMixerFreq}")
+        
+        for mixer_mode in ["OFF", "C2C", "C2R", "R2C"]:
+            if settings.MixerMode == self.RFDC_def(f"XRFDC_MIXER_MODE_{mixer_mode}"):
+                d["mixer_mode"] = mixer_mode
+                break
+        if "mixer_mode" not in d:
+            raise ValueError(f"Invalid mixer mode {settings.MixerMode}")
+        
+        for fine_mixer_scale in ["AUTO", "1P0", "0P7"]:
+            if settings.FineMixerScale == self.RFDC_def(f"XRFDC_MIXER_SCALE_{fine_mixer_scale}"):
+                d["fine_mixer_scale"] = fine_mixer_scale
+                break
+        if "fine_mixer_scale" not in d:
+            raise ValueError(f"Invalid mixer scale {settings.FineMixerScale}")
+        
+        for mixer_type in ["COARSE", "FINE", "OFF", "DISABLED"]:
+            if settings.MixerType == self.RFDC_def(f"XRFDC_MIXER_TYPE_{mixer_type}"):
+                d["mixer_type"] = mixer_type
+                break
+        if "mixer_type" not in d:
+            raise ValueError(f"Invalid mixer type {settings.MixerType}")
+        
+        return d
+
     def configure_delay(self, delay=None, update_source=None):
         """
         Configures the delay line of the channel.
@@ -580,7 +619,7 @@ class Channel:
             raise TypeError("DSA can only be set on ADC channels.")
             
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             settings = self.RFDC_struct("XRFdc_DSA_Settings*", [0, dsa])
             self.RFDC_call_checked("SetDSA", self.tile, self.block, settings)
                 
@@ -602,7 +641,7 @@ class Channel:
             raise TypeError("DSA can only be read on ADC channels.")
             
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             settings = self.RFDC_struct("XRFdc_DSA_Settings*")
             self.RFDC_call_checked("GetDSA", self.tile, self.block, settings)
             return settings
@@ -843,7 +882,7 @@ class Channel:
         
     def set_datapath_mode(self, mode):
         """
-        Sets the datapath mode for DACs depending on the sampling frequency.
+        Sets the datapath mode for DACs.
         :param mode: Datapath mode. Must be one of:
         - "Full-bandwidth NCO"
         - "Half-bandwidth NCO (lowpass)"
@@ -857,14 +896,14 @@ class Channel:
             const = self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVTWO")
         elif mode == "Half-bandwidth NCO (lowpass)":
             const = self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVFOUR")
-        elif mode == "Half-bandwidth NCO (higpass)":
+        elif mode == "Half-bandwidth NCO (highpass)":
             const = self.RFDC_def(f"XRFDC_DATAPATH_MODE_FSDIVFOUR_FSDIVTWO")
         elif mode == "Bypass NCO":
             const = self.RFDC_def(f"XRFDC_DATAPATH_MODE_NODUC_0_FSDIVTWO")
         else:
             raise ValueError(f"Invalid datapath mode \"{mode}\"")
         
-        self.RFDC_call_checked("SetDatapathMode", self.tile, self.block, const)
+        self.RFDC_call_checked("SetDataPathMode", self.tile, self.block, const)
         
     def get_datapath_mode(self):
         """
@@ -875,14 +914,14 @@ class Channel:
             raise TypeError("Datapath mode can only be set on DAC channels.")
             
         n = xrfdc.ffi.new("int*")
-        self.RFDC_call_checked("GetDatapathMode", self.tile, self.block, n)
+        self.RFDC_call_checked("GetDataPathMode", self.tile, self.block, n)
             
         if n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVTWO"):
             return "Full-bandwidth NCO"
         elif n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVFOUR"):
             return "Half-bandwidth NCO (lowpass)"
         elif n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_FSDIVFOUR_FSDIVTWO"):
-            return "Half-bandwidth NCO (higpass)"
+            return "Half-bandwidth NCO (highpass)"
         elif n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_NODUC_0_FSDIVTWO"):
             return "Bypass NCO"
         else:
@@ -906,12 +945,7 @@ class Channel:
         """
         if not self.is_dac:
             raise TypeError("Interpolation can only be set on DAC channels.")
-            
-        if self.block is not None:
-            raise ValueError("Software only support setting interpolation for"
-                             " a full tile, as the interface clock rate will"
-                             " be adjusted.")
-            
+
         if factor not in [1,2,3,4,5,6,8,10,12,16,20,24,40]:
             raise ValueError(f"Invalid interpolation factor {factor}.")
             
@@ -940,12 +974,7 @@ class Channel:
         if self.is_dac:
             raise TypeError("Decimation can only be set on ADC channels.")
             
-        if self.block is not None:
-            raise ValueError("Software only support setting decimation for"
-                             " a full tile, as the interface clock rate will"
-                             " be adjusted.")
-            
-        if factor not in [1,2,3,4,5,6,8,10,12,16,20,24,40]:
+        if factor not in [0,1,2,3,4,5,6,8,10,12,16,20,24,40]:
             raise ValueError(f"Invalid decimation factor {factor}.")
             
         self.RFDC_call_checked("SetDecimationFactor", self.tile, self.block, factor)
@@ -968,16 +997,17 @@ class Channel:
         :rtype: int
         """
         n = xrfdc.ffi.new("int*")
-        self.RFDC_call_checked(f"SetFab{'Wr' if self.is_dac else 'Rd'}VldWords", 
+        self.RFDC_call_checked(f"GetFab{'Wr' if self.is_dac else 'Rd'}VldWords", 
                        self.tile, 
                        self.block, 
                        n)
         return n*16
     
     def is_data_complex(self):
-        return bool(self.RFDC_call(self.converter_type(), 
-                                    self.tile, 
-                                    self.block))
+        return self.RFDC_call("GetDataType",
+                                self.converter_type(), 
+                                self.tile, 
+                                self.block)
     
     def samples_to_bytes(self, samples):
         """

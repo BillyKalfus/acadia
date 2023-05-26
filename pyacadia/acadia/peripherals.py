@@ -5,6 +5,9 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from .compiler import Processor
+from .sequencer import Sequencer
+
 try:
     import pyxrfclk as xrfclk
 except ImportError as e:
@@ -211,47 +214,13 @@ class PSGPIO:
     """
     An interface to the GPIO pins of the PS exposed to the PL over EMIO.
     """
-    PSGPIO3_IN = 0x6C
-    PSGPIO3_OUT = 0x4C
-    PSGPIO4_IN = PSGPIO3_IN + 1
-    PSGPIO4_OUT = PSGPIO3_OUT + 1
-    
-    @classmethod
-    def attach(cls, mem):
-        """
-        Attach the class to a memory view of the GPIO registers.
-        """
-        cls._mem = mem.cast("I")
-    
-    def __init__(self, port, sequencer_address):
-        # Store relevant register values
-        self._port = port
-        self._in = (PSGPIO.PSGPIO3_IN >> 2) + port - 3
-        self._out = (PSGPIO.PSGPIO3_OUT >> 2) + port - 3
-        self._sequencer_bus_address = sequencer_address
-    
-    def read(self):
-        proc = Processor.active_processor()
-        if proc is None:
-            return self._mem[self._in]
-        elif isinstance(proc, PythonProcessor):
-            return proc.call("PSGPIO.read", self)
-        elif isinstance(proc, Sequencer):
-            return proc.bus_read(self._sequencer_bus_address)
-        else:
-            raise TypeError(f"Unable to access GPIO on processor {proc}.")
-        
-    def write(self, data):
-        proc = Processor.active_processor()
-        if proc is None:
-            self._mem[self._out] = data
-        if isinstance(proc, PythonProcessor):
-            return proc(proc.call("PSGPIO.write", self, data))
-        if isinstance(proc, Sequencer):
-            return proc.bus_write(address=self._sequencer_address, data=data)
-        else:
-            raise TypeError(f"Unable to access GPIO on processor {proc}.")
-    
+    PSGPIO3_IN_PSREG = 0x6C
+    PSGPIO3_OUT_PSREG = 0x4C
+    PSGPIO3_DIR_PSREG = 0x2C4
+    PSGPIO4_IN_PSREG = PSGPIO3_IN_PSREG + 1
+    PSGPIO4_OUT_PSREG = PSGPIO3_OUT_PSREG + 1
+    PSGPIO4_DIR_PSREG = PSGPIO3_DIR_PSREG + 1
+
     @staticmethod
     def sysfs_export(gpio):        
         if f"gpio{gpio}" not in os.listdir("/sys/class/gpio"):
@@ -333,36 +302,36 @@ class ZDMA:
         #  01 = use 64+AxLEN
         #  10 = use 128+AxLEN
         #  11 = use 256
-        if buffer_usage == 32:
+        if self.fci_buffer_usage == 32:
             pass
-        elif buffer_usage == 64:
+        elif self.fci_buffer_usage == 64:
             ch_fci_value |= 1 << 2
-        elif buffer_usage == 128:
+        elif self.fci_buffer_usage == 128:
             ch_fci_value |= 2 << 2
-        elif buffer_usage == 256:
+        elif self.fci_buffer_usage == 256:
             ch_fci_value |= 3 << 2
         else:
-            raise ValueError(f"Invalid buffer usage {buffer_usage}.")
+            raise ValueError(f"Invalid buffer usage {self.fci_buffer_usage}.")
         
         # bit 1: 0 = control the read side, 1 = control the write side
-        if side == "read":
+        if self.fci_side == "read":
             pass
-        elif side == "write":
+        elif self.fci_side == "write":
             ch_fci_value |= 1 << 1
         else:
-            raise ValueError(f"Invalid FCI side {side}.")
+            raise ValueError(f"Invalid FCI side {self.fci_side}.")
         # bit 0: enable FCI
-        ch_fci_value |= enable
+        ch_fci_value |= self.fci_enable
         
         self._regs[ZDMA.CH_FCI] = ch_fci_value.to_bytes(4, "little")
         
         # Source and destination
-        self._regs[ZDMA.CH_SRC_START_LSB] = src.to_bytes(8, "little")
-        self._regs[ZDMA.CH_DST_START_LSB] = dst.to_bytes(8, "little")
+        self._regs[ZDMA.CH_SRC_START_LSB] = self.src.to_bytes(8, "little")
+        self._regs[ZDMA.CH_DST_START_LSB] = self.dst.to_bytes(8, "little")
         
         # Write the size to the source and destination registers
-        self._regs[ZDMA.CH_SRC_DSCR_WORD0+8] = size.to_bytes(4, "little")
-        self._regs[ZDMA.CH_DST_DSCR_WORD0+8] = size.to_bytes(4, "little")
+        self._regs[ZDMA.CH_SRC_DSCR_WORD0+8] = self.size.to_bytes(4, "little")
+        self._regs[ZDMA.CH_DST_DSCR_WORD0+8] = self.size.to_bytes(4, "little")
         
     def attach(self, mem):
         """

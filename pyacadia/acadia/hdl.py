@@ -557,9 +557,12 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\n'
         hdl += f'entity {self.name} is\n'
         hdl += f'    port (\n'
-        hdl += f'        clk  : in std_logic;\n'
+        
+        hdl += f'        datamover_cmd_clk  : in std_logic;\n'
         hdl += f'        nrst : in std_logic;\n\n'
+
         hdl += f'        -- Slave interface\n'
+        hdl += f'        master_bus_clk  : in std_logic;\n'
         hdl += f'        master_bus_mosi : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_miso : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
         hdl += f'        master_bus_addr : in  std_logic_vector({bus_addr_bits-1} downto 0);\n'
@@ -591,7 +594,8 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
         
         for datamover in self._datamovers:
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_cmd_tdata  : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_cmd TDATA";\n'
@@ -603,9 +607,9 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tvalid : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TVALID";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tready : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TREADY";\n\n'
             
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of clk: SIGNAL is "xilinx.com:signal:clock:1.0 clk clk";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of datamover_cmd_clk: SIGNAL is "xilinx.com:signal:clock:1.0 clk datamover_cmd_clk";\n'
         bus_names = [s+f"_{d}" for s in self._datamovers for d in ["cmd","sts"]]
-        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER of clk: SIGNAL is "ASSOCIATED_BUSIF {":".join(bus_names)}";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER of datamover_cmd_clk: SIGNAL is "ASSOCIATED_BUSIF {":".join(bus_names)}";\n'
             
         hdl += f'    signal dm_err     : std_logic_vector(31 downto 0);\n'
         hdl += f'    signal dm_sts_vld : std_logic_vector(31 downto 0);\n'
@@ -619,8 +623,8 @@ class BusDataMoverController(BusDevice, HDLModule):
         
         hdl += f'begin\n\n'
         
-        hdl += f'    wr_proc: process(clk) begin\n'
-        hdl += f'        if rising_edge(clk) then\n'
+        hdl += f'    wr_proc: process(master_bus_clk) begin\n'
+        hdl += f'        if rising_edge(master_bus_clk) then\n'
         hdl += f'            if (nrst = \'0\') then\n'
         hdl += f'                dm_ack_rst <= (others => \'0\');\n'
         
@@ -668,8 +672,8 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'    {datamover}_cmd_tvalid <= {datamover}_cmd_waiting;\n'
         hdl += f'    \n'
         
-        hdl += f'    dm_cmd_ack_proc: process(clk) begin\n'
-        hdl += f'        if rising_edge(clk) then\n'
+        hdl += f'    dm_cmd_ack_proc: process(master_bus_clk) begin\n'
+        hdl += f'        if rising_edge(master_bus_clk) then\n'
         hdl += f'            if (nrst = \'0\') then\n'
         hdl += f'                dm_cmd_ack <= (others => \'0\');\n'
         hdl += f'            else\n'
@@ -696,8 +700,8 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'    dm_err({i}) <= {datamover}_err;\n'
         hdl += f'    dm_err(31 downto {len(self._datamovers)}) <= (others => \'0\');\n\n'
         
-        hdl += f'    rd_proc: process(clk) begin\n'
-        hdl += f'        if rising_edge(clk) then\n'
+        hdl += f'    rd_proc: process(master_bus_clk) begin\n'
+        hdl += f'        if rising_edge(master_bus_clk) then\n'
         hdl += f'            case master_bus_addr({bus_addr_bits-1} downto 0) is\n'
         
         for i,datamover in enumerate(self._datamovers):    
@@ -936,7 +940,7 @@ class AXIMemoryArray(HDLModule):
                         f'AWUSER_WIDTH 0,'
                         f'ADDR_WIDTH {controller_address_bits},'
                         f'ID_WIDTH 0,'
-                        f'FREQ_HZ {int(self._axi_frequency)},'
+                        # f'FREQ_HZ {int(self._axi_frequency)},'
                         f'PROTOCOL {"AXI4LITE" if self._axi4_lite else "AXI4"},'
                         f'DATA_WIDTH {self._controller_width},'
                         f'HAS_BURST {1 if self._axi4_lite else 0},'

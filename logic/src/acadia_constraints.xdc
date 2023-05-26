@@ -1,8 +1,11 @@
-create_clock -period 3.3333 -name clk104_pl_clk_300      [get_ports CLK104_PL_CLK_clk_p]
-create_clock -period 4.0000 -name clk104_pl_clk_250 -add [get_ports CLK104_PL_CLK_clk_p]
-create_clock -period 3.2    -name clk104_pl_clk_312 -add [get_ports CLK104_PL_CLK_clk_p]
+create_clock -period 4.0000 -name clk104_pl_clk_250      [get_ports CLK104_PL_CLK_clk_p]
+# create_clock -period 3.3333 -name clk104_pl_clk_300 -add [get_ports CLK104_PL_CLK_clk_p]
+# create_clock -period 3.2    -name clk104_pl_clk_312 -add [get_ports CLK104_PL_CLK_clk_p]
 
-set_clock_groups -physically_exclusive -group [get_clocks -include_generated_clocks clk104_pl_clk_300] -group [get_clocks -include_generated_clocks clk104_pl_clk_250] -group [get_clocks -include_generated_clocks clk104_pl_clk_312]
+# set_clock_groups -physically_exclusive \
+# -group [get_clocks -include_generated_clocks clk104_pl_clk_250] \
+# -group [get_clocks -include_generated_clocks clk104_pl_clk_300]
+ 
 
 # Set multicycle path constraints on internal signals to the RF data converter (from the example design)
 set_multicycle_path -to [get_pins -filter {REF_PIN_NAME== D} -of [get_cells -hier -filter {name =~ acadia_bd_i/hedgehog/rfdc/inst/IP2Bus_Data_reg*}]] -setup 2

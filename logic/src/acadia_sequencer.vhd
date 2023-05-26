@@ -32,10 +32,12 @@ use work.all;
 
 entity acadia_sequencer is
     generic (
-        STACK_SIZE      : natural := 32;
-        LOG2_STACK_SIZE : natural := 5;
-        NUM_DSP         : natural := 8;
-        WORD_SIZE       : natural := 32
+        STACK_SIZE                  : natural := 32;
+        LOG2_STACK_SIZE             : natural := 5;
+        NUM_DSP                     : natural := 8;
+        WORD_SIZE                   : natural := 32;
+        PIPELINE_DSP_INPUTS         : boolean := false;
+        INSTRUCTION_PIPELINE_STAGES : natural := 1
     );
     port
     (
@@ -139,8 +141,7 @@ architecture rtl of acadia_sequencer is
     
     -- Instruction control signals
     signal instruction       : std_logic_vector(127 downto 0);
-    signal instruction_p     : std_logic_vector(127 downto 0);
-    signal instruction_pp    : std_logic_vector(127 downto 0);
+    signal instruction_p     : std_logic_vector((128*INSTRUCTION_PIPELINE_STAGES)-1 downto 0);
     
     -- Instruction fields
     signal instr_opcode      : std_logic_vector(0 downto 0);
@@ -169,6 +170,7 @@ architecture rtl of acadia_sequencer is
     signal stack             : word_array(0 to STACK_SIZE-1);
     signal stack_ptr         : std_logic_vector(LOG2_STACK_SIZE-1 downto 0);
     signal stack_out         : std_logic_vector(WORD_SIZE-1 downto 0);
+    signal stack_out_p       : std_logic_vector(WORD_SIZE-1 downto 0);
     signal stack_in          : std_logic_vector(WORD_SIZE-1 downto 0);
     signal stack_pop         : std_logic;
     signal stack_push        : std_logic;
@@ -177,7 +179,13 @@ architecture rtl of acadia_sequencer is
     signal stack_underflow   : std_logic;
                               
     -- DSP slice signals and control registers
-    signal dsp_cep_reg       : std_logic_vector(NUM_DSP-1 downto 0);                             
+    signal dsp_cep_direct     : std_logic_vector(NUM_DSP-1 downto 0);    
+    signal dsp_ab_direct      : dsp_array(0 to NUM_DSP-1);
+    signal dsp_c_direct       : dsp_array(0 to NUM_DSP-1);
+    signal dsp_cfg_direct     : word_array(0 to NUM_DSP-1);
+    signal dsp_rstp_direct    : std_logic_vector(NUM_DSP-1 downto 0);
+
+    signal dsp_cep_reg       : std_logic_vector(NUM_DSP-1 downto 0);                         
     signal dsp_ab_reg        : dsp_array(0 to NUM_DSP-1);
     signal dsp_c_reg         : dsp_array(0 to NUM_DSP-1);
     signal dsp_cfg_reg       : word_array(0 to NUM_DSP-1);
@@ -215,7 +223,6 @@ begin
                 pc             <= (others => '0');
                 pc_wr          <= '1';
                 instruction_p  <= (others => '0');
-                instruction_pp <= (others => '0');
                 instruction    <= (others => '0');
             elsif(dest1_en = '1' and instr_dest1_maj = DEST_PC) then
                 -- Indicate for the next cycle that the PC has been updated
@@ -223,7 +230,6 @@ begin
                 
                 -- Reset the instruction pipeline
                 instruction_p  <= (others => '0');
-                instruction_pp <= (others => '0');
                              
                 -- Update the PC depending on the branch mode
                 if(instr_dest1_min(0) = '0') then
@@ -242,7 +248,6 @@ begin
                 
                 -- Reset the instruction pipeline
                 instruction_p  <= (others => '0');
-                instruction_pp <= (others => '0');
                              
                 -- Update the PC depending on the branch mode
                 if(instr_dest2_min(0) = '0') then
@@ -263,14 +268,23 @@ begin
                 pc             <= std_logic_vector(unsigned(pc) + 1);
                 pc_wr          <= '0';
                 instruction_p  <= (others => '0');
-                instruction_pp <= instruction_p;
-                instruction    <= instruction_pp;
+                instruction    <= (others => '0');
             else
                 pc             <= std_logic_vector(unsigned(pc) + 1);
                 pc_wr          <= '0';
-                instruction_p  <= instruction_mem_dout;
-                instruction_pp <= instruction_p;
-                instruction    <= instruction_pp;
+
+                -- Now the instruction pipeline will operate as normal
+                instruction_p(127 downto 0)  <= instruction_mem_dout;
+                
+                -- Loop to shift the instruction up the pipeline register
+                -- Minus 2 because VHDL loop boundaries are inclusive and 
+                -- when INSTRUCTION_PIPELINE_STAGES = 1, instruction_p is 128 bits
+                -- and doesn't require any shifting 
+                instruction_pipeline_loop: for i in 0 to INSTRUCTION_PIPELINE_STAGES-2 loop
+                    instruction_p((i*128) + 255 downto (i*128) + 128) <= instruction_p((i*128) + 127 downto i*128);
+                end loop instruction_pipeline_loop;
+
+                instruction <= instruction_p((INSTRUCTION_PIPELINE_STAGES-1)*128 + 127 downto (INSTRUCTION_PIPELINE_STAGES-1)*128);
             end if;
         end if;
     end process instruction_proc;
@@ -540,6 +554,28 @@ begin
         end if;
     end process dsp_p_reg_proc;
     
+    dsp_pipeline_gen: if PIPELINE_DSP_INPUTS = true generate
+        dsp_pipeline_proc: process(clk) begin
+            if rising_edge(clk) then
+                dsp_loop: for i in 0 to NUM_DSP-1 loop
+                    dsp_ab_direct(i)   <= dsp_ab_reg(i);
+                    dsp_c_direct(i)    <= dsp_c_reg(i);
+                    dsp_cfg_direct(i)  <= dsp_cfg_reg(i);
+                    dsp_cep_direct(i)  <= dsp_cep_reg(i);
+                    dsp_rstp_direct(i) <= dsp_rstp(i);
+                end loop dsp_loop;
+            end if;
+        end process dsp_pipeline_proc;
+    end generate dsp_pipeline_gen;
+
+    dsp_nopipeline_gen: if PIPELINE_DSP_INPUTS = false generate
+        dsp_ab_direct   <= dsp_ab_reg;
+        dsp_c_direct    <= dsp_c_reg;
+        dsp_cfg_direct  <= dsp_cfg_reg;
+        dsp_cep_direct  <= dsp_cep_reg;
+        dsp_rstp_direct <= dsp_rstp;
+    end generate dsp_nopipeline_gen;
+    
     -- Instantiate the DSP slices
     dsp_gen: for i in 0 to NUM_DSP-1 generate        
         DSP_inst : DSP48E2
@@ -625,17 +661,17 @@ begin
                 PCIN           => dsp_pcin(i),             -- 48-bit input: P cascade
                 
                 -- Control inputs: Control Inputs/Status Bits
-                ALUMODE        => dsp_cfg_reg(i)(3 downto 0),  -- 4-bit input: ALU control
+                ALUMODE        => dsp_cfg_direct(i)(3 downto 0),  -- 4-bit input: ALU control
                 CARRYINSEL     => "000",                       -- 3-bit input: Carry select
                 CLK            => clk,                         -- 1-bit input: Clock
                 INMODE         => "00000",                     -- 5-bit input: INMODE control
-                OPMODE         => dsp_cfg_reg(i)(12 downto 4), -- 9-bit input: Operation mode
+                OPMODE         => dsp_cfg_direct(i)(12 downto 4), -- 9-bit input: Operation mode
                 
                 -- Data inputs: Data Ports
-                A              => dsp_ab_reg(i)(47 downto 18),   -- 30-bit input: A data
-                B              => dsp_ab_reg(i)(17 downto 0),    -- 18-bit input: B data
-                C              => dsp_c_reg(i),                  -- 48-bit input: C data
-                CARRYIN        => dsp_cfg_reg(i)(13),            -- 1-bit input: Carry-in
+                A              => dsp_ab_direct(i)(47 downto 18),   -- 30-bit input: A data
+                B              => dsp_ab_direct(i)(17 downto 0),    -- 18-bit input: B data
+                C              => dsp_c_direct(i),                  -- 48-bit input: C data
+                CARRYIN        => dsp_cfg_direct(i)(13),            -- 1-bit input: Carry-in
                 D              => "000000000000000000000000000", -- 27-bit input: D data 
                 
                 -- Reset/Clock Enable inputs: Reset/Clock Enable Inputs
@@ -651,7 +687,7 @@ begin
                 CED            => '1',            -- 1-bit input: Clock enable for DREG
                 CEINMODE       => '1',            -- 1-bit input: Clock enable for INMODEREG
                 CEM            => '0',            -- 1-bit input: Clock enable for MREG
-                CEP            => dsp_cep_reg(i), -- 1-bit input: Clock enable for PREG
+                CEP            => dsp_cep_direct(i), -- 1-bit input: Clock enable for PREG
                 RSTA           => '0',            -- 1-bit input: Reset for AREG
                 RSTALLCARRYIN  => '0',            -- 1-bit input: Reset for CARRYINREG
                 RSTALUMODE     => '0',            -- 1-bit input: Reset for ALUMODEREG
@@ -661,7 +697,7 @@ begin
                 RSTD           => '1',            -- 1-bit input: Reset for DREG and ADREG
                 RSTINMODE      => '1',            -- 1-bit input: Reset for INMODEREG
                 RSTM           => '1',            -- 1-bit input: Reset for MREG
-                RSTP           => dsp_rstp(i)     -- 1-bit input: Reset for PREG
+                RSTP           => dsp_rstp_direct(i)     -- 1-bit input: Reset for PREG
             );
     end generate dsp_gen;
 
