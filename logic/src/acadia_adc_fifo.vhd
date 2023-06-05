@@ -21,6 +21,7 @@
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.STD_LOGIC_MISC.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
 library xpm;
@@ -28,29 +29,31 @@ use xpm.vcomponents.all;
 
 entity acadia_adc_fifo is
     generic (
-        WIDTH         : positive := 128;
-        DEPTH         : positive := 512;
+        WORD_WIDTH    : positive := 32;
+        INPUT_WORDS   : positive := 4;
+        OUTPUT_WORDS  : positive := 8;
+        INPUT_DEPTH   : positive := 512;
         MEMORY_TYPE   : string   := "auto";
         ASYNCHRONOUS  : boolean  := true
     );
     port (
-        signal_clk    : in  std_logic;
-        nrst          : in  std_logic;
-        aux_rst       : in  std_logic;
+        signal_in_clk    : in  std_logic;
+        nrst             : in  std_logic;
+        aux_rst          : in  std_logic;
         
-        overflow      : out std_logic;
+        overflow         : out std_logic;
+        misalignment     : out std_logic;
          
-        din           : in  std_logic_vector(WIDTH-1 downto 0);
-
-        dma_tvalid    : in  std_logic;
-        dma_tlast     : in  std_logic;
+        signal_in_tdata  : in  std_logic_vector(INPUT_WORDS*WORD_WIDTH-1 downto 0);
+        signal_in_tvalid : in  std_logic;
+        signal_in_tlast  : in  std_logic;
         
-        m_axis_aclk   : in std_logic;
-        m_axis_tdata  : out std_logic_vector(WIDTH-1 downto 0);
-        m_axis_tvalid : out std_logic;
-        m_axis_tready : in  std_logic;
-        m_axis_tlast  : out std_logic;
-        m_axis_tkeep  : out std_logic_vector((WIDTH/8)-1 downto 0)
+        m_axis_aclk      : in std_logic;
+        m_axis_tdata     : out std_logic_vector(OUTPUT_WORDS*WORD_WIDTH-1 downto 0);
+        m_axis_tvalid    : out std_logic;
+        m_axis_tready    : in  std_logic;
+        m_axis_tlast     : out std_logic;
+        m_axis_tkeep     : out std_logic_vector((OUTPUT_WORDS*WORD_WIDTH/8)-1 downto 0)
     );
 end acadia_adc_fifo;
 
@@ -59,37 +62,113 @@ architecture rtl of acadia_adc_fifo is
     ATTRIBUTE X_INTERFACE_MODE      : STRING;
     ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
     
-    ATTRIBUTE X_INTERFACE_PARAMETER of m_axis_aclk: SIGNAL is "ASSOCIATED_BUSIF m_axis";
-    ATTRIBUTE X_INTERFACE_INFO of m_axis_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TDATA";
-    ATTRIBUTE X_INTERFACE_INFO of m_axis_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TVALID";
-    ATTRIBUTE X_INTERFACE_INFO of m_axis_tready : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TREADY";
-    ATTRIBUTE X_INTERFACE_INFO of m_axis_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TLAST";
-    ATTRIBUTE X_INTERFACE_INFO of m_axis_tkeep  : SIGNAL is "xilinx.com:interface:axis:1.0 m_axis TKEEP";
-    ATTRIBUTE X_INTERFACE_MODE of m_axis_tdata  : SIGNAL is "Master";
-    ATTRIBUTE X_INTERFACE_PARAMETER of m_axis_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 1,HAS_TSTRB 0,HAS_TREADY 1,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(WIDTH/8);
+    ATTRIBUTE X_INTERFACE_PARAMETER of m_axis_aclk   : SIGNAL is "ASSOCIATED_BUSIF M_AXIS";
+    ATTRIBUTE X_INTERFACE_INFO of m_axis_tdata       : SIGNAL is "xilinx.com:interface:axis:1.0 M_AXIS TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of m_axis_tvalid      : SIGNAL is "xilinx.com:interface:axis:1.0 M_AXIS TVALID";
+    ATTRIBUTE X_INTERFACE_INFO of m_axis_tready      : SIGNAL is "xilinx.com:interface:axis:1.0 M_AXIS TREADY";
+    ATTRIBUTE X_INTERFACE_INFO of m_axis_tlast       : SIGNAL is "xilinx.com:interface:axis:1.0 M_AXIS TLAST";
+    ATTRIBUTE X_INTERFACE_INFO of m_axis_tkeep       : SIGNAL is "xilinx.com:interface:axis:1.0 M_AXIS TKEEP";
+    ATTRIBUTE X_INTERFACE_MODE of m_axis_tdata       : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of m_axis_tdata  : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 1,HAS_TSTRB 0,HAS_TREADY 1,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(WORD_WIDTH*OUTPUT_WORDS/8);
 
-    ATTRIBUTE X_INTERFACE_INFO of dma_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 dma TVALID";
-    ATTRIBUTE X_INTERFACE_INFO of dma_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 dma TLAST";
+    ATTRIBUTE X_INTERFACE_PARAMETER of signal_in_clk   : SIGNAL is "ASSOCIATED_BUSIF SIGNAL_IN";
+    ATTRIBUTE X_INTERFACE_INFO of signal_in_tdata      : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_IN TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of signal_in_tvalid     : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_IN TVALID";
+    ATTRIBUTE X_INTERFACE_INFO of signal_in_tlast      : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_IN TLAST";
+    ATTRIBUTE X_INTERFACE_PARAMETER of signal_in_tdata : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(WORD_WIDTH*INPUT_WORDS/8);
 
-    ATTRIBUTE X_INTERFACE_PARAMETER of signal_clk: SIGNAL is "ASSOCIATED_BUSIF dma";
+
         
-    signal fifo_rst      : std_logic;
-    signal fifo_overflow : std_logic;
-begin
+    -- An internal reset signal
+    signal rst_int           : std_logic;
+
+    -- Latch for overflow condition
+    signal fifo_overflow     : std_logic;
+    signal fifo_misalignment : std_logic;
     
-    fifo_rst     <= (not nrst) or aux_rst;
-    m_axis_tkeep <= (others => '1');
+    -- Need to realign some signals before interfacing to the FIFO or interface port itself
+    signal fifo_din          : std_logic_vector(INPUT_WORDS*(WORD_WIDTH+1)-1 downto 0);
+    signal fifo_dout         : std_logic_vector(OUTPUT_WORDS*(WORD_WIDTH+1)-1 downto 0);
+    signal fifo_tlast_out    : std_logic_vector(OUTPUT_WORDS-1 downto 0);
+    signal fifo_valid        : std_logic;
+
+begin
+    -- Reset the whole thing on either of the reset inputs
+    rst_int <= (not nrst) or aux_rst;
+
+    -- Directly drive some of the AXIS signals
+    m_axis_tkeep  <= (others => '1');
+    m_axis_tvalid <= fifo_valid;
 
     -- Latch the overflow signal so that we can know if it happened at any point during the capture
-    overflow_proc: process(signal_clk) begin
-        if rising_edge(signal_clk) then
-            if(fifo_rst = '1') then
+    overflow_proc: process(signal_in_clk) begin
+        if rising_edge(signal_in_clk) then
+            if(rst_int = '1') then
                 overflow <= '0';
             elsif(fifo_overflow = '1') then
                 overflow <= '1';
             end if;
         end if;
     end process overflow_proc;
+
+    -- Separate all of the incoming data words by 1 bit
+    -- so that the tlast signal can be inserted and properly aligned
+    -- at the output
+    fifo_data_input_gen: for i in 0 to INPUT_WORDS-1 generate
+        fifo_din(i*(WORD_WIDTH+1) + (WORD_WIDTH-1) downto i*(WORD_WIDTH+1)) <= signal_in_tdata((i*WORD_WIDTH) + (WORD_WIDTH-1) downto i*WORD_WIDTH);
+    end generate fifo_data_input_gen;
+
+    -- Clear all bits in between data words at the input, 
+    -- except for the highest one which will store tlast
+    fifo_din(fifo_din'high) <= signal_in_tlast;
+    fifo_tlast_input_gen: for i in 0 to INPUT_WORDS-2 generate
+        fifo_din(i*(WORD_WIDTH+1) + WORD_WIDTH) <= '0';
+    end generate fifo_tlast_input_gen;
+    
+    -- Connect the output data signals to the spaced words in the FIFO 
+    -- data output
+    fifo_data_output_gen: for i in 0 to OUTPUT_WORDS-1 generate
+        m_axis_tdata((i*WORD_WIDTH) + (WORD_WIDTH-1) downto (i*WORD_WIDTH)) <= fifo_dout(i*(WORD_WIDTH+1) + (WORD_WIDTH-1) downto i*(WORD_WIDTH+1));
+    end generate fifo_data_output_gen;
+    
+    -- Connect the output "spacer" bits to a vector
+    fifo_tlast_output_gen: for i in 0 to OUTPUT_WORDS-1 generate
+        fifo_tlast_out(i) <= fifo_dout(i*(WORD_WIDTH+1) + WORD_WIDTH);
+    end generate fifo_tlast_output_gen;
+
+    -- Connect the appropriate bit of the output spacer vector
+    -- to the output tlast signal
+    m_axis_tlast <= fifo_valid and fifo_tlast_out(fifo_tlast_out'high);
+
+    -- Create a latching error signal in case the tlast signal
+    -- appears anywhere except the highest bit of the output
+    -- This would correspond to a condition in which the 
+    -- stream length was a multiple of INPUT_WORDS but not of 
+    -- OUTPUT_WORDS, meaning that the stream could not be popped
+    -- from the FIFO in an integer number of cycles
+    fifo_misalignment_proc: process(m_axis_aclk) begin
+        if rising_edge(m_axis_aclk) then
+            if (rst_int = '1') then
+                fifo_misalignment <= '0';
+            elsif (fifo_valid = '1' and or_reduce(fifo_tlast_out(fifo_tlast_out'high-1 downto 0)) = '1') then
+                fifo_misalignment <= '1';
+            end if;
+        end if;
+    end process fifo_misalignment_proc;
+
+    -- Synchronize the misalignment latch into the signal's clock domain
+    misalignment_sync_inst : xpm_cdc_sync_rst
+        generic map (
+            DEST_SYNC_FF   => 4,
+            INIT           => 0,           
+            INIT_SYNC_FF   => 0,
+            SIM_ASSERT_CHK => 0
+        )
+        port map (
+            dest_rst => misalignment,
+            dest_clk => signal_in_clk,
+            src_rst  => fifo_misalignment
+        );
 
     fifo_gen_async: if ASYNCHRONOUS = true generate
         fifo_inst : xpm_fifo_async
@@ -99,33 +178,31 @@ begin
                 ECC_MODE            => "no_ecc",
                 FIFO_MEMORY_TYPE    => MEMORY_TYPE,
                 FIFO_READ_LATENCY   => 1,
-                FIFO_WRITE_DEPTH    => DEPTH,
+                FIFO_WRITE_DEPTH    => INPUT_DEPTH,
                 FULL_RESET_VALUE    => 0,
                 PROG_EMPTY_THRESH   => 10,
                 PROG_FULL_THRESH    => 10,
                 RD_DATA_COUNT_WIDTH => 1,
-                READ_DATA_WIDTH     => WIDTH + 1,
+                READ_DATA_WIDTH     => OUTPUT_WORDS*(WORD_WIDTH + 1),
                 READ_MODE           => "fwft",
                 SIM_ASSERT_CHK      => 0, 
                 USE_ADV_FEATURES    => "1001", -- Use only the data_valid and overflow signal
                 WAKEUP_TIME         => 0,
-                WRITE_DATA_WIDTH    => WIDTH + 1,
+                WRITE_DATA_WIDTH    => INPUT_WORDS*(WORD_WIDTH + 1),
                 WR_DATA_COUNT_WIDTH => 1
             )
             port map (
-                rst      => fifo_rst,
+                rst           => rst_int,
                 
-                wr_clk   => signal_clk,
-                din(WIDTH downto 1)  => din,
-                din(0)               => dma_tlast,
-                wr_en                => dma_tvalid,
-                overflow => fifo_overflow,
+                wr_clk        => signal_in_clk,
+                din           => fifo_din,
+                wr_en         => signal_in_tvalid,
+                overflow      => fifo_overflow,
     
-                rd_clk               => m_axis_aclk,
-                dout(WIDTH downto 1) => m_axis_tdata,
-                dout(0)              => m_axis_tlast,
-                data_valid           => m_axis_tvalid,
-                rd_en                => m_axis_tready,
+                rd_clk        => m_axis_aclk,
+                dout          => fifo_dout,
+                data_valid    => fifo_valid,
+                rd_en         => m_axis_tready,
                 
                 almost_empty  => open,
                 almost_full   => open,
@@ -155,32 +232,30 @@ begin
                 ECC_MODE            => "no_ecc",
                 FIFO_MEMORY_TYPE    => MEMORY_TYPE,
                 FIFO_READ_LATENCY   => 1,
-                FIFO_WRITE_DEPTH    => DEPTH,
+                FIFO_WRITE_DEPTH    => INPUT_DEPTH,
                 FULL_RESET_VALUE    => 0,
                 PROG_EMPTY_THRESH   => 10,
                 PROG_FULL_THRESH    => 10,
                 RD_DATA_COUNT_WIDTH => 1,
-                READ_DATA_WIDTH     => WIDTH + 1,
+                READ_DATA_WIDTH     => OUTPUT_WORDS*(WORD_WIDTH + 1),
                 READ_MODE           => "fwft",
                 SIM_ASSERT_CHK      => 0, 
                 USE_ADV_FEATURES    => "1001", -- Use only the data_valid and overflow signal
                 WAKEUP_TIME         => 0,
-                WRITE_DATA_WIDTH    => WIDTH + 1,
+                WRITE_DATA_WIDTH    => INPUT_WORDS*(WORD_WIDTH + 1),
                 WR_DATA_COUNT_WIDTH => 1
             )
             port map (
-                rst      => fifo_rst,
+                rst           => rst_int,
                 
-                wr_clk   => signal_clk,
-                din(WIDTH downto 1)  => din,
-                din(0)               => dma_tlast,
-                wr_en                => dma_tvalid,
-                overflow => fifo_overflow,
-    
-                dout(WIDTH downto 1) => m_axis_tdata,
-                dout(0)              => m_axis_tlast,
-                data_valid           => m_axis_tvalid,
-                rd_en                => m_axis_tready,
+                wr_clk        => signal_in_clk,
+                din           => fifo_din,
+                wr_en         => signal_in_tvalid,
+                overflow      => fifo_overflow,
+
+                dout          => fifo_dout,
+                data_valid    => fifo_valid,
+                rd_en         => m_axis_tready,
                 
                 almost_empty  => open,
                 almost_full   => open,

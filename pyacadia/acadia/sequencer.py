@@ -67,7 +67,7 @@ class SequencerDatapathPort:
         # def field_getattr(self, attr):
         #     return self(getattr(self.Major, attr))
             
-class Source(SequencerDatapathPort):
+class Source(SequencerDatapathPort, metaclass=Operable):
     class Major(Enum):
         REG = 0
         PC = 1
@@ -872,6 +872,9 @@ class Sequencer(Processor):
         # The if statements above along with the "getitem" Operation form
         # the bases cases for the recursion
         if isinstance(obj, Operation):
+            # First check to see if we've received the special "bus_read" operation
+            if obj._op == "bus_read":
+                return Source(Source.Major.BUS_DATA), [], []
             # Check that we have the right argument structure. invert will take
             # exactly one argument, otherwise we need exactly two. In both 
             # cases, there should be no keyword arguments
@@ -1155,10 +1158,14 @@ class Sequencer(Processor):
             instructions.append(STP(src1=condition._args[0], 
                                     dest1=Destination(Destination.Major.MASK)))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
-        elif isinstance(condition._args[0], self.Register):
+        elif isinstance(condition._args[0], self.Register) or isinstance(condition._args[0], self.DSP):
             instructions.append(STP(src1=condition._args[0].source(), 
                                     dest1=Destination(Destination.Major.MASK)))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
+        elif isinstance(condition._args[1], self.Register) or isinstance(condition._args[1], self.DSP):
+            instructions.append(STP(src1=condition._args[1].source(), 
+                                    dest1=Destination(Destination.Major.MASK)))
+            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
         else:
             instructions.append(STP(src1=condition._args[1], 
                                     dest1=Destination(Destination.Major.MASK)))

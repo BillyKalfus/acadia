@@ -36,8 +36,9 @@ entity acadia_complex_macc is
         offset_re              : in  std_logic_vector(31 downto 0);
         offset_im              : in  std_logic_vector(31 downto 0);   
         
-         -- Continuous signal input
-        signal_in              : in  std_logic_vector(31 downto 0);
+        -- Continuous signal input
+        signal_in_tdata        : in  std_logic_vector(31 downto 0);
+        signal_in_tvalid       : in  std_logic;
         
         -- Kernel memory read interface
         kernel_mem_dout        : in  std_logic_vector(31 downto 0);
@@ -58,7 +59,11 @@ entity acadia_complex_macc is
         -- Accumulated signal output
         accumulator_tdata      : out std_logic_vector(63 downto 0);
         accumulator_tvalid     : out std_logic;
-        accumulator_tlast      : out std_logic
+        accumulator_tlast      : out std_logic;
+
+        -- MSBs
+        accumulator_re_msb     : out std_logic;
+        accumulator_im_msb     : out std_logic
     );
     
     attribute USE_DSP : string;
@@ -72,7 +77,7 @@ architecture rtl of acadia_complex_macc is
     ATTRIBUTE X_INTERFACE_MODE      : STRING;
     ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
 
-    ATTRIBUTE X_INTERFACE_PARAMETER of clk: SIGNAL is "ASSOCIATED_BUSIF KERNEL_MEM_ADDR:SIGNAL_OUT:ACCUMULATOR";
+    ATTRIBUTE X_INTERFACE_PARAMETER of clk: SIGNAL is "ASSOCIATED_BUSIF KERNEL_MEM_ADDR:SIGNAL_OUT:SIGNAL_IN:ACCUMULATOR";
     
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_dout: SIGNAL is "xilinx.com:interface:bram:1.0 KERNEL_MEM DOUT";
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr: SIGNAL is "xilinx.com:interface:bram:1.0 KERNEL_MEM ADDR";
@@ -83,8 +88,11 @@ architecture rtl of acadia_complex_macc is
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 KERNEL_MEM_ADDR TDATA";
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 KERNEL_MEM_ADDR TLAST";
     ATTRIBUTE X_INTERFACE_INFO of kernel_mem_addr_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 KERNEL_MEM_ADDR TVALID";
-    ATTRIBUTE X_INTERFACE_PARAMETER of kernel_mem_addr_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 4";
+    ATTRIBUTE X_INTERFACE_PARAMETER of kernel_mem_addr_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 2";
 
+    ATTRIBUTE X_INTERFACE_INFO of signal_in_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_IN TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of signal_in_tvalid : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_IN TVALID";
+    ATTRIBUTE X_INTERFACE_PARAMETER of signal_in_tdata : SIGNAL is "HAS_TLAST 0,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 4";
 
     ATTRIBUTE X_INTERFACE_INFO of signal_out_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_OUT TDATA";
     ATTRIBUTE X_INTERFACE_INFO of signal_out_tlast  : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_OUT TLAST";
@@ -138,8 +146,8 @@ begin
             input_last  <= kernel_mem_addr_tlast;
             
             if(kernel_mem_addr_tvalid = '1') then
-                a_re <= signed(signal_in(15 downto 0));
-                a_im <= signed(signal_in(31 downto 16));
+                a_re <= signed(signal_in_tdata(15 downto 0));
+                a_im <= signed(signal_in_tdata(31 downto 16));
                 b_re <= signed(kernel_mem_dout(15 downto 0));
                 b_im <= signed(kernel_mem_dout(31 downto 16));
             end if;
@@ -149,7 +157,7 @@ begin
     -- Simultaneously, duplicate the signal input
     signal_out_proc: process(clk) begin
         if rising_edge(clk) then
-            signal_out_tdata  <= signal_in;
+            signal_out_tdata  <= signal_in_tdata;
             signal_out_tvalid <= kernel_mem_addr_tvalid;
             signal_out_tlast  <= kernel_mem_addr_tlast;
         end if;
@@ -196,5 +204,6 @@ begin
             
     -- Connect the output data accordingly
     accumulator_tdata  <= std_logic_vector(accumulator_im(47 downto 16)) & std_logic_vector(accumulator_re(47 downto 16));
-    
+    accumulator_re_msb <= accumulator_re(accumulator_re'high);
+    accumulator_im_msb <= accumulator_im(accumulator_im'high);
 end rtl;

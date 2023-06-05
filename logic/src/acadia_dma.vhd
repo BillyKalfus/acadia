@@ -27,8 +27,11 @@ use XPM.vcomponents.all;
 
 entity acadia_dma is
     generic (
+        DATA_WIDTH                : natural := 32;
+        ADDRESS_WIDTH             : natural := 16;
+        ADDRESS_COUNTER_WIDTH     : natural := 32;
         DESCRIPTOR_MEM_ADDR_WIDTH : natural := 16;
-        DESCRIPTOR_FIFO_DEPTH : natural := 16
+        DESCRIPTOR_FIFO_DEPTH     : natural := 16
     );
     port (
         clk                 : in  std_logic;
@@ -41,13 +44,19 @@ entity acadia_dma is
         descriptor_mem_addr : out std_logic_vector(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0);
         descriptor_mem_clk  : out std_logic;
         
-        -- AXI-Stream interface
-        addr_tdata          : out std_logic_vector(15 downto 0);
-        addr_tlast          : out std_logic;
-        addr_tvalid         : out std_logic;
-                
+        -- AXI-Stream data interface
+        din                 : in  std_logic_vector(DATA_WIDTH-1 downto 0);
+        data_tdata          : out std_logic_vector(DATA_WIDTH-1 downto 0);
+        data_tvalid         : out std_logic;
+        data_tlast          : out std_logic;
+
+        -- AXI-Stream address interface
+        address_tdata       : out std_logic_vector(ADDRESS_WIDTH-1 downto 0);
+        address_tvalid      : out std_logic;
+        address_tlast       : out std_logic;
+        
         -- Memory control interface
-        mem_control_addr    : out std_logic_vector(15 downto 0);
+        mem_control_addr    : out std_logic_vector(ADDRESS_WIDTH-1 downto 0);
         mem_control_rst     : out std_logic;
         mem_control_en      : out std_logic;
         mem_control_clk     : out std_logic;
@@ -74,18 +83,24 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
     
     ATTRIBUTE X_INTERFACE_INFO of clk : SIGNAL is "xilinx.com:signal:clock:1.0 clk clk";
-    ATTRIBUTE X_INTERFACE_PARAMETER of clk : SIGNAL is "ASSOCIATED_BUSIF ADDR";
+    ATTRIBUTE X_INTERFACE_PARAMETER of clk : SIGNAL is "ASSOCIATED_BUSIF ADDRESS:DATA";
     
     ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_dout : SIGNAL is "xilinx.com:interface:bram:1.0 DESCRIPTOR_MEM DOUT";
     ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_addr : SIGNAL is "xilinx.com:interface:bram:1.0 DESCRIPTOR_MEM ADDR";
     ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_clk  : SIGNAL is "xilinx.com:interface:bram:1.0 DESCRIPTOR_MEM CLK";
     ATTRIBUTE X_INTERFACE_MODE of descriptor_mem_dout : SIGNAL is "Master";
     
-    ATTRIBUTE X_INTERFACE_INFO of addr_tdata          : SIGNAL is "xilinx.com:interface:axis:1.0 ADDR TDATA";
-    ATTRIBUTE X_INTERFACE_INFO of addr_tlast          : SIGNAL is "xilinx.com:interface:axis:1.0 ADDR TLAST";
-    ATTRIBUTE X_INTERFACE_INFO of addr_tvalid         : SIGNAL is "xilinx.com:interface:axis:1.0 ADDR TVALID";
-    ATTRIBUTE X_INTERFACE_MODE of addr_tdata          : SIGNAL is "Master";
-    ATTRIBUTE X_INTERFACE_PARAMETER of addr_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 2";
+    ATTRIBUTE X_INTERFACE_INFO of address_tdata       : SIGNAL is "xilinx.com:interface:axis:1.0 ADDRESS TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of address_tlast       : SIGNAL is "xilinx.com:interface:axis:1.0 ADDRESS TLAST";
+    ATTRIBUTE X_INTERFACE_INFO of address_tvalid      : SIGNAL is "xilinx.com:interface:axis:1.0 ADDRESS TVALID";
+    ATTRIBUTE X_INTERFACE_MODE of address_tdata       : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of address_tdata  : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(ADDRESS_WIDTH/8);
+
+    ATTRIBUTE X_INTERFACE_INFO of data_tdata          : SIGNAL is "xilinx.com:interface:axis:1.0 DATA TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of data_tlast          : SIGNAL is "xilinx.com:interface:axis:1.0 DATA TLAST";
+    ATTRIBUTE X_INTERFACE_INFO of data_tvalid         : SIGNAL is "xilinx.com:interface:axis:1.0 DATA TVALID";
+    ATTRIBUTE X_INTERFACE_MODE of data_tdata          : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of data_tdata     : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(DATA_WIDTH/8);
     
     ATTRIBUTE X_INTERFACE_INFO of mem_control_addr    : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL ADDR";
     ATTRIBUTE X_INTERFACE_INFO of mem_control_rst     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL RST";
@@ -104,19 +119,16 @@ architecture rtl of acadia_dma is
     signal fifo_rd_en_int   : std_logic;
                                                 
     -- Descriptor fields
-    signal descriptor_lm1   : unsigned(31 downto 0);
-    signal descriptor_addr  : unsigned(15 downto 0);
-    signal descriptor_dec   : unsigned(7 downto 0);
+    signal descriptor_lm1   : unsigned(ADDRESS_COUNTER_WIDTH-1 downto 0);
+    signal descriptor_addr  : unsigned(ADDRESS_WIDTH-1 downto 0);
     signal descriptor_blank : std_logic;
     signal descriptor_fixed : std_logic;
     
     -- Progress counters
-    signal decimation_count : unsigned(7 downto 0);
-    signal descriptor_point : unsigned(15 downto 0);
+    signal descriptor_point : unsigned(ADDRESS_COUNTER_WIDTH-1 downto 0);
     
     -- Combinational progress flags
     signal descriptor_done  : std_logic;
-    signal decimation_done  : std_logic;
     
 begin    
     
@@ -144,7 +156,6 @@ begin
 
     -- Establish some progress flags
     -- These should ideally be mapped into the DSP slice pattern detector
-    decimation_done <= '1' when decimation_count = descriptor_dec else '0';
     descriptor_done <= '1' when descriptor_point = descriptor_lm1 else '0';
                                 
     running_int_proc: process(clk) begin
@@ -170,11 +181,10 @@ begin
     descriptor_field_load_proc: process(clk) begin
         if rising_edge(clk) then
             if(trigger = '1' or descriptor_done = '1') then
-                descriptor_lm1   <= unsigned(descriptor_mem_dout(31 downto 0));
-                descriptor_addr  <= unsigned(descriptor_mem_dout(47 downto 32));
-                descriptor_dec   <= unsigned(descriptor_mem_dout(55 downto 48));
-                descriptor_blank <= descriptor_mem_dout(56);
-                descriptor_fixed <= descriptor_mem_dout(57);
+                descriptor_lm1   <= unsigned(descriptor_mem_dout(ADDRESS_COUNTER_WIDTH-1 downto 0));
+                descriptor_addr  <= unsigned(descriptor_mem_dout(ADDRESS_COUNTER_WIDTH + ADDRESS_WIDTH-1 downto ADDRESS_COUNTER_WIDTH));
+                descriptor_blank <= descriptor_mem_dout(descriptor_mem_dout'high-1);
+                descriptor_fixed <= descriptor_mem_dout(descriptor_mem_dout'high);
             end if;
         end if;
     end process descriptor_field_load_proc;
@@ -189,32 +199,21 @@ begin
             end if;
         end if;
     end process descriptor_point_proc;
-    
-    -- Count cycles for decimation
-    decimation_count_proc: process(clk) begin
-        if rising_edge(clk) then
-            if(trigger = '1' or decimation_done = '1') then
-                decimation_count <= (others => '0');
-            else
-                decimation_count <= decimation_count + 1;
-            end if;
-        end if;
-    end process decimation_count_proc;
         
     -- Drive the output interfaces
-    mem_control_clk  <= clk;
+    mem_control_clk <= clk;
       
     output_proc: process(clk) begin
         if rising_edge(clk) then
             -- Stream the address out of the AXI-stream port
             -- Data present on the stream is considered valid when its NOT during decimation
-            addr_tvalid <= running_int and decimation_done;
-            addr_tlast  <= descriptor_done;
+            address_tvalid <= running_int;
+            address_tlast  <= descriptor_done and running_int;
             
             if(descriptor_fixed = '1') then
-                addr_tdata <= std_logic_vector(descriptor_addr);
+                address_tdata <= std_logic_vector(descriptor_addr);
             else
-                addr_tdata <= std_logic_vector(descriptor_point + descriptor_addr);
+                address_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
             end if;
             
             -- Control the memory master port
@@ -224,9 +223,13 @@ begin
             if(descriptor_fixed = '1') then
                 mem_control_addr <= std_logic_vector(descriptor_addr);
             else
-                mem_control_addr <= std_logic_vector(descriptor_point + descriptor_addr);
+                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
             end if;
-            
+
+            -- Data master stream
+            data_tdata  <= din;
+            data_tvalid <= running_int;
+            data_tlast  <= descriptor_done and running_int;
         end if;
     end process output_proc;
     

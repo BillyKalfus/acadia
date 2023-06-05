@@ -42,11 +42,13 @@ class RFClk:
             raise ValueError(f"Call to {name} failed.")
         
     @classmethod
-    def init(cls, gpio_address):
+    def init(cls, gpio):
         """
         Initialize the xrfclk driver.
+        :param gpio: The GPIO ID of the SPI mux on the CLK104
+        :type gpio: int
         """
-        RFClk.call("Init", get_gpio_base(gpio_address))
+        RFClk.call("Init", gpio)
         
     class RFClkChip(ABC):
         """

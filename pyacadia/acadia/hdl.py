@@ -486,35 +486,46 @@ class BusDataMoverController(BusDevice, HDLModule):
         
     def __init__(self, name, datamovers, addr_bits, bus_data_bits=32, bus_addr_bits=32):
         """
-        A bus interface for access to the command and status ports of an array of AXI DataMovers.
-        A small number of registers are also provided for interacting with a given DataMover, where the base address of the 
-        registers for that DataMover is the base address of this device, plus 4 times the DataMover number.
+        A bus interface for access to the command and status ports of an array
+        of AXI DataMovers. A small number of registers are also provided for 
+        interacting with a given DataMover, where the base address of the 
+        registers for that DataMover is the base address of this device, plus
+        4 times the DataMover number.
         The registers are:
             0: CMD_ADDR/STS
-                Writing to this register issues a command to the DataMover command FIFO whose 
-                address field is populated with the data written to this register. 
-                The values of the other fields are derived from prior writes to other registers (see below).
-                Reading this register returns a status word from the status FIFO and pops it.
+                Writing to this register issues a command to the DataMover 
+                command FIFO whose address field is populated with the data
+                written to this register. The values of the other fields are 
+                derived from prior writes to other registers (see below).
+                Reading this register returns the most recently retrieved word 
+                from the status FIFO.
             1: CMD_BTT/STS_VLD
-                This register stores the number of bytes for the DataMover to transfer when its next command is issued.
-                Reading this register returns a value with one bit per DataMover. 
-                A bit is set when the corresponding DataMover when sts_tvalid signal is high.
+                This register stores the number of bytes for the DataMover to
+                transfer when its next command is issued. Reading this register 
+                returns a value with one bit per DataMover; a bit is set when 
+                the corresponding DataMover has presented a status word to the 
+                controller.
             2: CMD_MISC/CMD_ACK
-                This register stores additional miscellaneous bits needed for a DataMover command:
+                This register stores additional miscellaneous bits needed for a
+                DataMover command:
                     0     : TYPE
                     1     : EOF
                     5-2   : TAG
                     9-6   : xCACHE
                     13-10 : xUSER
                     ADDR_BITS+14 - 14 : ADDR high bits
-                Reading this register returns a value with one bit per DataMover. This bit is set once the DataMover 
-                command interface sets TREADY after this module sets TVALID, indicating that it accepted the command 
-                driven by the module (this includes when TREADY is already set when the command is issued).
-            3: ACK_RST/DM_ERR
-                Writing a value to this register with a given bit set clears CMD_ACK signals for the DataMover
-                corresponding to that bit position. Multiple bits may be set to clear multiple registers at once.
-                The value returned by this register contains one bit per DataMover, where each bit is directly 
-                connected to the error signal for the DataMover.
+                Reading this register returns a value with one bit per DataMover.
+                This bit is set once the DataMover command interface sets TREADY
+                after this module sets TVALID, indicating that it accepted the 
+                command driven by the module (this includes when TREADY is already
+                set when the command is issued).
+            3: RST/DM_ERR
+                Writing a value to this register with a given bit set clears 
+                CMD_ACK and STS_VLD signals for the DataMover corresponding to
+                that bit position. Multiple bits may be set to clear multiple 
+                registers at once. The value returned by this register contains 
+                one bit per DataMover, where each bit is directly connected to 
+                the error signal for the DataMover.
                 
         :param datamovers: A list of strings containing the names of the DataMovers
         """
@@ -613,26 +624,28 @@ class BusDataMoverController(BusDevice, HDLModule):
             
         hdl += f'    signal dm_err     : std_logic_vector(31 downto 0);\n'
         hdl += f'    signal dm_sts_vld : std_logic_vector(31 downto 0);\n'
-        hdl += f'    signal dm_cmd_ack : std_logic_vector(31 downto 0);\n\n'
-        hdl += f'    signal dm_ack_rst : std_logic_vector(31 downto 0);\n\n'
+        hdl += f'    signal dm_cmd_ack : std_logic_vector(31 downto 0);\n'
+        hdl += f'    signal dm_rst     : std_logic_vector(31 downto 0);\n\n'
             
         for datamover in self._datamovers:
             hdl += f'    signal {datamover}_cmd_waiting : std_logic;\n\n'
             hdl += f'    signal {datamover}_cmd_btt     : std_logic_vector(22 downto 0);\n'
-            hdl += f'    signal {datamover}_cmd_misc    : std_logic_vector({self._addr_bits-32+14-1} downto 0);\n\n'
+            hdl += f'    signal {datamover}_cmd_misc    : std_logic_vector({self._addr_bits-32+14-1} downto 0);\n'
+            hdl += f'    signal {datamover}_sts         : std_logic_vector(31 downto 0);\n\n'
         
         hdl += f'begin\n\n'
-        
-        hdl += f'    wr_proc: process(master_bus_clk) begin\n'
+
+        hdl += f'    reg_wr_proc: process(master_bus_clk) begin\n'
         hdl += f'        if rising_edge(master_bus_clk) then\n'
         hdl += f'            if (nrst = \'0\') then\n'
-        hdl += f'                dm_ack_rst <= (others => \'0\');\n'
+        hdl += f'                dm_rst <= (others => \'0\');\n'
         
         for i,datamover in enumerate(self._datamovers):    
             hdl += f'                {datamover}_cmd_tdata   <= (others => \'0\');\n'
             hdl += f'                {datamover}_cmd_waiting <= \'0\';\n'
             hdl += f'                {datamover}_cmd_btt     <= (others => \'0\');\n'
             hdl += f'                {datamover}_cmd_misc    <= (others => \'0\');\n'
+            
         
         hdl += f'            elsif (master_bus_en = \'1\' and master_bus_wr = \'1\') then\n'
         hdl += f'                case master_bus_addr({bus_addr_bits-1} downto 0) is\n'
@@ -641,17 +654,17 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'                    when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                        {datamover}_cmd_tdata  <= {datamover}_cmd_misc(13 downto 6) & "0000" & {datamover}_cmd_misc(5 downto 2) & {datamover}_cmd_misc({self._addr_bits-32+14-1} downto 14) & master_bus_mosi & "0" & {datamover}_cmd_misc(1) & "000000" & {datamover}_cmd_misc(0) & {datamover}_cmd_btt;\n'
             hdl += f'                        {datamover}_cmd_waiting <= \'1\';\n'
-            hdl += f'                        dm_ack_rst <= (others => \'0\');\n'
+            hdl += f'                        dm_rst <= (others => \'0\');\n'
             hdl += f'                    when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                        {datamover}_cmd_btt  <=  master_bus_mosi(22 downto 0);\n'
-            hdl += f'                        dm_ack_rst <= (others => \'0\');\n'
+            hdl += f'                        dm_rst <= (others => \'0\');\n'
             hdl += f'                    when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                        {datamover}_cmd_misc <=  master_bus_mosi({self._addr_bits-32+14-1} downto 0);\n'
-            hdl += f'                        dm_ack_rst <= (others => \'0\');\n'
+            hdl += f'                        dm_rst <= (others => \'0\');\n'
             hdl += f'                    when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        dm_ack_rst <= master_bus_mosi;\n'
+            hdl += f'                        dm_rst <= master_bus_mosi;\n'
         hdl += f'                    when others =>\n'
-        hdl += f'                        dm_ack_rst <= (others => \'0\');\n'
+        hdl += f'                        dm_rst <= (others => \'0\');\n'
         hdl += f'                end case;\n'
         hdl += f'            else\n'
         hdl += f'                -- Clear the waiting signals if the cmd FIFO is ready\n'
@@ -661,11 +674,11 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'                    {datamover}_cmd_waiting <= \'0\';\n'
             hdl += f'                end if;\n\n'
         
-        hdl += f'                -- Also clear dm_ack_rst, since it should only be high for one cycle\n'
-        hdl += f'                dm_ack_rst <= (others => \'0\');\n'
+        hdl += f'                -- Also clear dm_rst, since it should only be high for one cycle\n'
+        hdl += f'                dm_rst <= (others => \'0\');\n'
         hdl += f'            end if;\n'
         hdl += f'        end if;\n'
-        hdl += f'    end process wr_proc;\n\n'
+        hdl += f'    end process reg_wr_proc;\n\n'
         
         hdl += f'    -- Connect the cmd_tvalid signals to the waiting signal\n'
         for i,datamover in enumerate(self._datamovers):  
@@ -679,9 +692,9 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'            else\n'
         
         for i,datamover in enumerate(self._datamovers):  
-            hdl += f'                if({datamover}_cmd_waiting = \'1\' and {datamover}_cmd_tready = \'1\') then\n'
+            hdl += f'                if ({datamover}_cmd_waiting = \'1\' and {datamover}_cmd_tready = \'1\') then\n'
             hdl += f'                    dm_cmd_ack({i}) <= \'1\';\n'
-            hdl += f'                elsif(dm_ack_rst({i}) = \'1\') then\n'
+            hdl += f'                elsif (dm_rst({i}) = \'1\') then\n'
             hdl += f'                    dm_cmd_ack({i}) <= \'0\';\n'
             hdl += f'                end if;\n\n'
         
@@ -689,11 +702,28 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'        end if;\n'
         hdl += f'    end process dm_cmd_ack_proc;\n\n'
         
+        hdl += f'    dm_sts_proc: process(master_bus_clk) begin\n'
+        hdl += f'        if rising_edge(master_bus_clk) then\n'
+        hdl += f'            if (nrst = \'0\') then\n'
+        hdl += f'                dm_sts_vld    <= (others => \'0\');\n'
+        for i,datamover in enumerate(self._datamovers):  
+            hdl += f'                {datamover}_sts        <= (others => \'0\');\n'
+            hdl += f'                {datamover}_sts_tready <= \'0\';\n'
+        hdl += f'            else\n'
         
-        hdl += f'    -- Combine the DataMover status valid signals into one vector\n'
-        for i,datamover in enumerate(self._datamovers):
-            hdl += f'    dm_sts_vld({i}) <= {datamover}_sts_tvalid;\n'
-        hdl += f'    dm_sts_vld(31 downto {len(self._datamovers)}) <= (others => \'0\');\n\n'
+        for i,datamover in enumerate(self._datamovers):  
+            hdl += f'                {datamover}_sts_tready <= \'1\';\n'
+            hdl += f'                if ({datamover}_sts_tvalid = \'1\') then\n'
+            hdl += f'                    {datamover}_sts <= {datamover}_sts_tdata;\n'
+            hdl += f'                    dm_sts_vld({i}) <= \'1\';\n'
+            hdl += f'                elsif (dm_rst({i}) = \'1\') then\n'
+            hdl += f'                    {datamover}_sts <= (others => \'0\');\n'
+            hdl += f'                    dm_sts_vld({i}) <= \'0\';\n'
+            hdl += f'                end if;\n\n'
+        
+        hdl += f'            end if;\n'
+        hdl += f'        end if;\n'
+        hdl += f'    end process dm_sts_proc;\n\n'
         
         hdl += f'    -- Combine the DataMover error signals into one vector\n'
         for i,datamover in enumerate(self._datamovers):
@@ -706,24 +736,16 @@ class BusDataMoverController(BusDevice, HDLModule):
         
         for i,datamover in enumerate(self._datamovers):    
             hdl += f'                when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= {datamover}_sts_tdata;\n'
-            hdl += f'                    {datamover}_sts_tready <= master_bus_en;\n'
+            hdl += f'                    master_bus_miso <= {datamover}_sts;\n'
             hdl += f'                when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= dm_sts_vld;\n'
-            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
             hdl += f'                when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= dm_cmd_ack;\n'
-            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
             hdl += f'                when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= dm_err;\n'
-            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
             
         hdl += f'                when others =>\n'
         hdl += f'                    master_bus_miso <= (others => \'0\');\n'
-        
-        for i,datamover in enumerate(self._datamovers): 
-            hdl += f'                    {datamover}_sts_tready <= \'0\';\n'
-            
         hdl += f'            end case;\n'
         hdl += f'        end if;\n'
         hdl += f'    end process rd_proc;\n\n'
@@ -738,7 +760,23 @@ class AXIMemoryArray(HDLModule):
     Creates a wrapper for an AXI BRAM controller connected to a memory.
     """
     
-    def __init__(self, module_name, size_bits, width, axi_frequency, elements=1, primitive="auto", controller_width=None, controller_port_input_pipeline=1, controller_port_output_pipeline=1, user_port_input_pipeline=1, user_port_output_pipeline=1, axi4_lite=False, read_only=False, use_rst=True, synth_jobs=16):
+    def __init__(self, 
+                 module_name, 
+                 size_bits, 
+                 width, 
+                 elements=1, 
+                 primitive="auto", 
+                 synchronous=True, 
+                 controller_width=None, 
+                 controller_port_input_pipeline=1, 
+                 controller_port_output_pipeline=1, 
+                 user_port_input_pipeline=1, 
+                 user_port_output_pipeline=1, 
+                 axi4_lite=False, 
+                 axi_id_width=0,
+                 read_only=False, 
+                 use_rst=True, 
+                 synth_jobs=16):
         """
         :param module_name: The name of the module
         :type module_name: str
@@ -746,14 +784,14 @@ class AXIMemoryArray(HDLModule):
         :type width: int
         :param size_bits: The size of a single memory element in bits
         :type depth: int
-        :param axi_frequency: Frequency of the AXI bus in Hz, needed for the
-        `FREQ_HZ` parameter of the AXI interface.
-        :type axi_frequency: int
         :param elements: Number of memory elements to create
         :type elements: int, optional
         :param primitive: The memory primitive to use. One of "auto", "block", 
         "distributed", "mixed", "ultra"
         :type primitive: str, optional
+        :param synchronous: If `True`, the memory will be a synchronous 
+        single-clock memory driven by the AXI clock. Otherwise, a separate
+        clock signal will be created on the memory interface.
         :param controller_width: Width of the port connected to the controller
         :type controller_width: int
         :param controller_port_input_pipeline: Number of pipeline stages to
@@ -773,6 +811,8 @@ class AXIMemoryArray(HDLModule):
         :param axi4_lite: If `True`, the BRAM controller will be implemented
         with an AXI4-Lite interface instead of full AXI4.
         :type axi4_lite: bool, optional
+        :param axi_id_width: The width of the ID port on the AXI interface
+        :type axi_id_width: int
         :param read_only: If `True`, the write enable of the user port will be 
         tied low.
         :type read_only: bool, optional
@@ -789,7 +829,7 @@ class AXIMemoryArray(HDLModule):
         """
         self._size_bits = size_bits
         self._width = width
-        self._axi_frequency = axi_frequency
+        self._synchronous = synchronous
         
         if elements <= 0:
             raise ValueError("Number of memory elements must be a positive number")
@@ -806,6 +846,7 @@ class AXIMemoryArray(HDLModule):
         self._user_port_output_pipeline = user_port_output_pipeline
         
         self._axi4_lite = axi4_lite
+        self._axi_id_width = axi_id_width
         self._read_only = read_only
         self._use_rst = use_rst
         self._synth_jobs = synth_jobs
@@ -833,6 +874,8 @@ class AXIMemoryArray(HDLModule):
         hdl += f'        s_axi_awvalid : in  std_logic;\n'
         hdl += f'        s_axi_awready : out std_logic;\n'
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'        s_axi_awid    : in  std_logic_vector({self._axi_id_width-1} downto 0);\n'
             hdl += f'        s_axi_awlen   : in  std_logic_vector(7 downto 0);\n'
             hdl += f'        s_axi_awsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'        s_axi_awburst : in  std_logic_vector(1 downto 0);\n'
@@ -850,11 +893,15 @@ class AXIMemoryArray(HDLModule):
         hdl += f'        s_axi_bresp   : out std_logic_vector(1 downto 0);\n'
         hdl += f'        s_axi_bvalid  : out std_logic;\n'
         hdl += f'        s_axi_bready  : in  std_logic;\n'
+        if (not self._axi4_lite) and self._axi_id_width > 0:
+            hdl += f'        s_axi_bid     : out std_logic_vector({self._axi_id_width-1} downto 0);\n'
         
         hdl += f'        s_axi_araddr  : in  std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'        s_axi_arvalid : in  std_logic;\n'
         hdl += f'        s_axi_arready : out std_logic;\n'
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'        s_axi_arid    : in  std_logic_vector({self._axi_id_width-1} downto 0);\n'
             hdl += f'        s_axi_arlen   : in  std_logic_vector(7 downto 0);\n'
             hdl += f'        s_axi_arsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'        s_axi_arburst : in  std_logic_vector(1 downto 0);\n'
@@ -868,14 +915,17 @@ class AXIMemoryArray(HDLModule):
         hdl += f'        s_axi_rready  : in  std_logic;\n'
         if not self._axi4_lite:
             hdl += f'        s_axi_rlast   : out std_logic;\n'
-        
+            if self._axi_id_width > 0:
+                hdl += f'        s_axi_rid     : out std_logic_vector({self._axi_id_width-1} downto 0);\n'
+            
         for i in range(self._elements):
             hdl += f'\n'
             if not self._read_only:
                 hdl += f'        mem{i}_din     : in  std_logic_vector({self._width-1} downto 0);\n'
             hdl += f'        mem{i}_dout    : out std_logic_vector({self._width-1} downto 0);\n'
             hdl += f'        mem{i}_addr    : in  std_logic_vector({log2_mem_depth-1} downto 0);\n'
-            # hdl += f'        mem{i}_clk     : in  std_logic;\n'
+            if not self._synchronous:
+                hdl += f'        mem{i}_clk     : in  std_logic;\n'
             if not self._read_only:
                 hdl += f'        mem{i}_we      : in  std_logic;\n'
             if self._use_rst:
@@ -908,6 +958,9 @@ class AXIMemoryArray(HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rready  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RREADY";\n'
         
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_bid     : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI BID";\n'
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awid    : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWID";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awlen   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWLEN";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awsize  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWSIZE";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awburst : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWBURST";\n'
@@ -916,6 +969,9 @@ class AXIMemoryArray(HDLModule):
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awcache : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWCACHE";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_wlast   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI WLAST";\n'
             
+            if self._axi_id_width > 0:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_rid     : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI RID";\n'
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arid    : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARID";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arlen   : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARLEN";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arsize  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARSIZE";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_arburst : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI ARBURST";\n'
@@ -939,8 +995,7 @@ class AXIMemoryArray(HDLModule):
                         f'ARUSER_WIDTH 0,'
                         f'AWUSER_WIDTH 0,'
                         f'ADDR_WIDTH {controller_address_bits},'
-                        f'ID_WIDTH 0,'
-                        # f'FREQ_HZ {int(self._axi_frequency)},'
+                        f'ID_WIDTH {self._axi_id_width},'
                         f'PROTOCOL {"AXI4LITE" if self._axi4_lite else "AXI4"},'
                         f'DATA_WIDTH {self._controller_width},'
                         f'HAS_BURST {1 if self._axi4_lite else 0},'
@@ -959,7 +1014,8 @@ class AXIMemoryArray(HDLModule):
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_din  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} DIN";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_dout : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} DOUT";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} ADDR";\n'
-            # hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} CLK";\n'
+            if not self._synchronous:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} CLK";\n'
             if not self._read_only:
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_we   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} WE";\n'
             if self._use_rst:
@@ -975,6 +1031,8 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            s_axi_awvalid : in  std_logic;\n'
         hdl += f'            s_axi_awready : out std_logic;\n'
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'            s_axi_awid    : in  std_logic_vector({self._axi_id_width-1} downto 0);\n'
             hdl += f'            s_axi_awlen   : in  std_logic_vector(7 downto 0);\n'
             hdl += f'            s_axi_awsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'            s_axi_awburst : in  std_logic_vector(1 downto 0);\n'
@@ -993,11 +1051,16 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            s_axi_bresp   : out std_logic_vector(1 downto 0);\n'
         hdl += f'            s_axi_bvalid  : out std_logic;\n'
         hdl += f'            s_axi_bready  : in  std_logic;\n'
+        if (not self._axi4_lite) and self._axi_id_width > 0:
+            hdl += f'            s_axi_bid     : out std_logic_vector({self._axi_id_width-1} downto 0);\n'
+        
         
         hdl += f'            s_axi_araddr  : in  std_logic_vector({controller_address_bits-1} downto 0);\n'
         hdl += f'            s_axi_arvalid : in  std_logic;\n'
         hdl += f'            s_axi_arready : out std_logic;\n'
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'            s_axi_arid    : in  std_logic_vector({self._axi_id_width-1} downto 0);\n'
             hdl += f'            s_axi_arlen   : in  std_logic_vector(7 downto 0);\n'
             hdl += f'            s_axi_arsize  : in  std_logic_vector(2 downto 0);\n'
             hdl += f'            s_axi_arburst : in  std_logic_vector(1 downto 0);\n'
@@ -1011,6 +1074,9 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            s_axi_rready  : in  std_logic;\n'
         if not self._axi4_lite:
             hdl += f'            s_axi_rlast   : out std_logic;\n'
+            if self._axi_id_width > 0:
+                hdl += f'            s_axi_rid     : out std_logic_vector({self._axi_id_width-1} downto 0);\n'
+            
             
         hdl += f'\n'
         
@@ -1093,6 +1159,8 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            s_axi_awvalid => s_axi_awvalid,\n'
         hdl += f'            s_axi_awready => s_axi_awready,\n'
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'            s_axi_awid    => s_axi_awid,\n'
             hdl += f'            s_axi_awlen   => s_axi_awlen,\n'
             hdl += f'            s_axi_awsize  => s_axi_awsize,\n'
             hdl += f'            s_axi_awburst => s_axi_awburst,\n'
@@ -1110,11 +1178,15 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            s_axi_bresp   => s_axi_bresp,\n'
         hdl += f'            s_axi_bvalid  => s_axi_bvalid,\n'
         hdl += f'            s_axi_bready  => s_axi_bready,\n'
+        if (not self._axi4_lite) and self._axi_id_width > 0:
+            hdl += f'            s_axi_bid     => s_axi_bid,\n'
         
         hdl += f'            s_axi_araddr  => s_axi_araddr,\n'
         hdl += f'            s_axi_arvalid => s_axi_arvalid,\n'
         hdl += f'            s_axi_arready => s_axi_arready,\n'
         if not self._axi4_lite:
+            if self._axi_id_width > 0:
+                hdl += f'            s_axi_arid    => s_axi_arid,\n'
             hdl += f'            s_axi_arlen   => s_axi_arlen,\n'
             hdl += f'            s_axi_arsize  => s_axi_arsize,\n'
             hdl += f'            s_axi_arburst => s_axi_arburst,\n'
@@ -1128,6 +1200,8 @@ class AXIMemoryArray(HDLModule):
         hdl += f'            s_axi_rready  => s_axi_rready,\n'
         if not self._axi4_lite:
             hdl += f'            s_axi_rlast   => s_axi_rlast,\n'
+            if self._axi_id_width > 0:
+                hdl += f'            s_axi_rid     => s_axi_rid,\n'
             
         hdl += f'\n'
         
@@ -1186,23 +1260,22 @@ class AXIMemoryArray(HDLModule):
                 # hdl += f'        controller_mem{element}_rddata{"_" + "d"*self._controller_port_output_pipeline if self._controller_port_output_pipeline != 0 else ""} when controller_addr{"_" + "d"*input_to_output_delay if input_to_output_delay != 0 else ""}({controller_address_bits-1} downto {controller_address_bits-log2_elements}) = "{f"{element:b}".zfill(log2_elements)}" else\n'
                 hdl += f'        controller_mem{element}_rddata when controller_addr{"_" + "d"*controller_input_to_output_delay if controller_input_to_output_delay != 0 else ""}({controller_address_bits-1} downto {controller_address_bits-log2_elements}) = "{f"{element:b}".zfill(log2_elements)}" else\n'
             hdl += f'    (others => \'0\');\n\n'
+
+        
             
         if self._user_port_input_pipeline > 0 or self._user_port_output_pipeline > 0 or self._use_rst:
-            # Create the user interface
-            hdl += f'    user_pipeline_proc: process(s_axi_aclk) begin\n'
-            hdl += f'        if rising_edge(s_axi_aclk) then\n'
-
             for element in range(self._elements):
+                # Create the user interface
+                user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
+                hdl += f'    mem{element}_user_pipeline_proc: process({user_clk}) begin\n'
+                hdl += f'        if rising_edge({user_clk}) then\n'
+
                 for i in range(self._user_port_input_pipeline):
                     delay = "_" + "d"*i if i != 0 else ""
                     hdl += f'            mem{element}_addr_{"d"*(i+1)}     <= mem{element}_addr{delay};\n' 
                     if not self._read_only:
                         hdl += f'            mem{element}_din_{"d"*(i+1)}      <= mem{element}_wrdata{delay};\n' 
                         hdl += f'            mem{element}_we_{"d"*(i+1)}       <= mem{element}_we{delay};\n' 
-
-                # for i in range(self._user_port_output_pipeline-1):
-                #     delay = "_" + "d"*i if i != 0 else ""
-                #     hdl += f'            mem{element}_dout_int_{"d"*(i+1)} <= mem{element}_dout_int{delay};\n'
 
                 if self._use_rst:
                     hdl += f'            if(mem{element}_rst_{"d"*(user_input_to_output_delay+1)} = \'1\') then\n'   
@@ -1219,19 +1292,17 @@ class AXIMemoryArray(HDLModule):
 
                 hdl += "\n"
 
-            hdl += f'        end if;\n'
-            hdl += f'    end process user_pipeline_proc;\n\n'
+                hdl += f'        end if;\n'
+                hdl += f'    end process mem{element}_user_pipeline_proc;\n\n'
         else:
-            # No pipelining at all
-            hdl += f'    mem{element}_dout <= mem{element}_dout_int;\n\n'
-        
-        # for element in range(self._elements):
-        #     hdl += f'    mem{element}_dout <= mem{element}_dout_int{"_" + "d"*self._user_port_output_pipeline if self._user_port_output_pipeline != 0 else ""};\n'
-        # hdl += f'\n'
+            for element in range(self._elements):
+                # No pipelining at all
+                hdl += f'    mem{element}_dout <= mem{element}_dout_int;\n\n'
             
         delayed_controller_input_suffix = "_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""
         delayed_user_input_suffix = "_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""
-        for element in range(self._elements):            
+        for element in range(self._elements):     
+            user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"       
             hdl += f'    mem{element}_inst : xpm_memory_tdpram\n'
             hdl += f'        generic map (\n'
             hdl += f'           ADDR_WIDTH_A            => {controller_address_bits-log2_elements-controller_unused_bits},\n'
@@ -1240,7 +1311,7 @@ class AXIMemoryArray(HDLModule):
             hdl += f'           BYTE_WRITE_WIDTH_A      => 8,\n'
             hdl += f'           BYTE_WRITE_WIDTH_B      => 8,\n'
             hdl += f'           CASCADE_HEIGHT          => 0,\n'
-            hdl += f'           CLOCKING_MODE           => "common_clock",\n'
+            hdl += f'           CLOCKING_MODE           => "{"common_clock" if self._synchronous else "independent_clock"}",\n'
             hdl += f'           ECC_MODE                => "no_ecc",\n'
             hdl += f'           MEMORY_INIT_FILE        => "none",\n'
             hdl += f'           MEMORY_INIT_PARAM       => "0",\n'
@@ -1277,7 +1348,7 @@ class AXIMemoryArray(HDLModule):
             hdl += f'           rsta   => \'0\',\n'
             hdl += f'           wea    => controller_we{delayed_controller_input_suffix},\n\n'
             
-            hdl += f'           clkb   => s_axi_aclk,\n'
+            hdl += f'           clkb   => {user_clk},\n'
             hdl += f'           addrb  => mem{element}_addr{delayed_user_input_suffix},\n'
             hdl += f'           doutb  => mem{element}_dout_int,\n'
             if self._read_only:
@@ -1286,9 +1357,6 @@ class AXIMemoryArray(HDLModule):
                 hdl += f'           dinb   => mem{element}_din{delayed_user_input_suffix},\n'
             hdl += f'           enb    => \'1\',\n'
             hdl += f'           regceb => \'1\',\n'
-            # if self._use_rst:
-            #     hdl += f'           rstb   => mem{element}_rst{"_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""},\n'
-            # else:
             hdl += f'           rstb   => \'0\',\n'
                 
             if self._read_only:
@@ -1333,6 +1401,7 @@ class AXIMemoryArray(HDLModule):
                 f' CONFIG.DATA_WIDTH {{{self._controller_width}}}'
                 f' CONFIG.MEM_DEPTH {{{self._elements*self._size_bits // self._controller_width}}}'
                 f' CONFIG.SINGLE_PORT_BRAM {{1}}'
+                f' CONFIG.ID_WIDTH {{{self._axi_id_width}}}'
                 f' CONFIG.ECC_TYPE {{0}}'
                 f' CONFIG.Component_Name {{{ip_name}}}'
                 f' CONFIG.READ_LATENCY {{{self._controller_port_input_pipeline + self._controller_port_output_pipeline + 1}}}'
