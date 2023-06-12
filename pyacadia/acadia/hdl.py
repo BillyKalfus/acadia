@@ -547,9 +547,9 @@ class BusDataMoverController(BusDevice, HDLModule):
         :type key: int or str
         """
         if isinstance(key, int):
-            return self._address + 4*key
+            return self._address.value() + 4*key
         elif isinstance(key, str):
-            return self._address + 4*self._datamovers.index(key)
+            return self._address.value() + 4*self._datamovers.index(key)
         else:
             raise TypeError(f"Incompatible type for key {key}")
         

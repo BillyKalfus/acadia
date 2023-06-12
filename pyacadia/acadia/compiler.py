@@ -766,7 +766,7 @@ class Processor:
         # of instructions. The only reason we choose to make the instruction
         # type an instance member is so that its instances created for a 
         # particular Processor object can be tracked
-        self.Instruction = ManagedResource(f"Instruction", 
+        self.Instruction = ManagedResource(f"{self.__class__.__name__}Instruction", 
                                            (ProcessorInstruction,), 
                                            {})
         

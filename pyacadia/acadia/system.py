@@ -1238,6 +1238,7 @@ class Firmware:
             
             # Create the interface to the PS DMA
             create_module(f, f"hedgehog/zdma_controller", "acadia_zdma_controller")
+            set_property(f, name=f"hedgehog/zdma_controller", properties={"NUM_DMA": 8})
             connect_bd_net(f, "hedgehog/zdma_controller/nrst", "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
             connect_bd_intf_net(f, "hedgehog/sequencer_bus_decoder/zdma_controller", "hedgehog/zdma_controller/master_bus")
             
@@ -1390,6 +1391,7 @@ class Firmware:
 
                 # ------------------- Real-time DMAs -------------------- #
                 create_module(f, f"hedgehog/adc_dma{d}", "acadia_dma")
+                set_property(f, name=f"hedgehog/adc_dma{d}", properties={"DATA_WIDTH": 128})
                 connect_bd_net(f, f"hedgehog/adc_dma{d}/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/adc_dma{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
 
@@ -1527,6 +1529,7 @@ class Firmware:
                 # ------------------- CMACC Real-time DMAs -------------------- #
 
                 create_module(f, f"hedgehog/cmacc_dma{d}", "acadia_dma")
+                set_property(f, name=f"hedgehog/cmacc_dma{d}", properties={"DATA_WIDTH": 32})
                 connect_bd_net(f, f"hedgehog/cmacc_dma{d}/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/cmacc_dma{d}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
 
@@ -1984,7 +1987,7 @@ class Acadia:
                 dac_channel = Channel(tile=tile, block=block, is_dac=True)
                 dac_channel.analog_sample_frequency = 6e9
                 dac_channel.interface_sample_frequency = 1e9
-                dac_channel.complex_samples = True
+                dac_channel.interface_width_bytes = 16
                 
                 # Patch in methods that will synchronize relevant calls to this
                 # object's Synchronizer
@@ -2014,7 +2017,7 @@ class Acadia:
                 adc_channel = Channel(tile=tile, block=block, is_dac=False)
                 adc_channel.analog_sample_frequency = 2e9
                 adc_channel.interface_sample_frequency = 1e9
-                adc_channel.complex_samples = True
+                adc_channel.interface_width_bytes = 16
                 
                 adc_channel.update_nco_frequency = SynchronizedFunction(self.synchronizer,
                     RFDCSynchronizer.NCO_FREQUENCY,
@@ -2478,7 +2481,7 @@ class Acadia:
             raise TypeError("Memory source and/or destination lack sufficient"
                             " information to execute copy.")
     
-    def capture(self, channel, array, integration_kernel=None, datamover_tag=0xB):
+    def capture(self, channel, array, offset=0, length=None, integration_kernel=None, datamover_tag=0xB):
         """
         Capture a signal from an ADC into an array. 
         :param channel: Physical channel to capture from.
@@ -2486,6 +2489,10 @@ class Acadia:
         :param array: The array with which to populate the captured data.
         :type array: :class:`PSDDRArray`, :class:`PLDDR0Array`, 
         :class:`PSDDR1Array`, :class:`self.OCMArray`
+        :param offset: The offset in the array in samples at which the captured
+        data will be stored.
+        :param length: The length in samples of the signal to capture. If not
+        provided, the length of the array is used
         :param integration_kernel: If provided, the captured trace will be
         integrated against the kernel given by the array using a CMACC.
         Otherwise, the signal will be captured with a regular ADC DMA.
@@ -2510,19 +2517,19 @@ class Acadia:
             raise TypeError(f"If provided, kernel must be a `CMACCKernelArray`;"
                             f" received {integration_kernel}.")
             
-        # ADC captures are always 128 bits per clock cycle
-        if array.byte_length() // 16 != array.byte_length() / 16:
+        if array.byte_length() % 2 != 0:
             raise ValueError(f"An array for ADC capture must have a size that"
-                             f" is a multiple of 16 bytes; found"
+                             f" is a multiple of 2 bytes; found"
                              f" {array.byte_length()} bytes.")
             
-        trace_length = array.byte_length() // 16
+        trace_length_cycles = array.byte_length() // channel.interface_width_bytes
         
+        # Integration kernel is always 1 sample wide
         if (integration_kernel is not None 
-                and (integration_kernel.byte_length() // 16) != trace_length):
+                and (integration_kernel.byte_length() // 4) != trace_length_cycles):
             raise ValueError(f"Integration kernel length"
-                             f" ({integration_kernel.byte_length() // 16})"
-                             f" does not match trace length ({trace_length}).")
+                             f" ({integration_kernel.byte_length() // 4})"
+                             f" does not match trace length ({trace_length_cycles}).")
         
         # See if any DMAs are using the same physical channel as the one we
         # want to use, and if so, use that DMA. If not, request a new one
@@ -2553,14 +2560,17 @@ class Acadia:
         channel.dma = dma
         
         # Add the descriptor address to the FIFO for the DMA
-        descriptor = dma.request_descriptor(trace_address, trace_length)
+        descriptor = dma.request_descriptor(trace_address, trace_length_cycles)
         self._active_sequencer.bus_write(address=Firmware.sequencer_bus_decoder[fifo_name].address().value(),
-                                         data=descriptor)
+                                         data=descriptor,
+                                         comment=f"Add descriptor with parameters {descriptor.kwargs} to DMA FIFO for ADC switch output {dma._resource_id} (connected to ADC{channel.num})")
         
         # Configure the DataMover
+        capture_byte_address = array.byte_address() + offset*4
+        capture_byte_length = length*4 if length is not None else array.byte_length()
         self._sequencer_command_dm(datamover_name, 
-                                   array.byte_address(), 
-                                   array.byte_length(), 
+                                   capture_byte_address, 
+                                   capture_byte_length, 
                                    tag=datamover_tag)
     
     def generate(self, channel, array):
@@ -2591,38 +2601,55 @@ class Acadia:
         
         fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
-                                         data=descriptor)
+                                         data=descriptor, 
+                                         comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
 
-    def channels_almost_done(self, *args):
+    def channels_almost_done(self, *channels):
         """
         Create a condition that will determine whether the FIFOs of the DMAs
         driving the given Channels are almost empty.
-        :param channel: Channel to check
-        :type channel: :class:`Channel`
+        :param channels: Channel(s) to check
+        :type channels: list of :class:`Channel`
         """
         mask = 0
-        for channel in args:
+        for channel in channels:
             dma = channel.dma
             bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
             mask |= 1 << bit_position
         bus_address = Firmware.dma_fifo_almost_empty.address().value()
         return self._active_sequencer.bus_read(bus_address) & mask != 0
     
-    def channels_running(self, *args):
+    def channels_running(self, *channels):
         """
         Create a condition that will determine whether the DMAs
         driving the given Channels are running.
-        :param channel: Channel to check
-        :type channel: :class:`Channel`
+        :param channels: Channel(s) to check
+        :type channels: list of :class:`Channel`
         """
         mask = 0
-        for channel in args:
+        for channel in channels:
             dma = channel.dma
             mask |= 1 << (type(dma).DMA_NUM_OFFSET + dma._resource_id)
         
         bus_address = Firmware.dma_running.address().value()
         return self._active_sequencer.bus_read(bus_address) & mask != 0
-    
+
+    def captures_complete(self, *channels):
+        """
+        Create a condition that will determine whether the datamover 
+        transferring captured ADC samples is complete. This check is performed
+        by inspecting whether a valid status was provided by the DataMover
+        corresponding to that channel and does not examine the status itself.
+        :param channels: Channel(s) to check
+        :type channels: list of :class:`Channel`
+        """
+        mask = 0
+        for channel in channels:
+            dma = channel.dma
+            mask |= 1 << ((4 if isinstance(dma, self._CMACCDMA) else 0) + dma._resource_id)
+        bus_address = Firmware.datamover_controller.address().value() + 1
+        return self._active_sequencer.bus_read(bus_address) & mask != 0
+
     def configure_adc_switch(self):
         """
         Run the encapsulated program on Acadia hardware. 
@@ -2652,7 +2679,8 @@ class Acadia:
 
         with self.sequencer() as seq:
             seq.bus_write(address=Firmware.sequencer_bus_decoder["adc_fifo_control"].address().value(), 
-                          data=mask)
+                          data=mask,
+                          comment="FIFO reset")
             
     def reset_datamover_controller(self, *args):
         """
@@ -2718,7 +2746,8 @@ class Acadia:
         """
         dma_trigger_device = Firmware.sequencer_bus_decoder["dma_trigger"]
         self._active_sequencer.bus_write(address=dma_trigger_device.address().value(),
-                                 data=mask)
+                                 data=mask,
+                                 comment="DMA trigger")
         
     def dma_block(self, mask):
         """
@@ -2776,7 +2805,9 @@ class Acadia:
             self._psgpio_mem[(PSGPIO.PSGPIO3_OUT_PSREG >> 2) + port - 3] = data
         elif isinstance(proc, Sequencer):
             addr = Firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
-            return proc.bus_write(address=addr, data=data)
+            return proc.bus_write(address=addr, 
+                                  data=data,
+                                  comment=f"Write to GPIO port {port}")
         else:
             raise TypeError(f"Unable to access GPIO on processor {proc}.")
     
@@ -2798,7 +2829,8 @@ class Acadia:
                 cache_self.memory[key] = value
             elif isinstance(proc, Sequencer):
                 proc.bus_write(address=Firmware.sequencer_bus_decoder["cache"].address().value() + key,
-                               data=value)
+                               data=value,
+                               comment=f"Write to cache address {key}")
             else:
                 raise TypeError(f"Unable to access cache on processor {proc}.")
         
@@ -2939,13 +2971,15 @@ class Acadia:
 
         # Configure the DataMover controller (the last bus write will 
         # push the complete command into the command FIFO)
-        # Configure the S2MM side first so that it is prepared when the
-        # MM2S side starts streaming after the command gets pushed in
-        self._active_sequencer.bus_write(address=Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]+2, 
-                            data=misc_reg)
-        self._active_sequencer.bus_write(address=Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]+1, 
+        bus_address_base = Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
+        self._active_sequencer.bus_write(address=bus_address_base+2, 
+                                         data=misc_reg,
+                                         comment=f"Configuration for {size}-byte transfer"
+                                                 f" to {address:010X} using DataMover"
+                                                 f" {datamover_name}")
+        self._active_sequencer.bus_write(address=bus_address_base+1, 
                             data=size)
-        self._active_sequencer.bus_write(address=Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]+0, 
+        self._active_sequencer.bus_write(address=bus_address_base, 
                             data=addr_reg)
         
     

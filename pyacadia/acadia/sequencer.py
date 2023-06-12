@@ -358,6 +358,57 @@ class STP:
                 elif not isinstance(field_value, field_type):
                     raise TypeError(f"Field {field} must be of type {field_type};"
                                     f" received {field_value}.")
+                
+    def pprint(self):
+        """
+        Return a nicely-formatted (and non-exhaustive) description of this 
+        instruction.
+        """
+        s = ""
+        if (str(self.src1) == "REG0" 
+            and str(self.dest1) == "REG0"):
+            s += "NOP"
+        else:
+            if self.src1.major is Source.Major.IMM:
+                v = self.imm1.value() if isinstance(self.imm2, Symbol) else self.imm1
+                if isinstance(v, ProcessorInstruction):
+                    s += f"{v.__class__.__name__} @ {v.address.value():08X}"
+                elif isinstance(v, int):
+                    s += f"{v:08X}"
+                else:
+                    s += f"{v}"
+            else:
+                s += f"{self.src1}"
+            s += f" -> {self.dest1}"
+
+        s += "  |  "
+
+        if (str(self.src2) == "REG0" 
+            and str(self.dest2) == "REG0"):
+            s += "NOP"
+        else:
+            if self.src2.major is Source.Major.IMM:
+                v = self.imm2.value() if isinstance(self.imm2, Symbol) else self.imm2
+                if isinstance(v, ProcessorInstruction):
+                    s += f"{v.__class__.__name__} @ {v.address.value():08X}"
+                elif isinstance(v, int):
+                    s += f"{v:08X}"
+                else:
+                    s += f"{v}"
+            else:
+                s += f"{self.src2}"
+            s += f" -> {self.dest2}"
+
+        if self.dsp_cep is not None:
+            s += f"  | {self.dsp_cep} CEP"
+
+        if self.push_return:
+            s += f"  | PUSH_RETURN"
+
+        if self.comment is not None:
+            s += f"  ; {self.comment}"
+
+        return s
 
     def assemble(self):
         """
@@ -451,6 +502,64 @@ class STC:
                 elif not isinstance(field_value, field_type):
                     raise TypeError(f"Field {field} must be of type {field_type};"
                                     f" received {field_value}.")
+                
+    def pprint(self):
+        """
+        Return a nicely-formatted (and non-exhaustive) description of this 
+        instruction.
+        """
+        s = ""
+        if (str(self.src_stval) == "REG0" 
+            and str(self.dest_stval) == "REG0"):
+            s += "NOP"
+        else:
+            if self.src_stval.major is Source.Major.IMM:
+                v = self.imm_stval.value() if isinstance(self.imm_stval, Symbol) else self.imm_stval
+                if isinstance(v, ProcessorInstruction):
+                    s += f"{v.__class__.__name__} @ {v.address.value():08X}"
+                elif isinstance(v, int):
+                    s += f"{v:08X}"
+                else:
+                    s += f"{v}"
+            else:
+                s += f"{self.src_stval}"
+            s += f" -> {self.dest_stval}"
+
+        s += " if "
+
+        if self.op & 0b11 == 2:
+            s += "not("
+
+        if self.src_tval.major is Source.Major.IMM:
+            v = self.imm_tval.value() if isinstance(self.imm_tval, Symbol) else self.imm_tval
+            if isinstance(v, ProcessorInstruction):
+                s += f"{v.__class__.__name__} @ {v.address.value():08X}"
+            elif isinstance(v, int):
+                s += f"{v:08X}"
+            else:
+                s += f"{v}"
+        else:
+            s += f"{self.src_tval}"
+
+        if self.op & 0b11 == 0:
+            s += " AND MASK"
+        elif self.op & 0b11 == 1:
+            s += " XOR MASK"
+        elif self.op & 0b11 == 2:
+            s += ") AND MASK"
+
+        s += f" {'' if self.op & 0b100 else '!'}= 0"
+
+        if self.dsp_cep is not None:
+            s += f"  | {self.dsp_cep} CEP"
+
+        if self.push_return:
+            s += f"  | PUSH_RETURN"
+
+        if self.comment is not None:
+            s += f"  ; {self.comment}"
+
+        return s
 
     def assemble(self):
         """
@@ -653,14 +762,15 @@ class Sequencer(Processor):
         
         return Source(Source.Major.BUS_DATA)
     
-    def bus_write(self, address, data):
+    def bus_write(self, address, data, **kwargs):
         """
         Writes a value to the bus.
         """
         self.STP(src1=address, 
                 dest1=Destination(Destination.Major.BUS_ADDR),
                 src2=data, 
-                dest2=Destination(Destination.Major.BUS_DATA))
+                dest2=Destination(Destination.Major.BUS_DATA),
+                **kwargs)
         
     def halt(self):
         """
@@ -759,7 +869,7 @@ class Sequencer(Processor):
                              f" must specify the source with the `src` keyword"
                              f" argument and the destination with the `dest`"
                              f" keyword argument."
-                             f" Received {instruction_resource._args}.")
+                             f" Received {instruction_resource.args}.")
             
         # We need src and dest; these will throw KeyError if they aren't 
         # present, which is basically our desired behavior so no need to 
@@ -1158,6 +1268,10 @@ class Sequencer(Processor):
             instructions.append(STP(src1=condition._args[0], 
                                     dest1=Destination(Destination.Major.MASK)))
             compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
+        elif is_numeric(condition._args[1]):
+            instructions.append(STP(src1=condition._args[1], 
+                                    dest1=Destination(Destination.Major.MASK)))
+            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
         elif isinstance(condition._args[0], self.Register) or isinstance(condition._args[0], self.DSP):
             instructions.append(STP(src1=condition._args[0].source(), 
                                     dest1=Destination(Destination.Major.MASK)))
@@ -1396,7 +1510,9 @@ class Sequencer(Processor):
             start = 0
             stop = args[0]
             step = 1
-            self.store(dsp["CFG"], DSPConfiguration("P+1", rst_p=True))
+            self.store(dest=dsp["CFG"], 
+                       src=DSPConfiguration("P+1", rst_p=True), 
+                       comment="Configure DSP for loop")
         elif len(args) == 2:
             dsp = self.DSP()
             start = args[0]
@@ -1406,7 +1522,9 @@ class Sequencer(Processor):
             # since it requires one store to load the start value into a DSP 
             # register and another to configure the DSP to load P with it
             dsp.load(start)
-            self.store(dsp["CFG"], DSPConfiguration("P+1"))
+            self.store(dest=dsp["CFG"], 
+                       src=DSPConfiguration("P+1"),
+                       comment="Configure DSP for loop")
         elif len(args) == 3:
             dsp = self.DSP()
             start = args[0]
@@ -1417,7 +1535,8 @@ class Sequencer(Processor):
                      dest1=dsp["CFG"], 
                      imm1=DSPConfiguration("P+AB"),
                      src2=step,
-                     dest2=dsp["AB"])
+                     dest2=dsp["AB"],
+                     comment="Configure DSP for loop")
         else:
             raise ValueError(f"Unrecognized call signature for loop;"
                              f" receieved {args}.")
@@ -1428,13 +1547,15 @@ class Sequencer(Processor):
             
         block_empty = not self.Instruction.next_instance_assigned()
         if not block_empty and len(args) > 0:
-            loop_block_start.kwargs["dsp_cep"] = dsp.source()
+            loop_block_start.value().kwargs["dsp_cep"] = dsp.source()
             
-        end_condition = (dsp != stop) if len(args) > 0 else None
+        # Branch back to the start of the loop block if we haven't reached the end
+        jump_condition = (dsp != stop) if len(args) > 0 else None
 
-        jump = self.store(src=loop_block_start, 
+        jump = self.store(src=loop_block_start.value(), 
                          dest=Destination(Destination.Major.PC, 
                                           Destination.PC_ABSOLUTE_BRANCH), 
-                         when=end_condition)
+                         when=jump_condition,
+                         comment="Branch back to loop start")
         if block_empty and len(args) > 0:
             jump.kwargs["dsp_cep"] = dsp.source()

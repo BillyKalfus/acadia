@@ -37,6 +37,10 @@ entity acadia_sequencer is
         NUM_DSP                     : natural := 8;
         WORD_SIZE                   : natural := 32;
         PIPELINE_DSP_INPUTS         : boolean := false;
+        PIPELINE_DSP_P              : boolean := false;
+        ENABLE_DSP_AB_REG           : natural := 0;
+        ENABLE_DSP_C_REG            : natural := 0;
+        ENABLE_DSP_CFG_REG          : natural := 0;
         INSTRUCTION_PIPELINE_STAGES : natural := 1
     );
     port
@@ -504,8 +508,8 @@ begin
             dsp_cep_reg_loop: for i in 0 to NUM_DSP-1 loop
                 if(nrst = '0') then
                     dsp_cep_reg(i) <= '0';
-                elsif(instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i) then
-                    dsp_cep_reg(i) <= '1';
+                -- elsif(instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i) then
+                --     dsp_cep_reg(i) <= '1';
                 elsif(dsp_cfg_reg(i)(15) = '1') then
                     dsp_cep_reg(i) <= '1';
                 else
@@ -546,13 +550,21 @@ begin
     end process dsp_c_reg_proc;
                              
     -- Pipeline the P register output
-    dsp_p_reg_proc: process(clk) begin
-        if rising_edge(clk) then
-            dsp_p_reg_loop: for i in 0 to NUM_DSP-1 loop
-                dsp_p_reg(i) <= dsp_p(i)(WORD_SIZE-1 downto 0);
-            end loop dsp_p_reg_loop;
-        end if;
-    end process dsp_p_reg_proc;
+    dsp_p_reg_gen: if PIPELINE_DSP_P = true generate
+        dsp_p_reg_proc: process(clk) begin
+            if rising_edge(clk) then
+                dsp_p_reg_loop: for i in 0 to NUM_DSP-1 loop
+                    dsp_p_reg(i) <= dsp_p(i)(WORD_SIZE-1 downto 0);
+                end loop dsp_p_reg_loop;
+            end if;
+        end process dsp_p_reg_proc;
+    end generate dsp_p_reg_gen;
+
+    dsp_p_direct_gen: if PIPELINE_DSP_P = false generate
+        dsp_p_direct_inner_gen: for i in 0 to NUM_DSP-1 generate
+            dsp_p_reg(i) <= dsp_p(i)(WORD_SIZE-1 downto 0);
+        end generate dsp_p_direct_inner_gen;
+    end generate dsp_p_direct_gen;
     
     dsp_pipeline_gen: if PIPELINE_DSP_INPUTS = true generate
         dsp_pipeline_proc: process(clk) begin
@@ -569,11 +581,13 @@ begin
     end generate dsp_pipeline_gen;
 
     dsp_nopipeline_gen: if PIPELINE_DSP_INPUTS = false generate
-        dsp_ab_direct   <= dsp_ab_reg;
-        dsp_c_direct    <= dsp_c_reg;
-        dsp_cfg_direct  <= dsp_cfg_reg;
-        dsp_cep_direct  <= dsp_cep_reg;
-        dsp_rstp_direct <= dsp_rstp;
+        dsp_nopipeline_inner_gen: for i in 0 to NUM_DSP-1 generate
+            dsp_ab_direct(i)   <= dsp_ab_reg(i);
+            dsp_c_direct(i)    <= dsp_c_reg(i);
+            dsp_cfg_direct(i)  <= dsp_cfg_reg(i);
+            dsp_cep_direct(i)  <= '1' when instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i else dsp_cep_reg(i);
+            dsp_rstp_direct(i) <= dsp_rstp(i);
+        end generate dsp_nopipeline_inner_gen;
     end generate dsp_nopipeline_gen;
     
     -- Instantiate the DSP slices
@@ -619,19 +633,19 @@ begin
                 IS_RSTP_INVERTED          => '0',             -- Optional inversion for RSTP
                 
                 -- Register Control Attributes: Pipeline Register Configuration
-                ACASCREG                  => 1,               -- Number of pipeline stages between A/ACIN and ACOUT (0-2)
+                ACASCREG                  => ENABLE_DSP_AB_REG,               -- Number of pipeline stages between A/ACIN and ACOUT (0-2)
                 ADREG                     => 1,               -- Pipeline stages for pre-adder (0-1)
-                ALUMODEREG                => 1,               -- Pipeline stages for ALUMODE (0-1)
-                AREG                      => 1,               -- Pipeline stages for A (0-2)
-                BCASCREG                  => 1,               -- Number of pipeline stages between B/BCIN and BCOUT (0-2)
-                BREG                      => 1,               -- Pipeline stages for B (0-2)
-                CARRYINREG                => 1,               -- Pipeline stages for CARRYIN (0-1)
+                ALUMODEREG                => ENABLE_DSP_CFG_REG,               -- Pipeline stages for ALUMODE (0-1)
+                AREG                      => ENABLE_DSP_AB_REG,               -- Pipeline stages for A (0-2)
+                BCASCREG                  => ENABLE_DSP_AB_REG,               -- Number of pipeline stages between B/BCIN and BCOUT (0-2)
+                BREG                      => ENABLE_DSP_AB_REG,               -- Pipeline stages for B (0-2)
+                CARRYINREG                => ENABLE_DSP_CFG_REG,               -- Pipeline stages for CARRYIN (0-1)
                 CARRYINSELREG             => 1,               -- Pipeline stages for CARRYINSEL (0-1)
-                CREG                      => 1,               -- Pipeline stages for C (0-1)
+                CREG                      => ENABLE_DSP_C_REG,               -- Pipeline stages for C (0-1)
                 DREG                      => 1,               -- Pipeline stages for D (0-1)
                 INMODEREG                 => 1,               -- Pipeline stages for INMODE (0-1)
                 MREG                      => 0,               -- Multiplier pipeline stages (0-1)
-                OPMODEREG                 => 1,               -- Pipeline stages for OPMODE (0-1)
+                OPMODEREG                 => ENABLE_DSP_CFG_REG,               -- Pipeline stages for OPMODE (0-1)
                 PREG                      => 1                -- Number of pipeline stages for P (0-1)
             )
             port map (

@@ -1017,12 +1017,12 @@ class Channel:
         samples
         :rtype: int
         """
-        if not hasattr(self, "complex_samples"):
-            raise ValueError("Channel missing sample rate information."
-                             " Make sure that `configure_rfdc` was"
-                             " called on the `Acadia` instance that produced"
-                             " this `Channel` object.")
-        return samples*(4 if self.complex_samples else 2)
+        # if not hasattr(self, "complex_samples"):
+        #     raise ValueError("Channel missing sample rate information."
+        #                      " Make sure that `configure_rfdc` was"
+        #                      " called on the `Acadia` instance that produced"
+        #                      " this `Channel` object.")
+        return samples*4 #(4 if self.complex_samples else 2)
     
     def bytes_to_samples(self, num_bytes):
         """
@@ -1032,22 +1032,22 @@ class Channel:
         as an array of samples
         :rtype: int
         """
-        if not hasattr(self, "complex_samples"):
-            raise ValueError("Channel missing sample rate information."
-                             " Make sure that `configure_rfdc` was"
-                             " called on the `Acadia` instance that produced"
-                             " this `Channel` object.")
+        # if not hasattr(self, "complex_samples"):
+        #     raise ValueError("Channel missing sample rate information."
+        #                      " Make sure that `configure_rfdc` was"
+        #                      " called on the `Acadia` instance that produced"
+        #                      " this `Channel` object.")
             
-        if self.complex_samples:
-            if int(round(num_bytes/4, 3)) != num_bytes // 4:
-                raise ValueError(f"Number of bytes ({num_bytes}) must be a"
-                                 " multiple of 4.")
-            return num_bytes // 4
-        else:
-            if int(round(num_bytes/2, 3)) != num_bytes // 2:
-                raise ValueError(f"Number of bytes ({num_bytes}) must be a"
-                                 " multiple of 2.")
-            return num_bytes // 2
+        # if self.complex_samples:
+        if int(round(num_bytes/4, 3)) != num_bytes // 4:
+            raise ValueError(f"Number of bytes ({num_bytes}) must be a"
+                                " multiple of 4.")
+        return num_bytes // 4
+        # else:
+        #     if int(round(num_bytes/2, 3)) != num_bytes // 2:
+        #         raise ValueError(f"Number of bytes ({num_bytes}) must be a"
+        #                          " multiple of 2.")
+        #     return num_bytes // 2
     
     def seconds_to_samples(self, duration):
         """
@@ -1056,8 +1056,7 @@ class Channel:
         :return: The number of samples corresponding to the given time interval
         :rtype: int
         """
-        if ((not hasattr(self, "interface_sample_frequency")) 
-            or (not hasattr(self, "complex_samples"))):
+        if not hasattr(self, "interface_sample_frequency"):
             raise ValueError("Channel missing sample rate information."
                              " Make sure that `configure_rfdc` was"
                              " called on the `Acadia` instance that produced"
@@ -1070,7 +1069,7 @@ class Channel:
 
         # Make sure that the number of samples in the pulse results in a valid 
         # number of cycles
-        clock_speed = self.interface_sample_frequency / (4 if self.complex_samples else 2)
+        clock_speed = self.interface_sample_frequency / 4 #(4 if self.complex_samples else 2)
         duration_cycles = int(round(duration * clock_speed))
         if abs(duration * clock_speed - duration_cycles) > 1e-6:
             raise ValueError("Array must be an integer number of cycles;"
@@ -1103,12 +1102,12 @@ class Channel:
         samples corresponding to the given duration
         :rtype: int
         """
-        if not hasattr(self, "complex_samples"):
-            raise ValueError("Channel missing sample rate information."
-                             " Make sure that `configure_rfdc` was"
-                             " called on the `Acadia` instance that produced"
-                             " this `Channel` object.")
-        return self.seconds_to_samples(duration)*(4 if self.complex_samples else 2)
+        # if not hasattr(self, "complex_samples"):
+        #     raise ValueError("Channel missing sample rate information."
+        #                      " Make sure that `configure_rfdc` was"
+        #                      " called on the `Acadia` instance that produced"
+        #                      " this `Channel` object.")
+        return self.seconds_to_samples(duration)*4 #(4 if self.complex_samples else 2)
     
     def bytes_to_seconds(self, num_bytes):
         """
@@ -1118,21 +1117,13 @@ class Channel:
         interpreting the memory as an array of samples
         :rtype: float
         """
-        if ((not hasattr(self, "interface_sample_frequency")) 
-            or (not hasattr(self, "complex_samples"))):
+        if not hasattr(self, "interface_sample_frequency"):
             raise ValueError("Channel missing sample rate information."
                              " Make sure that `configure_rfdc` was"
                              " called on the `Acadia` instance that produced"
                              " this `Channel` object.")
-
-        if round(num_bytes / 16) != num_bytes // 16:
-            raise ValueError("Number of bytes must be a multiple of 16 in"
-                             " order to correspond to a set of samples.")
         
-        return (num_bytes//4 if self.complex_samples else num_bytes//2) / self.interface_sample_frequency
-    
-    
-        
+        return (num_bytes//4) / self.interface_sample_frequency
     
     def to_samples(self, array):
         """
@@ -1149,22 +1140,22 @@ class Channel:
         if array.ndim != 1:
             raise ValueError("Arrays must be 1D.")
 
-        if self.complex_samples:
-            if (array.dtype == np.float32
-                    or array.dtype == np.float64
-                    or array.dtype == np.complex64):
-                array = array.astype(np.complex128)
-            elif array.dtype != np.complex128:
-                raise TypeError(f"Numpy array dtype must be `np.complex128`"
-                                f" or be able to be casted to `np.complex128`;"
-                                f" received {array.dtype}.")
-        else:
-            if array.dtype == np.float32:
-                array = array.astype(np.float64)
-            elif array.dtype != np.float64:
-                raise TypeError(f"Numpy array dtype must be `np.float64`"
-                                f" or be able to be casted to `np.float64`;"
-                                f" received {array.dtype}.")
+        # if self.complex_samples:
+        if (array.dtype == np.float32
+                or array.dtype == np.float64
+                or array.dtype == np.complex64):
+            array = array.astype(np.complex128)
+        elif array.dtype != np.complex128:
+            raise TypeError(f"Numpy array dtype must be `np.complex128`"
+                            f" or be able to be casted to `np.complex128`;"
+                            f" received {array.dtype}.")
+        # else:
+        #     if array.dtype == np.float32:
+        #         array = array.astype(np.float64)
+        #     elif array.dtype != np.float64:
+        #         raise TypeError(f"Numpy array dtype must be `np.float64`"
+        #                         f" or be able to be casted to `np.float64`;"
+        #                         f" received {array.dtype}.")
                 
         array *= 2**13 - 1
         array = array.round().view(np.float64).astype(np.int16)
