@@ -1,6 +1,8 @@
 __all__ = ["Channel"]
 
 from dataclasses import dataclass
+import struct
+
 import numpy as np
 
 from .compiler import Processor
@@ -1125,7 +1127,8 @@ class Channel:
         
         return (num_bytes//4) / self.interface_sample_frequency
     
-    def to_samples(self, array):
+    @staticmethod
+    def to_samples(array, out=None):
         """
         Convert arrays of complex numbers ranging from -1 to 1 into samples for
         the RFSoC DACs and ADCs. Note that no length checking is performed, so 
@@ -1134,31 +1137,67 @@ class Channel:
         ensure predictable behavior.
         :param array: Input array of numbers to be converted into samples
         :type array: numpy.ndarray
+        :param out: If provided, samples are written into this array rather
+        than into a newly-allocated array.
+        :type out: numpy.ndarray
         """
-        
-        # Check shape properties
-        if array.ndim != 1:
-            raise ValueError("Arrays must be 1D.")
+        # Check input type
+        if isinstance(array, memoryview):
+            array = np.frombuffer(array, dtype=np.complex128)
+        elif isinstance(array, np.ndarray):
+            if array.ndim != 1:
+                raise ValueError("Arrays must be 1D.")
+            if array.dtype != np.complex128 and array.dtype != np.complex64:
+                raise TypeError(f"Numpy array dtype must be `np.complex128`"
+                                f" or `np.complex64` (received {array.dtype}).")
+        else:
+            raise TypeError(f"Input type must be `memoryview` or numpy.ndarray"
+                            f" with dtype `np.complex128` or `np.complex64`"
+                            f" (received {type(array)}).")
 
-        # if self.complex_samples:
-        if (array.dtype == np.float32
-                or array.dtype == np.float64
-                or array.dtype == np.complex64):
-            array = array.astype(np.complex128)
-        elif array.dtype != np.complex128:
-            raise TypeError(f"Numpy array dtype must be `np.complex128`"
-                            f" or be able to be casted to `np.complex128`;"
-                            f" received {array.dtype}.")
-        # else:
-        #     if array.dtype == np.float32:
-        #         array = array.astype(np.float64)
-        #     elif array.dtype != np.float64:
-        #         raise TypeError(f"Numpy array dtype must be `np.float64`"
-        #                         f" or be able to be casted to `np.float64`;"
-        #                         f" received {array.dtype}.")
-                
-        array *= 2**13 - 1
-        array = array.round().view(np.float64).astype(np.int16)
-        array <<= 2
-        
-        return array.view(dtype=np.uint8)
+        # Check output type if provided
+        if out is None:
+            out = np.empty(len(array)*2, dtype=np.int16)
+        elif isinstance(out, memoryview):
+            out = np.frombuffer(out, dtype=np.int16)
+
+        # TODO: do this better
+        float_type = np.float64 if array.dtype is np.complex128 else np.float32
+        out[:] = (array*(2**13 - 1)).round().view(float_type).astype(np.int16) << 2
+        return out
+    
+    @staticmethod
+    def from_samples(array, out=None):
+        """
+        Convert arrays of samples for the RFSoC DACs and ADCs into complex 
+        numbers ranging from -1 to 1. Note that no length checking is 
+        performed, so if the array is expected to be loaded into memory, it is
+        recommended to use :meth:`seconds_to_samples` to create the input array
+        in order to ensure predictable behavior.
+        :param array: Input array of samples to be converted into complex numbers
+        :type array: numpy.ndarray or memoryview
+        :param out: If provided, complex values are written into this array 
+        rather than into a newly-allocated array.
+        :type out: numpy.ndarray
+        """
+        # Check input type
+        if isinstance(array, memoryview):
+            array = np.frombuffer(array, dtype=np.int16)
+        elif isinstance(array, np.ndarray):
+            if array.ndim != 1:
+                raise ValueError("Arrays must be 1D.")
+            array = array.view(np.int16)
+        else:
+            raise TypeError(f"Input type must be `memoryview` or numpy.ndarray"
+                            f" with dtype `np.int16`; received {array.dtype}.")
+
+        # Check output type if provided
+        if out is None:
+            out = np.empty(len(array) // 2, dtype=np.complex128)
+        elif isinstance(out, memoryview):
+            out = np.frombuffer(out, dtype=np.complex128)
+
+        # TODO: do this better
+        # TODO: incorporate option for float32
+        out[:] = array.astype(np.float64).view(np.complex128) / 32768
+        return out

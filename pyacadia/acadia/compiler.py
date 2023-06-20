@@ -376,7 +376,8 @@ class ManagedMemory(ManagedResource):
                  memory_size,
                  word_width,
                  base_word_address=None,
-                 base_byte_address=None):
+                 base_byte_address=None,
+                 default_getitem=True):
         """
         Creates a new type of managed memory. The total region of memory
         is comprised of a finite number of entries, referred to as "words".
@@ -394,6 +395,10 @@ class ManagedMemory(ManagedResource):
         the word-addressed space.
         :param base_byte_address: The starting address of the memory region in
         the byte-addressed space.
+        :param default_getitem: If `True`, a __getitem__ method will be created
+        for the instances of the type that returns an :class:`Operation`
+        instance with operation string "getitem" and with the instance and key
+        as arguments.
         """
         type_instance = super().__new__(type_self, 
                                         type_name, 
@@ -447,6 +452,11 @@ class ManagedMemory(ManagedResource):
         type_instance.byte_length = res_byte_length
         type_instance.word_address = res_word_address
         type_instance.byte_address = res_byte_address
+
+        if default_getitem:
+            def res_getitem(self, key):
+                return Operation("getitem", self, key)
+            type_instance.__getitem__ = res_getitem
         
         return type_instance
             

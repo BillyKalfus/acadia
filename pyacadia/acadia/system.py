@@ -5,13 +5,13 @@ import mmap
 
 import numpy as np
 
-from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController, AXIMemoryArray
+from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController, AXIMemoryArray, connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, SynchronizedFunction, Symbol, Operation
 from .sequencer import Sequencer, STP, Destination
 from .dma import DMA
 from .channel import Channel
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch, get_gpio_base
-from .utils import connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg, next_highest_power_of_2
+from .utils import next_highest_power_of_2
 
 class Firmware:
     """
@@ -2052,7 +2052,7 @@ class Acadia:
         self._mem_file = os.open("/dev/mem", os.O_SYNC | os.O_RDWR)
         self._mem_maps = []
         
-        self._attach_resource(self.CacheArray, mem_cast="I")
+        self._attach_resource(self.CacheArray, mem_cast=np.uint32)
         
         self._sequencer_instruction_memory = self._attach_memory(
             address=Firmware.INSTRUCTION_MEMORY_ADDRESS,
@@ -2062,19 +2062,19 @@ class Acadia:
             address=(Firmware.DAC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
                     + i*(Firmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
             size=Firmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
-            mem_cast='Q') for i in range(16)]
+            mem_cast=np.uint64) for i in range(16)]
                 
         self._adc_dma_descriptor_memory = [self._attach_memory(
             address=(Firmware.ADC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
                     + i*(Firmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
             size=Firmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
-            mem_cast='Q') for i in range(4)]
+            mem_cast=np.uint64) for i in range(4)]
         
         self._cmacc_dma_descriptor_memory = [self._attach_memory(
             address=(Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
                     + i*(Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
             size=Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
-            mem_cast='Q') for i in range(4)]
+            mem_cast=np.uint64) for i in range(4)]
             
         for dac_mem in self.DACArray:
             self._attach_resource(dac_mem)
@@ -2103,7 +2103,7 @@ class Acadia:
                 size=0x1_0000))
             
         # Connect to the GPIO registers and store sequencer bus addresses for the GPIO dataports
-        self._psgpio_mem = self._attach_memory(0xFF0A0000, 0x400, mem_cast="I")
+        self._psgpio_mem = self._attach_memory(0xFF0A0000, 0x400, mem_cast=np.uint32)
 
         # Connect to the clock wizard
         self.clk_wiz = self._attach_memory(address=Firmware.CLK_WIZ_ADDRESS, size=2**18)  
@@ -2221,7 +2221,7 @@ class Acadia:
                     assembled = instr.assemble()
                     if load:
                         address = (s._resource_id + idx_instr)*16
-                        self._sequencer_instruction_memory[address : address+16] = assembled.to_bytes(16, "little")
+                        self._sequencer_instruction_memory[address : address+16] = np.frombuffer(assembled.to_bytes(16, "little"), dtype=self._sequencer_instruction_memory.dtype)
         
         if dac_dmas:
             for i,dma in enumerate(self._dac_dmas):
@@ -2276,6 +2276,17 @@ class Acadia:
                     sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + dma._resource_id*(Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
                     
         return sim_string
+
+    def sequencer_pprint(self):
+        """
+        :return: a "pretty" representation of the programs compiled
+        for the sequencer
+        :rtype: str
+        """
+        for idx_seq,s in enumerate(self._sequencer_type.instances):
+            print(f"---- Program {s} ----")
+            for idx,instr in enumerate(s._compiled_program):
+                print(f"{idx:04X}: {instr.pprint()}")
                         
     # -------------- HIGH-LEVEL JOINT PS-PL ROUTINES ----------- #
     
@@ -2430,7 +2441,7 @@ class Acadia:
                 if not hasattr(dst, "memory"):
                     raise ValueError("Destination resource not attached.")
                 # Loading from virtual memory, can't use DMA
-                dst.memory.cast("B")[:size] = src.view(np.uint8) if isinstance(src, np.ndarray) else src
+                dst.memory[:size] = src.view(np.uint8) if isinstance(src, np.ndarray) else src
             else:
                 raise TypeError(f"Unable to copy literal into memory on"
                                 f" processor {proc}.")
@@ -2481,18 +2492,18 @@ class Acadia:
             raise TypeError("Memory source and/or destination lack sufficient"
                             " information to execute copy.")
     
-    def capture(self, channel, array, offset=0, length=None, integration_kernel=None, datamover_tag=0xB):
+    def capture(self, channel, array, length=None, offset=None, integration_kernel=None, datamover_tag=0xB):
         """
         Capture a signal from an ADC into an array. 
         :param channel: Physical channel to capture from.
         :type channel: :class:`Channel` or int
-        :param array: The array with which to populate the captured data.
+        :param array: The array with which to populate the captured data. Optionally,
+        the array may be indexed using slice notation to indicate lengths and/or
+        offsets (in units of bytes). Note that negative slice values are NOT supported
+        and will result in undefined behavior.
         :type array: :class:`PSDDRArray`, :class:`PLDDR0Array`, 
-        :class:`PSDDR1Array`, :class:`self.OCMArray`
-        :param offset: The offset in the array in samples at which the captured
-        data will be stored.
-        :param length: The length in samples of the signal to capture. If not
-        provided, the length of the array is used
+        :class:`PSDDR1Array`, :class:`self.OCMArray`, or a `getitem` operation
+        acting on one of these
         :param integration_kernel: If provided, the captured trace will be
         integrated against the kernel given by the array using a CMACC.
         Otherwise, the signal will be captured with a regular ADC DMA.
@@ -2504,74 +2515,127 @@ class Acadia:
         if channel.is_dac:
             raise TypeError(f"Channel must be an ADC;"
                             f" received {channel}.")
-            
-        if not (isinstance(array, self.PSDDRArray)
+        
+        if isinstance(array, Operation):
+            if length is not None or offset is not None:
+                raise TypeError("The `length` and `offset` arguments to"
+                                " `capture` must be omitted when providing"
+                                " an indexed array.")
+            # If the arguments are as we expect, we're slicing the array
+            if array._op == "getitem" and (isinstance(array._args[0], self.PSDDRArray)
+                                        or isinstance(array._args[0], self.PLDDR0Array)
+                                        or isinstance(array._args[0], self.PLDDR1Array)
+                                        or isinstance(array._args[0], self.OCMArray)):
+                if isinstance(array._args[1], slice):
+                    if array._args[1].step is not None:
+                        raise ValueError("Array slices must have a slice of 1.")
+                    
+                    if array._args[1].stop is not None:
+                        if array._args[1].start is not None:
+                            capture_length = array._args[1].stop - array._args[1].start
+                            capture_address = array._args[0].byte_address() + array._args[1].start
+                        else:
+                            capture_length = array._args[1].stop
+                            capture_address = array._args[0].byte_address()
+                    else:
+                        if array._args[1].start is not None:
+                            capture_length = array._args[0].byte_length() - array._args[1].start
+                            capture_address = array._args[0].byte_address() + array._args[1].start
+                        else:
+                            raise ValueError("Received slice with both start"
+                                             " and stop of None.")
+                else:
+                    raise TypeError("Indexed arrays must have `slice` arguments.")
+
+            else:
+                raise ValueError("Arrays of type `Operation` must be `getitem`"
+                                 " operations acting on a `PSDDRArray`,"
+                                 " `PLDDR0Array`, `PLDDR1Array`, or `OCMArray`"
+                                 f" (received {array}).")
+        elif (isinstance(array, self.PSDDRArray)
                 or isinstance(array, self.PLDDR0Array)
                 or isinstance(array, self.PLDDR1Array)
                 or isinstance(array, self.OCMArray)):
+            capture_address = array.byte_address() + offset if offset is not None else array.byte_address()
+            capture_length = length if length is not None else array.byte_length()
+        else:
             raise TypeError(f"Unable to stream captured signal data into"
                             f" array {array}.")
-            
-        if (integration_kernel is not None 
-                and not isinstance(integration_kernel, self._CMACCKernelArray)):
-            raise TypeError(f"If provided, kernel must be a `CMACCKernelArray`;"
-                            f" received {integration_kernel}.")
-            
-        if array.byte_length() % 2 != 0:
-            raise ValueError(f"An array for ADC capture must have a size that"
-                             f" is a multiple of 2 bytes; found"
-                             f" {array.byte_length()} bytes.")
-            
-        trace_length_cycles = array.byte_length() // channel.interface_width_bytes
         
-        # Integration kernel is always 1 sample wide
-        if (integration_kernel is not None 
-                and (integration_kernel.byte_length() // 4) != trace_length_cycles):
-            raise ValueError(f"Integration kernel length"
-                             f" ({integration_kernel.byte_length() // 4})"
-                             f" does not match trace length ({trace_length_cycles}).")
-        
-        # See if any DMAs are using the same physical channel as the one we
-        # want to use, and if so, use that DMA. If not, request a new one
-        # from the resource
-        dma = None
         if integration_kernel is not None:
+            if not isinstance(integration_kernel, self._CMACCKernelArray):
+                raise TypeError(f"If provided, kernel must be a `CMACCKernelArray`;"
+                                f" received {integration_kernel}.")
+        
+            # Integration kernel is always 1 sample wide
+            if isinstance(capture_length, int):
+                if integration_kernel.byte_length() // 4 != (capture_length // 16):
+                    raise ValueError(f"Integration kernel length"
+                                    f" ({integration_kernel.byte_length() // 4})"
+                                    f" does not match array length ({capture_length // 16}).")
+            else:
+                print("WARNING: Unable to determine length of capture at compile time."
+                      " Make sure that the capture has a valid length and start"
+                      " address, or unintentional memory overwriting may occur.")
+            
+            # See if any DMAs are using the same physical channel as the one we
+            # want to use, and if so, use that DMA. If not, request a new one
+            # from the resource
+            dma = None
             for d in self._CMACCDMA.instances:
                 if d.physical_channel == channel and not d._released:
                     dma = d
                     break
             if dma is None:
                 dma = self._CMACCDMA(physical_channel=channel)
+
             fifo_name = f"cmacc_dma{dma._resource_id}_fifo"
             datamover_name = f"cmacc_dm{dma._resource_id}"
-            trace_address = integration_kernel.word_address()
+            dma_address = integration_kernel.word_address()
+            capture_length_cycles = capture_length // 4
         else:
+            if isinstance(capture_length, int):
+                if capture_length % 16 != 0:
+                    raise ValueError(f"An array for ADC capture without integration"
+                                    " must have a size that is a multiple of 16"
+                                    f" bytes; found {capture_length} bytes.")
+            else:
+                print("WARNING: Unable to determine length of capture at compile time."
+                      " Make sure that the capture has a valid length and start"
+                      " address, or unintentional memory overwriting may occur.")
+            
+            
+            # See if any DMAs are using the same physical channel as the one we
+            # want to use, and if so, use that DMA. If not, request a new one
+            # from the resource
+            dma = None
             for d in self._ADCDMA.instances:
                 if d.physical_channel == channel and not d._released:
                     dma = d
                     break
             if dma is None:
                 dma = self._ADCDMA(physical_channel=channel)
+
             fifo_name = f"adc_dma{dma._resource_id}_fifo"
             datamover_name = f"adc_dm{dma._resource_id}"
-            trace_address = 0
+            dma_address = 0
+            capture_length_cycles = capture_length // 16
             
         # Store a reference to the DMA chosen in the Channel object
         channel.dma = dma
         
         # Add the descriptor address to the FIFO for the DMA
-        descriptor = dma.request_descriptor(trace_address, trace_length_cycles)
-        self._active_sequencer.bus_write(address=Firmware.sequencer_bus_decoder[fifo_name].address().value(),
+        descriptor = dma.request_descriptor(dma_address, capture_length_cycles)
+        fifo_bus_address = Firmware.sequencer_bus_decoder[fifo_name].address().value()
+        self._active_sequencer.bus_write(address=fifo_bus_address,
                                          data=descriptor,
-                                         comment=f"Add descriptor with parameters {descriptor.kwargs} to DMA FIFO for ADC switch output {dma._resource_id} (connected to ADC{channel.num})")
+                                         comment=f"Add descriptor with parameters"
+                                                f" {descriptor.kwargs} to DMA FIFO for ADC"
+                                                f" switch output {dma._resource_id}"
+                                                f" (connected to ADC{channel.num})")
         
         # Configure the DataMover
-        capture_byte_address = array.byte_address() + offset*4
-        capture_byte_length = length*4 if length is not None else array.byte_length()
-        self._sequencer_command_dm(datamover_name, 
-                                   capture_byte_address, 
-                                   capture_byte_length, 
-                                   tag=datamover_tag)
+        self._sequencer_command_dm(datamover_name, capture_address, capture_length, tag=datamover_tag)
     
     def generate(self, channel, array):
         """
@@ -2603,6 +2667,74 @@ class Acadia:
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
                                          data=descriptor, 
                                          comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
+
+    def generate_constant(self, channel, value, length):
+        """
+        Generate a constant signal on a DAC channel.
+        :param channel: Physical channel to capture from.
+        :type channel: :class:`Channel` or int
+        :param value: The constant value to generate
+        :type value: int, float, complex, or a Symbol with value type of int,
+        float, or complex
+        :param length: The length of the signal in units of cycles. 
+        :type length: int or Symbol
+        """
+        if not isinstance(channel, Channel):
+            raise TypeError(f"Channel must be of type `Channel`;"
+                            f" received {channel}.")
+            
+        if not channel.is_dac:
+            raise TypeError(f"Channel must be a DAC;"
+                            f" received {channel}.")
+            
+        dma = self._dac_dmas[channel.num]
+        
+        # Store a reference to the DMA chosen in the Channel object
+        channel.dma = dma
+            
+        # Based on the value, determine how we need to allocate
+        if (isinstance(value, int) or isinstance(value, float) or isinstance(value, complex)):
+            if value == 0:
+                descriptor = dma.request_descriptor(0, length, fixed=True, blank=True)
+            else:
+                mem = self.DACArray[channel.num](size=16)
+                self._dac_constants.append((mem,value))
+                descriptor = dma.request_descriptor(mem.word_address(), length, fixed=True)
+        elif isinstance(value, Symbol) and value.value_type() in [int, float, complex]:
+            mem = self.DACArray[channel.num](size=16)
+            self._dac_constants.append((mem,value))
+            descriptor = dma.request_descriptor(mem.word_address(), length, fixed=True)
+        else:
+            raise TypeError("Symbolic constants must be of type `int`,"
+                             f" `float`, `complex`, or a `Symbol` with a value"
+                             f" type of one of these (received {value}).")
+        
+        fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
+        return self._active_sequencer.bus_write(address=fifo_device.address().value(),
+                                         data=descriptor, 
+                                         comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
+
+    def configure(self):
+        """
+        Configure various settings to prepare for running a program.
+        This included loading internally-store constants into memory
+        and configuring the ADC switch. 
+        """
+
+        # Load DAC constants
+        # The DAC interface width is 128 bits, which is 4 complex samples
+        for mem,constant in self._dac_constants:
+            mem.memory[:] = Channel.to_samples(np.array([constant]*4))
+
+        # Configure the ADC AXIS Switch according to the DMA settings
+        # For any DMAs with instructions, connect to the stored physical channel
+        self._ADC_AXIS_switch.disconnect()
+        for dma in self._ADCDMA.instances:
+            if dma.Instruction.usage() > 0:
+                self._ADC_AXIS_switch.connect(dma._resource_id, dma.physical_channel.num)
+        for dma in self._CMACCDMA.instances:
+            if dma.Instruction.usage() > 0:
+                self._ADC_AXIS_switch.connect(dma._resource_id+4, dma.physical_channel.num)
 
     def channels_almost_done(self, *channels):
         """
@@ -2649,20 +2781,6 @@ class Acadia:
             mask |= 1 << ((4 if isinstance(dma, self._CMACCDMA) else 0) + dma._resource_id)
         bus_address = Firmware.datamover_controller.address().value() + 1
         return self._active_sequencer.bus_read(bus_address) & mask != 0
-
-    def configure_adc_switch(self):
-        """
-        Run the encapsulated program on Acadia hardware. 
-        """
-        # Configure the ADC AXIS Switch according to the DMA settings
-        # For any DMAs with instructions, connect to the stored physical channel
-        self._ADC_AXIS_switch.disconnect()
-        for dma in self._ADCDMA.instances:
-            if dma.Instruction.usage() > 0:
-                self._ADC_AXIS_switch.connect(dma._resource_id, dma.physical_channel.num)
-        for dma in self._CMACCDMA.instances:
-            if dma.Instruction.usage() > 0:
-                self._ADC_AXIS_switch.connect(dma._resource_id+4, dma.physical_channel.num)
 
     def reset_fifos(self, *args):
         """
@@ -2816,19 +2934,16 @@ class Acadia:
     def _create_cache(self):
         def _cache_getitem(cache_self, key):
             proc = Processor.active_processor()
-            if proc is None:
-                return cache_self.memory[key]
-            elif isinstance(proc, Sequencer):
-                return proc.bus_read(Firmware.sequencer_bus_decoder["cache"].address().value() + key)
-            else:
-                raise TypeError(f"Unable to access cache on processor {proc}.")
+            if isinstance(proc, Sequencer):
+                return proc.bus_read(cache_self.word_address() + key)
+            return Operation("getitem", cache_self, key)
             
         def _cache_setitem(cache_self, key, value):
             proc = Processor.active_processor()
             if proc is None:
                 cache_self.memory[key] = value
             elif isinstance(proc, Sequencer):
-                proc.bus_write(address=Firmware.sequencer_bus_decoder["cache"].address().value() + key,
+                proc.bus_write(address=cache_self.word_address() + key,
                                data=value,
                                comment=f"Write to cache address {key}")
             else:
@@ -2842,16 +2957,20 @@ class Acadia:
             base_word_address=Firmware.sequencer_bus_decoder["cache"].address().value(),
             base_byte_address=Firmware.CACHE_MEMORY_ADDRESS,
             word_width=32,
-            memory_size=Firmware.CACHE_MEMORY_SIZE_BITS // 8)
+            memory_size=Firmware.CACHE_MEMORY_SIZE_BITS // 8,
+            default_getitem=False)
         
     def _create_dac_arrays(self):
-        # The elements of DACArrays are samples
         self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {"channel": self.DAC(i)},
             base_word_address=0,
             base_byte_address=(Firmware.DAC_MEMORY_BASE_ADDRESS 
                                + i*(Firmware.DAC_MEMORY_SIZE_BITS // 8)),
             word_width=128,
             memory_size=Firmware.DAC_MEMORY_SIZE_BITS // 8) for i in range(16)]
+        
+        # In addition to the arrays themselves, store an internal reference
+        # to constants that will be loaded into memory when the program is configured
+        self._dac_constants = []
         
     def _create_cmacc_kernel_arrays(self):
         self.CMACCKernelArray = [ManagedMemory(f"CMACCKernel{i}Array", (), {},
@@ -2889,7 +3008,7 @@ class Acadia:
             word_width=8,
             memory_size=2**18)
         
-    def _attach_resource(self, resource_manager, mem_cast='B'):
+    def _attach_resource(self, resource_manager, mem_cast=np.uint8):
         """
         Maps the memory associated with a managed resource in the physical 
         address space of the hardware. Instances of `memoryview` are assigned
@@ -2913,10 +3032,13 @@ class Acadia:
         
         for instance in resource_manager.instances:
             start_byte = instance.byte_address() - resource_manager.base_byte_address
-            end_byte = start_byte + instance.byte_length()
-            instance.memory = memoryview(m)[start_byte:end_byte].cast(mem_cast)
+            instance.memory = np.frombuffer(m, 
+                                            dtype=np.uint8, 
+                                            offset=start_byte, 
+                                            count=instance.byte_length()).view(mem_cast)
+
         
-    def _attach_memory(self, address, size, mem_cast='B'):
+    def _attach_memory(self, address, size, mem_cast=np.uint8):
         """
         Maps a region of memory in the physical address space of the hardware.
         
@@ -2933,7 +3055,7 @@ class Acadia:
             address)
         self._mem_maps.append(m)
         
-        return memoryview(m).cast(mem_cast)
+        return np.frombuffer(m, dtype=np.uint8).view(mem_cast)
 
     def _sequencer_command_dm(self, datamover_name, address, size, tag=0xA, incr=True):
         """

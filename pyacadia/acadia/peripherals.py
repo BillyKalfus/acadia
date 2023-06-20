@@ -256,28 +256,28 @@ class ZDMA:
     
     # Register offsets
     ERR_CTRL = 0
-    CH_ISR = 0x100
-    CH_IMR = 0x104
-    CH_IEN = 0x108
-    CH_IDS = 0x10C
-    CH_CTRL0 = 0x110
-    CH_CTRL1 = 0x114
-    CH_FCI = 0x118
-    CH_STATUS = 0x11C
-    CH_DATA_ATTR = 0x120
-    CH_DSCR_ATTR = 0x124
-    CH_SRC_DSCR_WORD0 = 0x128
-    CH_DST_DSCR_WORD0 = 0x138
-    CH_WR_ONLY_WORD0 = 0x148
-    CH_SRC_START_LSB = 0x158
-    CH_SRC_START_MSB = 0x15C
-    CH_DST_START_LSB = 0x160
-    CH_DST_START_MSB = 0x164
-    CH_TOTAL_BYTE = 0x188
-    CH_RATE_CTRL = 0x18C
-    CH_IRQ_SRC_ACCT = 0x190
-    CH_IRQ_DST_ACCT = 0x194
-    CH_CTRL2 = 0x200
+    CH_ISR = 0x100 >> 2
+    CH_IMR = 0x104 >> 2
+    CH_IEN = 0x108 >> 2
+    CH_IDS = 0x10C >> 2
+    CH_CTRL0 = 0x110 >> 2
+    CH_CTRL1 = 0x114 >> 2
+    CH_FCI = 0x118 >> 2
+    CH_STATUS = 0x11C >> 2
+    CH_DATA_ATTR = 0x120 >> 2
+    CH_DSCR_ATTR = 0x124 >> 2
+    CH_SRC_DSCR_WORD0 = 0x128 >> 2
+    CH_DST_DSCR_WORD0 = 0x138 >> 2
+    CH_WR_ONLY_WORD0 = 0x148 >> 2
+    CH_SRC_START_LSB = 0x158 >> 2
+    CH_SRC_START_MSB = 0x15C >> 2
+    CH_DST_START_LSB = 0x160 >> 2
+    CH_DST_START_MSB = 0x164 >> 2
+    CH_TOTAL_BYTE = 0x188 >> 2
+    CH_RATE_CTRL = 0x18C >> 2
+    CH_IRQ_SRC_ACCT = 0x190 >> 2
+    CH_IRQ_DST_ACCT = 0x194 >> 2
+    CH_CTRL2 = 0x200 >> 2
     
     def __post_init__(self):
         self.calculate_registers()
@@ -325,28 +325,30 @@ class ZDMA:
         # bit 0: enable FCI
         ch_fci_value |= self.fci_enable
         
-        self._regs[ZDMA.CH_FCI] = ch_fci_value.to_bytes(4, "little")
+        self._regs[ZDMA.CH_FCI] = ch_fci_value
         
         # Source and destination
-        self._regs[ZDMA.CH_SRC_START_LSB] = self.src.to_bytes(8, "little")
-        self._regs[ZDMA.CH_DST_START_LSB] = self.dst.to_bytes(8, "little")
+        self._regs[ZDMA.CH_SRC_START_LSB] = self.src
+        self._regs[ZDMA.CH_DST_START_LSB] = self.dst
         
         # Write the size to the source and destination registers
-        self._regs[ZDMA.CH_SRC_DSCR_WORD0+8] = self.size.to_bytes(4, "little")
-        self._regs[ZDMA.CH_DST_DSCR_WORD0+8] = self.size.to_bytes(4, "little")
+        self._regs[ZDMA.CH_SRC_DSCR_WORD0+2] = self.size
+        self._regs[ZDMA.CH_DST_DSCR_WORD0+2] = self.size
         
     def attach(self, mem):
         """
         Attaches the object to a memory map of the DMA registers.
+        :param mem: A memory-mapped numpy array pointing to the DMA registers
+        :type mem: numpy.ndarray with dtype np.uint32
         """ 
-        self._mem = mem.cast("B")
+        self._mem = mem
         
     def configure_hardware(self):
         """
         Writes the internally-stored configuration to the hardware.
         """
         for reg,value in self._regs.items():
-            self._mem[reg:reg+len(value)] = value
+            self._mem[reg] = value
     
     def start_transfer(self):
         """
@@ -354,9 +356,7 @@ class ZDMA:
         """
         proc = Processor.active_processor()
         if proc is None:
-            self._mem[ZDMA.CH_CTRL2:ZDMA.CH_CTRL2+4] = (1).to_bytes(4, "little")
-        if isinstance(proc, PythonProcessor):
-            return proc.call("PS_ZDMA.start_transfer", self)
+            self._mem[ZDMA.CH_CTRL2] = 1
         elif isinstance(proc, Sequencer):
             # Use the flow control interface to start the copy
             return proc.bus_write(address=self.fci_bus_address,
@@ -371,9 +371,9 @@ class ZDMA:
         :param clear: Clear the total byte count.
         :type clear: bool, optional
         """
-        count = int.from_bytes(self._mem[ZDMA.CH_TOTAL_BYTE:ZDMA.CH_TOTAL_BYTE+4], "little")
+        count = self._mem[ZDMA.CH_TOTAL_BYTE]
         if clear:
-            self._mem[ZDMA.CH_TOTAL_BYTE:ZDMA.CH_TOTAL_BYTE+4] = (0).to_bytes(4, "little")
+            self._mem[ZDMA.CH_TOTAL_BYTE] = 0
         return count
     
     def status(self):
@@ -387,9 +387,7 @@ class ZDMA:
         """
         proc = Processor.active_processor()
         if proc is None:
-            return int.from_bytes(self._mem[ZDMA.CH_STATUS:ZDMA.CH_STATUS+4], "little")
-        elif isinstance(proc, PythonProcessor):            
-            return proc.call("PS_ZDMA.status", self)
+            return self._mem[ZDMA.CH_STATUS]
         elif isinstance(proc, Sequencer):
             # Get the internally-stored credit acknowledgement
             return proc.bus_read(self.bus_address + self.channel)
@@ -405,7 +403,7 @@ class ZDMA:
         :rtype: int
         """
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             status = self.status()
             return (status == 0) or (status == 3)
         elif isinstance(proc, Sequencer):
@@ -443,9 +441,11 @@ class AXISSwitch:
 
     def attach(self, mem):
         """
-        Attaches the instance to a view of its registers. The `memoryview`
+        Attaches the instance to a view of its registers.
+        :param mem: A memory-mapped numpy array pointing to the registers
+        :type mem: numpy.ndarray with dtype np.uint32
         """
-        self._mem = mem.cast("I")
+        self._mem = mem
     
     def connect(self, mi, si, commit=True):
         """
