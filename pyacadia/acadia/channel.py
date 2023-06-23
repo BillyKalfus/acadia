@@ -387,7 +387,7 @@ class Channel:
         
         if (update_source is not None 
               and update_source not in ["immediate", "slice", "tile", "sysref", "pl"]):
-            raise ValueError(f"Invalid source {source}.")
+            raise ValueError(f"Invalid source {update_source}.")
         
         settings = self.RFDC_struct("XRFdc_CoarseDelay_Settings*")
         self.RFDC_call_checked("GetCoarseDelaySettings",
@@ -530,7 +530,7 @@ class Channel:
         :type high: bool, optional
         """
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             if low:
                 self.RFDC_call("WriteReg16Wrapper", 
                                self.register_base_address(), 
@@ -560,7 +560,7 @@ class Channel:
         Reset the value of the NCO phase accumulator.
         """
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             self.RFDC_call_checked("ResetNCOPhase",
                            self.converter_type(), self.tile, self.block)
                 
@@ -590,7 +590,7 @@ class Channel:
             raise TypeError("VOP can only be set on DAC channels.")
          
         proc = Processor.active_processor()
-        if proc is None or isinstance(proc, PythonProcessor):
+        if proc is None:
             self.RFDC_call_checked("SetDACVOP", self.tile, self.block, vop)
                 
         elif isinstance(proc, Sequencer):
@@ -961,7 +961,7 @@ class Channel:
         :return: The interpolation factor set for the DAC channel.
         :rtype: int
         """
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetInterpolationFactor", self.tile, self.block, n)
         return n
         
@@ -1010,6 +1010,65 @@ class Channel:
                                 self.converter_type(), 
                                 self.tile, 
                                 self.block)
+
+    @classmethod
+    def set_sysref_enabled(cls, en):
+        """
+        Enable or disable analog SYSREF capture.
+        """
+        cls.RFDC_call_checked("MTS_Sysref_Config", 
+                              cls.dac_mts_config, 
+                              cls.adc_mts_config,
+                              en)
+
+    @classmethod    
+    def MTS_init(cls):
+        cls.DAC_MTS_config = cls.RFDC_struct("XRFdc_MultiConverter_Sync_Config*")
+        xrfdc.lib.XRFdc_MultiConverter_Init(cls.DAC_MTS_config, xrfdc.ffi.NULL, xrfdc.ffi.NULL, 0)
+        cls.ADC_MTS_config = cls.RFDC_struct("XRFdc_MultiConverter_Sync_Config*")
+        xrfdc.lib.XRFdc_MultiConverter_Init(cls.ADC_MTS_config, xrfdc.ffi.NULL, xrfdc.ffi.NULL, 0)
+
+    @classmethod
+    def MTS_sync(cls):
+        """
+        Run multi-tile synchronization.
+        """
+        cls.ADC_MTS_config.RefTile = 0
+        cls.ADC_MTS_config.Tiles = 0xF
+        cls.ADC_MTS_config.Target_Latency = -1
+        cls.ADC_MTS_config.SysRef_Enable = 1 # Disable SYSREF capture after the measurement
+
+        for dc in ["DAC", "ADC"]:
+            config = getattr(cls, f"{dc}_MTS_config")
+            config.RefTile = 0
+            config.Tiles = 0xF
+            config.Target_Latency = -1
+            config.SysRef_Enable = 1 # Disable SYSREF capture after the measurement
+            
+            for run in ["pre", "post"]:
+                status = cls.RFDC_call("MultiConverter_Sync", 
+                                        getattr(xrfdc.lib, f"XRFDC_{dc}_TILE"),
+                                        config)
+                
+                if status != xrfdc.lib.XRFDC_MTS_OK:
+                    raise ValueError(f"Call to `MultiConverter_Sync` ({dc} {run}) failed with"
+                                    f" return value {status}.")
+                
+                result = {}
+                for tile in range(4):
+                    interpolation = cls(tile, 0, is_dac=(dc == "DAC")).get_interpolation()
+                    result[f"{dc}_tile{tile}_interpolation_{run}"] = interpolation
+                    result[f"{dc}_tile{tile}_latency_{run}"] = config.Latency[tile]
+                    result[f"{dc}_tile{tile}_adjusted_delay_{run}"] = config.Offset[tile]
+
+                # Find the longest latency
+                latencies = [result[f"{dc}_tile{tile}_latency_{run}"] for tile in range(4)]
+                result[f"{dc}_max_latency_{run}"] = max(latencies)
+
+                # Set the target value and reiterate
+                config.Target_Latency = result[f"{dc}_max_latency_{run}"] + 16
+
+        return result
     
     def samples_to_bytes(self, samples):
         """
