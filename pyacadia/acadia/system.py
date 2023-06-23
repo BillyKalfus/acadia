@@ -2338,7 +2338,9 @@ class Acadia:
         d["ADC_ref_clk_divider"] = RFClk.LMK.get_output_divider(RFClk.LMK.DCLK_RFDC_ADC)
         d["DAC_LMX_clk_divider"] = RFClk.LMK.get_output_divider(RFClk.LMK.DCLK_LMX_DAC)
         d["ADC_LMX_clk_divider"] = RFClk.LMK.get_output_divider(RFClk.LMK.DCLK_LMX_ADC)
+        d["RFDC_SYSREF_clk_divider"] = RFClk.LMK.get_output_divider(RFClk.LMK.SDCLK_RFDC)
         d["PL_clk_divider"] = RFClk.LMK.get_output_divider(RFClk.LMK.DCLK_PL)
+        d["PL_SYSREF_clk_divider"] = RFClk.LMK.get_output_divider(RFClk.LMK.SDCLK_PL)
         d["PLL1_out_frequency"] = clkin * d["PLL1_N"] / d["input_R"]
         d["PLL2_out_frequency"] = d["PLL1_out_frequency"] * d["PLL2_P"] * d["PLL2_N"] / d["PLL2_R"]
         

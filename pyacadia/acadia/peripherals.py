@@ -119,24 +119,7 @@ class RFClk:
             Write a big-endian 16-bit number.
             """
             cls.write_reg(address, (data >> 8) & (mask >> 8) & 0xFF)
-            cls.write_reg(address, data & mask & 0xFF)
-        
-        @classmethod
-        def set_output_divider(cls, output, div):
-            """
-            Set the value of an output divider on a DCLK output.
-            """
-            cls.write_reg(0x100 + 4*output, div & 0x1F)
-            
-        @classmethod
-        def get_output_divider(cls, output):
-            """
-            Set the value of an output divider on a DCLK output.
-            """
-            reg = cls.read_reg(0x100 + 4*output) & 0x1F
-            if reg == 0:
-                return 32
-            return reg
+            cls.write_reg(address+1, data & mask & 0xFF)
         
         @classmethod
         def set_input(cls, clkin):
@@ -197,7 +180,491 @@ class RFClk:
                 return 2
             return reg
         
+        @staticmethod
+        def get_output_base(output):
+            """
+            Returns the base register for the settings for a given
+            output and its corresponding SDCLK output. Provided
+            output should be even-numbered.
+            """
+            if output % 2 != 0:
+                raise ValueError("Must set `output` to an even-numbered channel"
+                                 f" (received {output}).")
+            return 0x100 + 8*(output // 2)
         
+        @classmethod
+        def set_output_drive_level_increased(cls, output, en):
+            """
+            Sets the CLKout_X_Y_ODL field.
+            """
+            addr = cls.get_output_base(output)
+            reg = cls.read_reg(addr)
+            if en:
+                reg |= (1 << 6)
+            else:
+                reg &= ~(1 << 6)
+            cls.write_reg(addr, reg)
+
+        @classmethod
+        def get_output_drive_level_increased(cls, output):
+            addr = cls.get_output_base(output)
+            reg = cls.read_reg(addr)
+            return bool(reg & (1 << 6))
+        
+        @classmethod
+        def set_input_drive_level_increased(cls, output, en):
+            """
+            Sets the CLKout_X_Y_IDL field.
+            """
+            addr = cls.get_output_base(output)
+            reg = cls.read_reg(addr)
+            if en:
+                reg |= (1 << 5)
+            else:
+                reg &= ~(1 << 5)
+            cls.write_reg(addr, reg)
+
+        @classmethod
+        def get_input_drive_level_increased(cls, output):
+            addr = cls.get_output_base(output)
+            reg = cls.read_reg(addr)
+            return bool(reg & (1 << 5))
+        
+        @classmethod
+        def set_output_divider(cls, output, div):
+            """
+            Set the value of an output divider on a DCLK output.
+            """
+            addr = cls.get_output_base(output)
+            reg = cls.read_reg(addr)
+            reg &= ~0x1F # Clear the bits associated with the field
+            if div != 32:
+                reg |= div & 0x1F
+            cls.write_reg(addr, reg)
+            
+        @classmethod
+        def get_output_divider(cls, output):
+            """
+            Set the value of an output divider on a DCLK output.
+            """
+            addr = cls.get_output_base(output)
+            reg = cls.read_reg(addr) & 0x1F
+            if reg == 0:
+                return 32
+            return reg
+        
+        @classmethod
+        def set_output_digital_delay(cls, output, count_high, count_low):
+            """
+            Sets the number of cycles the output is high and low by programming
+            the DCLKOUTx_DDLY_CNTH/L registers.
+            """
+            reg = 0
+            if count_high != 16:
+                reg |= count_high << 4
+            if count_low != 16:
+                reg |= count_low
+            cls.write_reg(cls.get_output_base(output)+1, reg)
+
+        @classmethod
+        def get_output_digital_delay(cls, output):
+            reg = cls.read_reg(cls.get_output_base(output)+1)
+            cnth = (reg >> 4) & 0xF
+            cntl = reg & 0xF
+            return ((16 if cntl == 0 else cntl), (16 if cnth == 0 else cnth))
+        
+        @classmethod
+        def set_output_analog_delay(cls, output, delay):
+            """
+            Configures the analog delay for an output by setting DCLKOUTx_ADLY
+            and DCLKOUTx_ADLY_PD. Set `delay` to 0 to disable the delay and
+            power down the circuitry; otherwise the delay (in ps) must be
+            500 + k*25, where 1 <= k <= 23.
+            """
+            # Power the analog delay up or down depending on the arguments
+            pd_addr = cls.get_output_base(output) + 6
+            pd_reg = cls.read_reg(pd_addr)
+            
+            if delay == 0:
+                pd_reg |= 1 << 4
+            else:
+                pd_reg &= ~(1 << 4)
+            
+            cls.write_reg(pd_addr, pd_reg)
+
+            if ((delay > 1075 or delay < 500) and (delay != 0)) or (delay % 25 != 0):
+                raise ValueError(f"Invalid delay value {delay}.")
+            
+            dly_addr = cls.get_output_base(output) + 3
+            dly_reg = cls.read_reg(dly_addr)
+            dly_reg &= ~(0x1F << 3)
+            dly_reg |= ((delay - 500) // 25) << 3
+            cls.write_reg(dly_addr, dly_reg)
+
+        @classmethod
+        def get_output_analog_delay(cls, output):
+            pd_addr = cls.get_output_base(output) + 6
+            pd_reg = cls.read_reg(pd_addr)
+
+            if pd_reg & (1 << 4):
+                return 0
+            
+            dly_addr = cls.get_output_base(output) + 3
+            dly_reg = cls.read_reg(dly_addr)
+            return ((dly_reg >> 3) & 0x1F)*25 + 500
+        
+        @classmethod
+        def set_output_mux(cls, output, mux):
+            """
+            Multiplexes a particular output by setting the DCLKOUTx_MUX and 
+            DCLKOUTx_ADLY_MUX registers. Note that the output divider must not
+            be 1 when `mux` is 0; `mux` should be set to 1 or 7 when the 
+            divider is 1.
+            Valid values are:
+            - mux=0: Divider only
+            - mux=1: Divider with duty cycle correction and half-step
+            - mux=2: Bypass divider
+            - mux=3: Analog delay + divider without duty cycle correction or half-step
+            - mux=7: Analog delay + divider with duty cycle correction and half-step
+            """      
+            addr = cls.get_output_base(output) + 3
+            reg = cls.read_reg(addr)
+            reg &= ~0x7
+            reg |= mux
+            cls.write_reg(addr, mux)
+
+        @classmethod
+        def get_output_mux(cls, output):
+            return cls.read_reg(cls.get_output_base(output) + 3) & 0x7
+        
+        @classmethod
+        def set_sdclk_mux(cls, output, mux):
+            """
+            Sets the input to the SDCLK outputs. Valid values are:
+            - `mux=0`: Device clock output
+            - `mux=1`: SYSREF output
+            """
+            addr = cls.get_output_base(output-1) + 4
+            reg = cls.read_reg(addr)
+            if mux:
+                reg |= (1 << 5)
+            else:
+                reg &= ~(1 << 5)
+            cls.write_reg(addr, reg)
+
+        @classmethod
+        def get_sdclk_mux(cls, output):
+            return bool(cls.read_reg(cls.get_output_base(output-1) + 4) & (1 << 5))
+        
+        @classmethod
+        def set_sdclk_digital_delay(cls, output, delay):
+            """
+            Sets the digital delay of an SDCLK output in units of VCO cycles. 
+            Valid values are 0 or 2-11 inclusive.
+            """
+            addr = cls.get_output_base(output-1) + 4
+            reg = cls.read_reg(addr)
+            reg &= ~(0xF << 1)
+            if delay != 0:
+                reg |= (delay-1) << 1
+           
+            cls.write_reg(addr, reg)
+
+        @classmethod
+        def get_sdclk_digital_delay(cls, output):
+            addr = cls.get_output_base(output-1) + 4
+            reg = cls.read_reg(addr)
+            dly = (reg >> 1) & 0xF
+            return (0 if dly == 0 else dly+1)
+
+        @classmethod
+        def set_sdclk_analog_delay(cls, output, delay, enable=True):
+            """
+            Enable/disable and set value of analog delay.
+            Valid values of `delay` (in units of ps) are 0, 600, 750, 900,
+            1050, 1200, 1350, 1500, 1650, 1800, 1950, 2100, or 2250.
+            """
+            reg = 0
+            reg |= (enable << 4)
+            
+            got_delay = False
+            for i,d in enumerate([0,600,750,900,1050,1200,1350,1500,1650,1800,1950,2100,2250]):
+                if delay == d:
+                    reg |= i
+                    got_delay = True
+                    break
+            if not got_delay:
+                raise ValueError(f"Invalid analog delay value {delay}.")
+
+            cls.write_reg(cls.get_output_base(output-1) + 5, reg)
+
+        @classmethod
+        def get_sdclk_analog_delay(cls, output):
+            reg = cls.read_reg(cls.get_output_base(output-1) + 5)
+            for i,d in enumerate([0,600,750,900,1050,1200,1350,1500,1650,1800,1950,2100,2250]):
+                if reg & 0xF == i:
+                    return d
+                
+            raise ValueError(f"Read invalid analog delay value (reg contains {reg}).")
+
+        @classmethod
+        def get_sdclk_analog_delay_enabled(cls, output):
+            reg = cls.read_reg(cls.get_output_base(output-1) + 5)
+            return bool(reg & (1 << 4))
+        
+        @classmethod
+        def set_output_powerdown_state(cls, 
+                                       output,
+                                       disable_output=False, 
+                                       disable_digital_delay=False, 
+                                       disable_glitchless_halfstep=True,
+                                       disable_analog_delay_glitchless=True,
+                                       disable_analog_delay=True,
+                                       disable_sdclk=False):
+            """
+            Set the power state of various elements on the output path of a 
+            given output and its corresponding SDCLK output.
+            """
+            reg = 0
+            reg |= disable_digital_delay << 7
+            reg |= disable_glitchless_halfstep << 6
+            reg |= disable_analog_delay_glitchless << 5
+            reg |= disable_analog_delay << 4
+            reg |= disable_output << 3
+            reg |= disable_sdclk << 0
+            cls.write_reg(cls.get_output_base(output) + 6, reg)
+
+        @classmethod
+        def get_output_powerdown_state(cls, output):
+            return cls.read_reg(cls.get_output_base(output) + 6)
+        
+        @classmethod
+        def set_drive(cls, output, drive):
+            """
+            Sets the output voltage format and inverter settings for a 
+            given output or SDCLK output. Valid values are:
+            - `drive=0`: Power down
+            - `drive=1`: LVDS
+            - `drive=2`: HSDS 6 mA
+            - `drive=3`: HSDS 8 mA
+            - `drive=4`: HSDS 10 mA
+            - `drive=5`: LVPECL 1600 mV
+            - `drive=6`: LVPECL 2000 mV
+            - `drive=7`: LCPECL
+            - `drive=9`: LVDS, inverted
+            - `drive=10`: HSDS 6 mA, inverted
+            - `drive=11`: HSDS 8 mA, inverted
+            - `drive=12`: HSDS 10 mA, inverted
+            - `drive=13`: LVPECL 1600 mV, inverted
+            - `drive=14`: LVPECL 2000 mV, inverted
+            - `drive=15`: LCPECL, inverted
+            """
+            addr = cls.get_output_base(output - (output % 2)) + 7
+            reg = cls.read_reg(addr)
+            if output % 2 == 0:
+                reg &= ~0xF
+                reg |= drive
+            else:
+                reg &= ~(0xF << 4)
+                reg |= drive << 4
+            cls.write_reg(addr, reg)
+
+        @classmethod
+        def get_drive(cls, output):
+            addr = cls.get_output_base(output - (output % 2)) + 7
+            reg = cls.read_reg(addr)
+            if output % 2 == 1:
+                return (reg >> 4) & 0xF
+            return reg & 0xF
+
+        @classmethod
+        def enable_sysref_power(cls):
+            """
+            Performs the following register writes:
+            - Clears SYSREF_PD, SYSREF_DDLY_PD, SYSREF_GBL_PD, SYSREF_PLSR_PD
+            - Sets SYNC_EN to enable SYNC pulse connectivity (both internal 
+              and external)
+            """
+            reg140 = cls.read_reg(0x140)
+            reg140 &= 0xF0 # Clear SYSREF_PD, SYSREF_DDLY_PD, SYSREF_GBL_PD, SYSREF_PLSR_PD
+            cls.write_reg(0x140, reg140)
+
+            reg143 = cls.read_reg(0x143)
+            reg143 |= (1 << 4)  # Enable SYNC_EN
+            cls.write_reg(0x143, reg143)
+
+        @classmethod
+        def get_sync_mode(cls):
+            """
+            Reads the SYNC_MODE field.
+            """
+            return cls.read_reg(0x143) & 0x3
+        
+        @classmethod
+        def set_sync_mode(cls, mode):
+            """
+            Sets the SYNC_MODE field. The behavior is:
+            - mode=0: SYNC and SYSREF disabled
+            - mode=1: SYNC generated by SYNC pin
+            - mode=2: SYNC generated by pulser upon transition of SYNC pin
+            - mode=3: SYNC generated by pulser when writing to the SYSREF pulse
+                      count register
+            """
+            reg143 = cls.read_reg(0x143)
+            reg143 &= 0x3 # Clear the existing setting
+            reg143 |= (mode & 0x3)
+            cls.write_reg(0x143, reg143)
+
+        @classmethod
+        def set_sync_polarity(cls, invert):
+            """
+            Sets the SYNC polarity to non-inverted (`invert=False`) or 
+            inverted (`invert=True`).
+            """
+            reg143 = cls.read_reg(0x143)
+            if invert:
+                reg143 |= (1 << 5)
+            else:
+                reg143 &= ~(1 << 5)
+            cls.write_reg(0x143)
+
+        @classmethod
+        def get_sync_polarity(cls):
+            """
+            Determine whether the SYNC polarity is inverted or not.
+            """
+            return bool(cls.read_reg(0x143) & (1 << 5))
+        
+        @classmethod
+        def set_sysref_clr(cls, clr):
+            """
+            Resets and arms the SDCLKoutY_DDLY path, allowing local digital 
+            delays to take effect after a SYNC event
+            """
+            reg143 = cls.read_reg(0x143)
+            if clr:
+                reg143 |= (1 << 7)
+            else:
+                reg143 &= ~(1 << 7)
+            cls.write_reg(0x143)
+
+        @classmethod
+        def get_sysref_clr(cls):
+            """
+            Determine whether the digital delay paths are armed for 
+            synchronization.
+            """
+            return bool(cls.read_reg(0x143) & (1 << 7))
+
+        @classmethod
+        def set_sysref_pulse_count(cls, count):
+            """
+            Instructs the SYSREF pulser to generate the desired number of 
+            pulses. Only values of 1, 2, 4, or 8 are allowed.
+            """
+            if count == 1:
+                v = 0
+            elif count == 2:
+                v = 1
+            elif count == 4:
+                v = 2
+            elif count == 8:
+                v = 3
+            else:
+                raise ValueError("Only values of 1, 2, 4, or 8 are allowed for"
+                                 f" SYSREF pulsing (received {count}).")
+
+            cls.write_reg(0x13E, v)
+        
+        @classmethod
+        def set_output_divider_synchronization_enable(cls, output, state):
+            """
+            Sets or clears the SYNC_DIS bit for the provided output.
+            """
+            reg = cls.read_reg(0x144)
+            if state:
+                reg &= ~(1 << (output // 2))
+            else:
+                reg |= (1 << (output // 2))
+            cls.write_reg(0x144, reg)
+
+        @classmethod
+        def get_output_divider_synchronization_enable(cls, output):
+            """
+            Determines whether a particular output will be synchronized
+            upon a SYNC event by checking the value of the SYNC_DIS bit.
+            """
+            return bool(cls.read_reg(0x144) & (1 << (output // 2)))
+        
+        @classmethod
+        def set_sysref_divider_synchronization_enable(cls, en):
+            """
+            Enable or disable synchronization of the SYSREF divider upon a
+            SYNC event by setting or clearing the SYNC_DISSYSREF bit.
+            """
+            reg = cls.read_reg(0x144)
+            if en:
+                reg &- ~(1 << 7)
+            else:
+                reg |= (1 << 7)
+            cls.write_reg(0x144, reg)
+
+        @classmethod
+        def get_sysref_divider_synchronization_enable(cls):
+            return bool(cls.read_reg(0x144) & (1 << 7))
+        
+        @classmethod
+        def set_sysref_digital_delay(cls, delay):
+            """
+            Sets the SYSREF digital delay by programming the SYSREF_DDLY field.
+            """
+            if not isinstance(delay, int):
+                raise TypeError("SYSREF delay must be an integer"
+                                f" (received {delay}).")
+            if delay < 8 or delay > 8191:
+                raise ValueError("SYSREF digital delay must be between 8 and"
+                                 f" 8191 inclusive (received {delay}).")
+            cls.write_reg16(0x13C, delay, mask=0x1FFF)
+
+        @classmethod
+        def get_sysref_digital_delay(cls):
+            return cls.read_reg16(0x13C) & 0x1FFF
+        
+        @classmethod
+        def set_sysref_divider(cls, div):
+            """
+            Sets the SYSREF divider by programming the SYSREF_DIV field.
+            """
+            if not isinstance(div, int):
+                raise TypeError("SYSREF divider value must be an integer"
+                                f" (received {div}).")
+            if div < 8 or div > 8191:
+                raise ValueError("SYSREF divider value must be between 8 and"
+                                 f" 8191 inclusive (received {div}).")
+            cls.write_reg16(0x13A, div, mask=0x1FFF)
+
+        @classmethod
+        def get_sysref_divider(cls):
+            return cls.read_reg16(0x13A) & 0x1FFF
+        
+        @classmethod
+        def set_sysref_mux(cls, mux):
+            """
+            Multiplexes the signal driven on the SYNC/SYSREF path by setting
+            the SYSREF_MUX and SYSREF_CLKin0_MUX fields. Valid options are:
+            - 0: Input from pin/SPI, re-clocked to distribution clock
+            - 1: Input from pin/SPI, re-clocked to SYSREF clock
+            - 2: SYSREF pulser
+            - 3: SYSREF continuous (directly driven by SYSREF clock)
+            - 4: CLKin0 direct
+            """
+            # No need to do read-then-write because these are the only bits in
+            # the register
+            cls.write_reg(0x139, mux)
+
+        @classmethod
+        def get_sysref_mux(cls):
+            return cls.read_reg(0x139) & 0x7
         
     class LMX(RFClkChip):
         pass
