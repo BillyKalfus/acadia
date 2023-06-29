@@ -937,7 +937,23 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.DIN_TO {86} \
  ] $xlslice_ps_gpio_out_spi
 
-  set xlslice_ps_gpio_out_hedgehog [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_ps_gpio_out_hedgehog ]
+   set xlslice_ps_gpio_out_DDR4_C0_sys_rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_ps_gpio_out_DDR4_C0_sys_rst ]
+  set_property -dict [ list \
+   CONFIG.DIN_WIDTH {91} \
+   CONFIG.DOUT_WIDTH {1} \
+   CONFIG.DIN_FROM {85} \
+   CONFIG.DIN_TO {85} \
+ ] $xlslice_ps_gpio_out_DDR4_C0_sys_rst
+
+ set xlslice_ps_gpio_out_DDR4_C1_sys_rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_ps_gpio_out_DDR4_C1_sys_rst ]
+  set_property -dict [ list \
+   CONFIG.DIN_WIDTH {91} \
+   CONFIG.DOUT_WIDTH {1} \
+   CONFIG.DIN_FROM {84} \
+   CONFIG.DIN_TO {84} \
+ ] $xlslice_ps_gpio_out_DDR4_C1_sys_rst
+
+ set xlslice_ps_gpio_out_hedgehog [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 xlslice_ps_gpio_out_hedgehog ]
   set_property -dict [ list \
    CONFIG.DIN_WIDTH {91} \
    CONFIG.DOUT_WIDTH {80} \
@@ -945,13 +961,35 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.DIN_TO {0} \
  ] $xlslice_ps_gpio_out_hedgehog
 
+  set xpm_cdc_DDR4_C0_sys_rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C0_sys_rst ]
+  set_property -dict [ list \
+   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
+ ] $xpm_cdc_DDR4_C0_sys_rst
+
+ set xpm_cdc_DDR4_C1_sys_rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C1_sys_rst ]
+  set_property -dict [ list \
+   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
+ ] $xpm_cdc_DDR4_C1_sys_rst
+
+  set xpm_cdc_DDR4_C0_aresetn [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C0_aresetn ]
+  set_property -dict [ list \
+   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
+ ] $xpm_cdc_DDR4_C0_aresetn
+
+  set xpm_cdc_DDR4_C1_aresetn [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C1_aresetn ]
+  set_property -dict [ list \
+   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
+ ] $xpm_cdc_DDR4_C1_aresetn
+
   set xlconcat_ps_gpio_in [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_ps_gpio_in ]
   set_property -dict [ list \
-   CONFIG.NUM_PORTS {2} \
+   CONFIG.NUM_PORTS {4} \
    CONFIG.IN0_WIDTH.VALUE_SRC USER \
    CONFIG.IN1_WIDTH.VALUE_SRC USER \
    CONFIG.IN0_WIDTH {80} \
-   CONFIG.IN1_WIDTH {11} \
+   CONFIG.IN1_WIDTH {1} \
+   CONFIG.IN2_WIDTH {1} \
+   CONFIG.IN3_WIDTH {9} \
  ] $xlconcat_ps_gpio_in
 
   # Create instance: hedgehog
@@ -1621,17 +1659,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.SUBPRESET1 {Custom} \
  ] $ps
 
-  # Create instance: xpm_cdc_DDR4_C0_MIG, and set properties
-  set xpm_cdc_DDR4_C0_MIG [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C0_MIG ]
-  set_property -dict [ list \
-   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
- ] $xpm_cdc_DDR4_C0_MIG
-
-  # Create instance: xpm_cdc_DDR4_C1_MIG, and set properties
-  set xpm_cdc_DDR4_C1_MIG [ create_bd_cell -type ip -vlnv xilinx.com:ip:xpm_cdc_gen:1.0 xpm_cdc_DDR4_C1_MIG ]
-  set_property -dict [ list \
-   CONFIG.CDC_TYPE {xpm_cdc_sync_rst} \
- ] $xpm_cdc_DDR4_C1_MIG
 
   # Create interface connections
   connect_bd_intf_net -intf_net CLK104_PL_CLK_1 [get_bd_intf_ports CLK104_PL_CLK] [get_bd_intf_pins hedgehog/CLK104_PL_CLK]
@@ -1711,9 +1738,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   # Create port connections
   connect_bd_net -net ADCIO_1 [get_bd_ports ADCIO] [get_bd_pins hedgehog/ADCIO]
   connect_bd_net -net hedgehog_DACIO [get_bd_ports DACIO] [get_bd_pins hedgehog/DACIO]
-
-  connect_bd_net -net DDR4_C0_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C0_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C0_ui_clk] [get_bd_pins xpm_cdc_DDR4_C0_MIG/dest_clk]
-  connect_bd_net -net DDR4_C1_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C1_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C1_ui_clk] [get_bd_pins xpm_cdc_DDR4_C1_MIG/dest_clk]
   
   connect_bd_net [get_bd_pins hedgehog/PS_GPIO_IN] [get_bd_pins xlconcat_ps_gpio_in/In0]
   connect_bd_net [get_bd_pins xlconcat_ps_gpio_in/Dout] [get_bd_pins ps/emio_gpio_i]
@@ -1750,9 +1774,25 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net [get_bd_pins hedgehog/ps_gdma_clk] [get_bd_pins ps/perif_gdma_clk]
 
   connect_bd_net -net ps_pl_clk0 [get_bd_pins hedgehog/PS_clk_250] [get_bd_pins ps/pl_clk0]
-  connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins ps/pl_resetn0] [get_bd_pins xpm_cdc_DDR4_C0_MIG/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_MIG/src_rst]
-  connect_bd_net -net xpm_cdc_DDR4_C0_MIG_dest_rst_out [get_bd_pins DDR4_C0_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C0_MIG/dest_rst_out]
-  connect_bd_net -net xpm_cdc_DDR4_C1_MIG_dest_rst_out [get_bd_pins DDR4_C1_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C1_MIG/dest_rst_out]
+  connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins ps/pl_resetn0] [get_bd_pins xpm_cdc_DDR4_C0_aresetn/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_aresetn/src_rst]
+
+  connect_bd_net -net DDR4_C0_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C0_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C0_ui_clk] [get_bd_pins xpm_cdc_DDR4_C0_aresetn/dest_clk] [get_bd_pins xpm_cdc_DDR4_C0_sys_rst/dest_clk]
+  connect_bd_net [get_bd_pins DDR4_C0_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C0_aresetn/dest_rst_out]
+
+  connect_bd_net [get_bd_pins ps/emio_gpio_o] [get_bd_pins xlslice_ps_gpio_out_DDR4_C0_sys_rst/Din]
+  connect_bd_net [get_bd_pins xlslice_ps_gpio_out_DDR4_C0_sys_rst/Dout] [get_bd_pins xpm_cdc_DDR4_C0_sys_rst/src_rst]
+  connect_bd_net [get_bd_pins xpm_cdc_DDR4_C0_sys_rst/dest_rst_out] [get_bd_pins DDR4_C0_MIG/sys_rst]
+
+  connect_bd_net [get_bd_pins DDR4_C0_MIG/c0_init_calib_complete] [get_bd_pins xlconcat_ps_gpio_in/In1]
+
+  connect_bd_net -net DDR4_C1_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C1_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C1_ui_clk] [get_bd_pins xpm_cdc_DDR4_C1_aresetn/dest_clk] [get_bd_pins xpm_cdc_DDR4_C1_sys_rst/dest_clk]
+  connect_bd_net [get_bd_pins DDR4_C1_MIG/c0_ddr4_aresetn] [get_bd_pins xpm_cdc_DDR4_C1_aresetn/dest_rst_out]
+
+  connect_bd_net [get_bd_pins ps/emio_gpio_o] [get_bd_pins xlslice_ps_gpio_out_DDR4_C1_sys_rst/Din]
+  connect_bd_net [get_bd_pins xlslice_ps_gpio_out_DDR4_C1_sys_rst/Dout] [get_bd_pins xpm_cdc_DDR4_C1_sys_rst/src_rst]
+  connect_bd_net [get_bd_pins xpm_cdc_DDR4_C1_sys_rst/dest_rst_out] [get_bd_pins DDR4_C1_MIG/sys_rst]
+
+  connect_bd_net [get_bd_pins DDR4_C1_MIG/c0_init_calib_complete] [get_bd_pins xlconcat_ps_gpio_in/In2]
   
   # Create the HEDGEHOG logic before we make the wrapper
   source [file normalize "${hedgehogTclDir}/hedgehog.tcl" ]
