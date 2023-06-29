@@ -189,7 +189,6 @@ architecture rtl of acadia_sequencer is
     signal dsp_cfg_direct     : word_array(0 to NUM_DSP-1);
     signal dsp_rstp_direct    : std_logic_vector(NUM_DSP-1 downto 0);
 
-    signal dsp_cep_reg       : std_logic_vector(NUM_DSP-1 downto 0);                         
     signal dsp_ab_reg        : dsp_array(0 to NUM_DSP-1);
     signal dsp_c_reg         : dsp_array(0 to NUM_DSP-1);
     signal dsp_cfg_reg       : word_array(0 to NUM_DSP-1);
@@ -351,10 +350,15 @@ begin
                 bus_wr_reg   <= '0';
                 bus_en_reg   <= '0';
             else
+                -- The bus gets enabled anytime we write to the address register
                 if(instr_dest1_maj = DEST_BUS_ADDR and dest1_en = '1') then
                     bus_addr_reg <= src1;
+                    bus_en_reg <= '1';
                 elsif(instr_dest2_maj = DEST_BUS_ADDR and dest2_en = '1') then
                     bus_addr_reg <= src2;
+                    bus_en_reg <= '1';
+                else
+                    bus_en_reg <= '0';
                 end if;
                 
                 if(instr_dest1_maj = DEST_BUS_DATA and dest1_en = '1') then
@@ -369,14 +373,6 @@ begin
                 else
                     bus_wr_reg <= '0';
                 end if;
-                       
-                if(((instr_dest1_maj = DEST_BUS_DATA or instr_src1_maj = SRC_BUS_DATA) and dest1_en = '1') 
-                       or ((instr_dest2_maj = DEST_BUS_DATA or instr_src2_maj = SRC_BUS_DATA) and dest2_en = '1')) then 
-                    bus_en_reg <= '1';
-                else
-                    bus_en_reg <= '0';
-                end if;
-                
             end if;
         end if;
     end process bus_regs_proc;
@@ -503,22 +499,6 @@ begin
                        '0';
     end generate dsp_rstp_gen;
                              
-    dsp_cep_reg_proc: process(clk) begin
-        if rising_edge(clk) then
-            dsp_cep_reg_loop: for i in 0 to NUM_DSP-1 loop
-                if(nrst = '0') then
-                    dsp_cep_reg(i) <= '0';
-                -- elsif(instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i) then
-                --     dsp_cep_reg(i) <= '1';
-                elsif(dsp_cfg_reg(i)(15) = '1') then
-                    dsp_cep_reg(i) <= '1';
-                else
-                    dsp_cep_reg(i) <= '0';
-                end if;
-            end loop dsp_cep_reg_loop;
-        end if;
-    end process dsp_cep_reg_proc;
-                             
     -- Pipeline the AB inputs
     dsp_ab_reg_proc: process(clk) begin
         if rising_edge(clk) then
@@ -573,8 +553,12 @@ begin
                     dsp_ab_direct(i)   <= dsp_ab_reg(i);
                     dsp_c_direct(i)    <= dsp_c_reg(i);
                     dsp_cfg_direct(i)  <= dsp_cfg_reg(i);
-                    dsp_cep_direct(i)  <= dsp_cep_reg(i);
                     dsp_rstp_direct(i) <= dsp_rstp(i);
+                    if(instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i) then
+                        dsp_cep_direct(i)  <= '1';
+                    else
+                        dsp_cep_direct(i)  <= dsp_cfg_reg(i)(15);
+                    end if;
                 end loop dsp_loop;
             end if;
         end process dsp_pipeline_proc;
@@ -585,8 +569,8 @@ begin
             dsp_ab_direct(i)   <= dsp_ab_reg(i);
             dsp_c_direct(i)    <= dsp_c_reg(i);
             dsp_cfg_direct(i)  <= dsp_cfg_reg(i);
-            dsp_cep_direct(i)  <= '1' when instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i else dsp_cep_reg(i);
             dsp_rstp_direct(i) <= dsp_rstp(i);
+            dsp_cep_direct(i)  <= '1' when instr_dsp_cep_en = '1' and to_integer(unsigned(instr_dsp_cep)) = i else dsp_cfg_reg(i)(15);
         end generate dsp_nopipeline_inner_gen;
     end generate dsp_nopipeline_gen;
     

@@ -460,7 +460,7 @@ class Channel:
         # We can just mask the appropriate bits of the word after multiplying    
         return round(word * (2**48)) & ((1 << 48)-1)
         
-    def update_nco_frequency(self, frequency, low=True, mid=True, high=True):
+    def update_nco_frequency_registers(self, frequency, low=True, mid=True, high=True):
         """
         Configure some or all NCO settings. The three 16-bit registers for
         the frequency tuning word may be individually updated, allowing
@@ -477,49 +477,25 @@ class Channel:
         word are to be updated
         :type high: bool, optional
         """     
-        
         frequency_word = self.frequency_to_nco_tuning_word(frequency)
         
-        proc = Processor.active_processor()
-        if proc is None:
-            if low:
-                self.RFDC_call("WriteReg16Wrapper", 
-                               self.register_base_address(), 
-                               self.RFDC_def("XRFDC_ADC_NCO_FQWD_LOW_OFFSET"), 
-                               frequency_word & 0xFFFF)
-            if mid:
-                self.RFDC_call("WriteReg16Wrapper", 
-                               self.register_base_address(), 
-                               self.RFDC_def("XRFDC_ADC_NCO_FQWD_MID_OFFSET"), 
-                               (frequency_word >> 16) & 0xFFFF)
-            if high:
-                self.RFDC_call("WriteReg16Wrapper", 
-                               self.register_base_address(), 
-                               self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
-                               (frequency_word >> 32) & 0xFFFF)
+        if low:
+            self.RFDC_call("WriteReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_ADC_NCO_FQWD_LOW_OFFSET"), 
+                            frequency_word & 0xFFFF)
+        if mid:
+            self.RFDC_call("WriteReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_ADC_NCO_FQWD_MID_OFFSET"), 
+                            (frequency_word >> 16) & 0xFFFF)
+        if high:
+            self.RFDC_call("WriteReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
+                            (frequency_word >> 32) & 0xFFFF)
                 
-        elif isinstance(proc, Sequencer):
-            if (mid and not high) or (high and not mid):
-                raise ValueError("High and middle sections of the NCO"
-                                 " frequency word must be set together in the"
-                                 " sequencer.")
-                
-            frequency_base_reg = Firmware.rfdc_rts_regs.address().value() + self.num*2
-            
-            if not self.is_dac:
-                frequency_base_reg += 16*2 
-            if high:
-                proc.bus_write(address=frequency_base_reg, 
-                               data=(frequency_word >> 16) & 0xFFFFFFFF)
-            if low:
-                proc.bus_write(address=frequency_base_reg+1, 
-                               data=frequency_word & 0xFFFF)
-        
-        else:
-            raise TypeError("NCO frequency can only be set in"
-                            " `PythonProcessor` or `Sequencer` contexts.")
-    
-    def update_nco_phase(self, phase, low=True, high=True):
+    def update_nco_phase_registers(self, phase, low=True, high=True):
         """
         Set the NCO phase offset to the given word.
         :param phase: Phase tuning word
@@ -529,48 +505,26 @@ class Channel:
         :param high: If `True`, the upper 2 bits will be set.
         :type high: bool, optional
         """
-        proc = Processor.active_processor()
-        if proc is None:
-            if low:
-                self.RFDC_call("WriteReg16Wrapper", 
-                               self.register_base_address(), 
-                               self.RFDC_def("XRFDC_NCO_PHASE_LOW_OFFSET"), 
-                               phase & 0xFFFF)
+        if low:
+            self.RFDC_call("WriteReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_NCO_PHASE_LOW_OFFSET"), 
+                            phase & 0xFFFF)
 
-            if high:
-                self.RFDC_call("WriteReg16Wrapper", 
-                               self.register_base_address(), 
-                               self.RFDC_def("XRFDC_NCO_PHASE_UPP_OFFSET"),
-                               (phase >> 16) & 0x3)
-                
-        elif isinstance(proc, Sequencer):
-            phase_reg = Firmware.rfdc_rts_regs.address().value() + 0x40 + self.num
-            
-            if not self.is_dac:
-                phase_reg += 16
-                
-            proc.bus_write(address=phase_reg, data=phase & 0x0003FFFF)
-            
-        else:
-            raise TypeError("NCO phase can only be set in"
-                            " `PythonProcessor` or `Sequencer` contexts.")
-
+        if high:
+            self.RFDC_call("WriteReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_NCO_PHASE_UPP_OFFSET"),
+                            (phase >> 16) & 0x3)
+        
     def reset_nco_phase(self):
         """
         Reset the value of the NCO phase accumulator.
         """
-        proc = Processor.active_processor()
-        if proc is None:
-            self.RFDC_call_checked("ResetNCOPhase",
-                           self.converter_type(), self.tile, self.block)
-                
-        elif isinstance(proc, Sequencer):
-            # Do nothing, the synchronizer will set the bit in the register
-            pass
-            
-        else:
-            raise TypeError("NCO accumulator phase can only be reset in"
-                            " `PythonProcessor` or `Sequencer` contexts.")
+        self.RFDC_call_checked("ResetNCOPhase", 
+                               self.converter_type(), 
+                               self.tile, 
+                               self.block)
         
     def nco_apply_update(self):
         """

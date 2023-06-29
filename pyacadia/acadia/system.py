@@ -7,7 +7,7 @@ import time
 import numpy as np
 
 from .hdl import BusDevice, BusDecoder, BusDataport, BusDataMoverController, AXIMemoryArray, connect_bd_net, connect_bd_intf_net, create_ip, create_module, create_concatenator, create_slice, set_property, assign_bd_address, exclude_bd_addr_seg
-from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, SynchronizedFunction, Symbol, Operation
+from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Symbol, Operation
 from .sequencer import Sequencer, STP, Destination
 from .dma import DMA
 from .channel import Channel
@@ -214,8 +214,8 @@ class Firmware:
                                       "direction": BusDataport.OUTPUT, 
                                       "offset": _bit,
                                       "width": 1,
-                                      "gate": BusDataport.GATE_RESET,
-                                      "pipeline": 1}]
+                                      "gate": BusDataport.GATE_RESET}]
+                                    #   "pipeline": 1}]
 
             _dma_fifo_empty_ports += [{"name": f"{label}_dma{idx}", 
                                       "direction": BusDataport.INPUT, 
@@ -232,8 +232,8 @@ class Firmware:
             _dma_running_ports += [{"name": f"{label}_dma{idx}", 
                                       "direction": BusDataport.INPUT, 
                                       "offset": _bit,
-                                      "width": 1,
-                                      "pipeline": 1}]
+                                      "width": 1}]
+                                    #   "pipeline": 1}]
             if label == "adc":
                 _adc_fifo_control_ports += [{"name": f"{label}_dm{idx}_overflow", 
                                           "direction": BusDataport.INPUT, 
@@ -1712,7 +1712,7 @@ class Firmware:
                 for segment in excluded_segments:
                     exclude_bd_addr_seg(f, addr_seg=segment, target_address_space=target_address_space)
 
-class RFDCSynchronizer(Synchronizer):
+class ChannelSynchronizer(Synchronizer):
     """
     Synchronizes DMA triggers, frequency and phase updates for NCOs, 
     DAC VOP and ADC DSA updates for the analog datapaths, and DAC TDD signals. 
@@ -1763,22 +1763,15 @@ class RFDCSynchronizer(Synchronizer):
         tdd_mode_clear_reg = 0
         
         for call in self._calls:
-            function,parent,args,kwargs = call.values()
+            function,acadia,args,kwargs = call.values()
 
-            if isinstance(parent, Channel):
-                channel = parent
-            elif "channel" in kwargs:
-                channel = kwargs["channel"]
-            elif len(args) > 0:
-                channel = args[0]
-            else:
-                raise ValueError(f"Unable to identify channel for call {call}.")
-                
-            # The channel argument structure is the same regardless of what we're doing
-            # channel = kwargs["channel"] if "channel" in kwargs else args[0]
+            channel = kwargs["channel"] if "channel" in kwargs else args[0]
+            if not isinstance(channel, Channel):
+                raise TypeError(f"Unable to identify channel (received {channel}).")
+
             bit_position = channel.num + (16 if not channel.is_dac else 0)
                 
-            if function == RFDCSynchronizer.STREAM:
+            if function == ChannelSynchronizer.STREAM:
                 # Figure out which bits will contribute to the mask
                 if channel.is_dac:
                     # If it's a DAC, the bit position is just the channel number
@@ -1789,7 +1782,7 @@ class RFDCSynchronizer(Synchronizer):
                     dma = channel.dma
                     dma_mask |= 1 << (type(dma).DMA_NUM_OFFSET + dma._resource_id)
                 
-            elif function == RFDCSynchronizer.NCO_FREQUENCY:
+            elif function == ChannelSynchronizer.NCO_FREQUENCY:
                 if isinstance(proc, Sequencer):
                     # The bit position for the channel in the update request and 
                     # phase reset registers
@@ -1799,14 +1792,14 @@ class RFDCSynchronizer(Synchronizer):
                     # channel belong to?
                     update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
 
-                    if kwargs["low"]:
-                        nco_update_enables[update_enable_reg] |= (1 << 0) << (6*channel.block)
-                    if kwargs["mid"]:
-                        nco_update_enables[update_enable_reg] |= (1 << 1) << (6*channel.block)
-                    if kwargs["high"]:
-                        nco_update_enables[update_enable_reg] |= (1 << 2) << (6*channel.block)
+                    # if kwargs["low"]:
+                    nco_update_enables[update_enable_reg] |= (1 << 0) << (6*channel.block)
+                    # if kwargs["mid"]:
+                    nco_update_enables[update_enable_reg] |= (1 << 1) << (6*channel.block)
+                    # if kwargs["high"]:
+                    nco_update_enables[update_enable_reg] |= (1 << 2) << (6*channel.block)
 
-            elif function == RFDCSynchronizer.NCO_PHASE:
+            elif function == ChannelSynchronizer.NCO_PHASE:
                 if isinstance(proc, Sequencer):
                     # The bit position for the channel in the update request and 
                     # phase reset registers
@@ -1816,12 +1809,12 @@ class RFDCSynchronizer(Synchronizer):
                     # channel belong to?
                     update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
 
-                    if kwargs["low"]:
-                        nco_update_enables[update_enable_reg] |= (1 << 3) << (6*channel.block)
-                    if kwargs["high"]:
-                        nco_update_enables[update_enable_reg] |= (1 << 4) << (6*channel.block)
+                    # if kwargs["low"]:
+                    nco_update_enables[update_enable_reg] |= (1 << 3) << (6*channel.block)
+                    # if kwargs["high"]:
+                    nco_update_enables[update_enable_reg] |= (1 << 4) << (6*channel.block)
 
-            elif function == RFDCSynchronizer.NCO_PHASE_RESET:
+            elif function == ChannelSynchronizer.NCO_PHASE_RESET:
                 if isinstance(proc, Sequencer):
                     # The bit position for the channel in the update request and 
                     # phase reset registers
@@ -1834,18 +1827,18 @@ class RFDCSynchronizer(Synchronizer):
                     nco_phase_reset |= 1 << bit_position
                     nco_update_enables[update_enable_reg] |= (1 << 5) << (6*channel.block)
                 
-            elif function == RFDCSynchronizer.VOP:
+            elif function == ChannelSynchronizer.VOP:
                 if isinstance(proc, Sequencer):
                     vop_dsa_update_reg |= 1 << (4*channel.tile + channel.block)
                 
-            elif function == RFDCSynchronizer.DSA:
+            elif function == ChannelSynchronizer.DSA:
                 if isinstance(proc, Sequencer):
                     vop_dsa_update_reg |= 1 << (16 + channel.tile)
                     data = args[0] << (channel.block*5)
                     mask = 0b11111 << (channel.block*5)
                     tile_dsa_codes[channel.tile] = (tile_dsa_codes[channel.tile] & ~mask) | data
                 
-            elif function == RFDCSynchronizer.TDD:
+            elif function == ChannelSynchronizer.TDD:
                 if isinstance(proc, Sequencer):
                     if args[0]:
                         tdd_mode_set_reg |= 1 << bit_position
@@ -1890,6 +1883,9 @@ class RFDCSynchronizer(Synchronizer):
                 if nco_update_request != 0:
                     # Pulse the update request for one cycle
                     proc.bus_write(address=rts_address + 0x69, data=nco_update_request)
+                    proc.nop()
+                    proc.nop()
+                    proc.nop()
                     proc.bus_write(address=rts_address + 0x69, data=0)
 
                 if self._nco_pl_event:
@@ -1919,13 +1915,7 @@ class RFDCSynchronizer(Synchronizer):
 class Acadia:
     """
     A class that implements system-wide commands for the Acadia hardware.
-    Because of the heteregenous nature of the system, instructions with 
-    ambiguous targets (such as writing to the system cache, which could be
-    performed by the sequencer or the PS) must be carried out in processor
-    contexts.
     """
-
-    synchronizer = RFDCSynchronizer(allow_standalone=True)
     
     def __init__(self):        
         # A dictionary for storing assembled code, which maps memoryviews to
@@ -1943,6 +1933,9 @@ class Acadia:
         
         # When we enter contexts, keep track of the active sequencer
         self._active_sequencer = None
+
+        # Create a synchronizer for channel actions
+        self.synchronizer = ChannelSynchronizer(allow_standalone=True)
                 
         # Make DMAs
         DACDMA = type("DACDMA", (DMA,), {"DMA_NUM_OFFSET": 0})
@@ -1974,10 +1967,6 @@ class Acadia:
         
         self._ADC_AXIS_switch = AXISSwitch()
         
-        # Attach the generate functions to the synchronizer
-        self.generate = SynchronizedFunction(self.synchronizer, RFDCSynchronizer.STREAM, Acadia.generate, self)
-        self.capture = SynchronizedFunction(self.synchronizer, RFDCSynchronizer.STREAM, Acadia.capture, self)
-        
         # Create channel objects that abstract the channels of this board
         # so that when parameters are updated, everything that depends on
         # the channel receives the update
@@ -1990,52 +1979,12 @@ class Acadia:
                 dac_channel.interface_sample_frequency = 1e9
                 dac_channel.interface_width_bytes = 16
                 
-                # Patch in methods that will synchronize relevant calls to this
-                # object's Synchronizer
-                dac_channel.update_nco_frequency = SynchronizedFunction(self.synchronizer, 
-                    RFDCSynchronizer.NCO_FREQUENCY,
-                    Channel.update_nco_frequency, 
-                    dac_channel)
-                dac_channel.update_nco_phase = SynchronizedFunction(self.synchronizer, 
-                    RFDCSynchronizer.NCO_PHASE,
-                    Channel.update_nco_phase, 
-                    dac_channel)
-                dac_channel.reset_nco_phase = SynchronizedFunction(self.synchronizer, 
-                    RFDCSynchronizer.NCO_PHASE_RESET,
-                    Channel.reset_nco_phase, 
-                    dac_channel)
-                dac_channel.set_vop = SynchronizedFunction(self.synchronizer, 
-                    RFDCSynchronizer.VOP,
-                    Channel.set_vop, 
-                    dac_channel)
-                dac_channel.set_tdd = SynchronizedFunction(self.synchronizer,
-                    RFDCSynchronizer.TDD,
-                    Channel.set_tdd_mode,
-                    dac_channel)
-                
                 self._DAC_channels.append(dac_channel)
                 
                 adc_channel = Channel(tile=tile, block=block, is_dac=False)
                 adc_channel.analog_sample_frequency = 2e9
                 adc_channel.interface_sample_frequency = 1e9
                 adc_channel.interface_width_bytes = 16
-                
-                adc_channel.update_nco_frequency = SynchronizedFunction(self.synchronizer,
-                    RFDCSynchronizer.NCO_FREQUENCY,
-                    Channel.update_nco_frequency, 
-                    adc_channel)
-                adc_channel.update_nco_phase = SynchronizedFunction(self.synchronizer,
-                    RFDCSynchronizer.NCO_PHASE,
-                    Channel.update_nco_phase,
-                    adc_channel)
-                adc_channel.reset_nco_phase = SynchronizedFunction(self.synchronizer,
-                    RFDCSynchronizer.NCO_PHASE_RESET,
-                    Channel.reset_nco_phase, 
-                    adc_channel)
-                adc_channel.set_dsa = SynchronizedFunction(self.synchronizer,
-                    RFDCSynchronizer.DSA,
-                    Channel.set_dsa,
-                    adc_channel)
                 
                 self._ADC_channels.append(adc_channel)
                 
@@ -2312,7 +2261,7 @@ class Acadia:
 
         return result
     
-    def align_NCOs(self, **kwargs):
+    def align_ncos(self, **kwargs):
         """
         Simultaneously reset the internal phase of multiple NCOs.
         By default, all NCOs are reset; to exclude an NCO from this process,
@@ -2321,6 +2270,80 @@ class Acadia:
         all included channels must have the same interface frequency. 
         """
         raise NotImplemented
+    
+    @Synchronizer.synchronized(ChannelSynchronizer.NCO_FREQUENCY, "synchronizer")
+    def update_nco_frequency(self, channel, frequency):
+        """
+        Configure some or all NCO settings. The three 16-bit registers for
+        the frequency tuning word may be individually updated, allowing
+        for lower latency when less precise changes are acceptable.
+        :param frequency: Frequency in Hz
+        :type frequency: float
+        """     
+        
+        frequency_word = channel.frequency_to_nco_tuning_word(frequency)
+        
+        proc = Processor.active_processor()
+        if proc is None:
+            channel.update_nco_frequency_registers(frequency)
+                
+        elif isinstance(proc, Sequencer):    
+            frequency_base_reg = Firmware.rfdc_rts_regs.address().value() + channel.num*2
+            
+            if not channel.is_dac:
+                frequency_base_reg += 16*2 
+            proc.bus_write(address=frequency_base_reg, 
+                            data=(frequency_word >> 16) & 0xFFFFFFFF)
+            proc.bus_write(address=frequency_base_reg+1, 
+                            data=frequency_word & 0xFFFF)
+        
+        else:
+            raise TypeError("NCO frequency can only be set in `Sequencer` contexts.")
+    
+    @Synchronizer.synchronized(ChannelSynchronizer.NCO_PHASE, "synchronizer")
+    def update_nco_phase(self, channel, phase, low=True, high=True):
+        """
+        Set the NCO phase offset to the given word.
+        :param phase: Phase tuning word
+        :type phase: int
+        :param low: If `True`, the lower 16 bits will be set.
+        :type low: bool, optional
+        :param high: If `True`, the upper 2 bits will be set.
+        :type high: bool, optional
+        """
+        phase_word = int(round((2**18)*phase/(2*np.pi)))
+        proc = Processor.active_processor()
+        if proc is None:
+            channel.update_phase_registers(phase)
+                
+        elif isinstance(proc, Sequencer):
+            phase_reg = Firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
+            
+            if not channel.is_dac:
+                phase_reg += 16
+                
+            proc.bus_write(address=phase_reg, data=phase_word & 0x0003FFFF)
+            
+        else:
+            raise TypeError("NCO phase can only be set in `Sequencer` contexts.")
+
+    @Synchronizer.synchronized(ChannelSynchronizer.NCO_PHASE_RESET, "synchronizer")
+    def reset_nco_phase(self, channel):
+        """
+        Reset the value of the NCO phase accumulator.
+        """
+        proc = Processor.active_processor()
+        if proc is None:
+            Channel.RFDC_call_checked("ResetNCOPhase",
+                           channel.converter_type(), channel.tile, channel.block)
+                
+        elif isinstance(proc, Sequencer):
+            # Do nothing, the synchronizer will set the bit in the register
+            pass
+            
+        else:
+            raise TypeError("NCO accumulator phase can only be reset in"
+                            " `PythonProcessor` or `Sequencer` contexts.")
     
     def configure_clocks(self, reference="internal"):
         """
@@ -2652,6 +2675,7 @@ class Acadia:
             raise TypeError("Memory source and/or destination lack sufficient"
                             " information to execute copy.")
     
+    @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
     def capture(self, channel, array, length=None, offset=None, integration_kernel=None, datamover_tag=0xB):
         """
         Capture a signal from an ADC into an array. 
@@ -2797,6 +2821,7 @@ class Acadia:
         # Configure the DataMover
         self._sequencer_command_dm(datamover_name, capture_address, capture_length, tag=datamover_tag)
     
+    @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
     def generate(self, channel, array):
         """
         Generate a pulse on a DAC channel.
@@ -2828,6 +2853,7 @@ class Acadia:
                                          data=descriptor, 
                                          comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
 
+    @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
     def generate_constant(self, channel, value, length):
         """
         Generate a constant signal on a DAC channel.

@@ -1308,13 +1308,13 @@ class Sequencer(Processor):
         # When an instruction encountered that depends on the value of a given
         # DSP slice, if the counter for that slice is non-zero, that many NOPs
         # are added.
-        dsp_count_init = 4
-        bus_count_init = 4
+        dsp_count_init = 2
+        bus_count_init = 2
         counts = {f"DSP{i}": 0 for i in range(8)}
         counts["BUS"] = 0
         
         for idx_instr,instr in enumerate(self._compiled_program):  
-            # Decrement all counts to indicate that a cyle has passed
+            # Decrement all counts to indicate that a cycle has passed
             for k in counts.keys():
                 if counts[k] > 0:
                     counts[k] -= 1
