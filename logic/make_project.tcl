@@ -702,7 +702,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_bd_pin -dir O -from 0 -to 0 PS_IRQ0
   create_bd_pin -dir O -from 0 -to 0 PS_IRQ1
   create_bd_pin -dir I PS_AXI_clk
-  create_bd_pin -dir I PS_clk_250
   create_bd_pin -dir I PS_resetn
   create_bd_pin -dir O -from 7 -to 0 ps_gdma_clk
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_cack
@@ -1357,21 +1356,8 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__CRL_APB__PCAP_CTRL__DIVISOR0 {8} \
    CONFIG.PSU__CRL_APB__PCAP_CTRL__FREQMHZ {200} \
    CONFIG.PSU__CRL_APB__PCAP_CTRL__SRCSEL {IOPLL} \
-   CONFIG.PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ {249.997498} \
-   CONFIG.PSU__CRL_APB__PL0_REF_CTRL__DIVISOR0 {6} \
-   CONFIG.PSU__CRL_APB__PL0_REF_CTRL__DIVISOR1 {1} \
-   CONFIG.PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ {250} \
+   CONFIG.PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ {300} \
    CONFIG.PSU__CRL_APB__PL0_REF_CTRL__SRCSEL {IOPLL} \
-   CONFIG.PSU__CRL_APB__PL1_REF_CTRL__ACT_FREQMHZ {49.999500} \
-   CONFIG.PSU__CRL_APB__PL1_REF_CTRL__DIVISOR0 {30} \
-   CONFIG.PSU__CRL_APB__PL1_REF_CTRL__DIVISOR1 {1} \
-   CONFIG.PSU__CRL_APB__PL1_REF_CTRL__FREQMHZ {50} \
-   CONFIG.PSU__CRL_APB__PL2_REF_CTRL__FREQMHZ {300} \
-   CONFIG.PSU__CRL_APB__PL1_REF_CTRL__SRCSEL {IOPLL} \
-   CONFIG.PSU__CRL_APB__PL2_REF_CTRL__DIVISOR0 {4} \
-   CONFIG.PSU__CRL_APB__PL2_REF_CTRL__DIVISOR1 {1} \
-   CONFIG.PSU__CRL_APB__PL3_REF_CTRL__DIVISOR0 {4} \
-   CONFIG.PSU__CRL_APB__PL3_REF_CTRL__DIVISOR1 {1} \
    CONFIG.PSU__CRL_APB__QSPI_REF_CTRL__ACT_FREQMHZ {124.998749} \
    CONFIG.PSU__CRL_APB__QSPI_REF_CTRL__DIVISOR0 {12} \
    CONFIG.PSU__CRL_APB__QSPI_REF_CTRL__DIVISOR1 {1} \
@@ -1504,8 +1490,8 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__FPD_SLCR__WDT1__FREQMHZ {99.999001} \
    CONFIG.PSU__FPD_SLCR__WDT_CLK_SEL__SELECT {APB} \
    CONFIG.PSU__FPGA_PL0_ENABLE {1} \
-   CONFIG.PSU__FPGA_PL1_ENABLE {1} \
-   CONFIG.PSU__FPGA_PL2_ENABLE {1} \
+   CONFIG.PSU__FPGA_PL1_ENABLE {0} \
+   CONFIG.PSU__FPGA_PL2_ENABLE {0} \
    CONFIG.PSU__GEM3_COHERENCY {0} \
    CONFIG.PSU__GEM3_ROUTE_THROUGH_FPD {0} \
    CONFIG.PSU__GEM__TSU__ENABLE {0} \
@@ -1757,14 +1743,14 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net hedgehog_PS_IRQ0 [get_bd_pins hedgehog/PS_IRQ0] [get_bd_pins ps/pl_ps_irq0]
   connect_bd_net -net hedgehog_PS_IRQ1 [get_bd_pins hedgehog/PS_IRQ1] [get_bd_pins ps/pl_ps_irq1]
 
-  connect_bd_net [get_bd_pins hedgehog/PS_AXI_clk] [get_bd_pins ps/pl_clk2]
-  connect_bd_net [get_bd_pins ps/maxihpm0_fpd_aclk] [get_bd_pins ps/pl_clk2]
-  connect_bd_net [get_bd_pins ps/maxihpm1_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins hedgehog/PS_AXI_clk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins ps/maxihpm0_fpd_aclk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins ps/maxihpm1_fpd_aclk] [get_bd_pins ps/pl_clk0]
   connect_bd_net [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/saxihpc0_fpd_aclk] [get_bd_pins ps/pl_clk2]
-  connect_bd_net [get_bd_pins ps/saxihp0_fpd_aclk] [get_bd_pins ps/pl_clk2]
-  connect_bd_net [get_bd_pins ps/saxihpc1_fpd_aclk] [get_bd_pins ps/pl_clk2]
-  connect_bd_net [get_bd_pins ps/saxihp1_fpd_aclk] [get_bd_pins ps/pl_clk2]
+  connect_bd_net [get_bd_pins ps/saxihpc0_fpd_aclk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins ps/saxihp0_fpd_aclk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins ps/saxihpc1_fpd_aclk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins ps/saxihp1_fpd_aclk] [get_bd_pins ps/pl_clk0]
 
   connect_bd_net -net hedgehog_ps_gdma_cvld [get_bd_pins hedgehog/ps_gdma_cvld] [get_bd_pins ps/perif_gdma_cvld]
   connect_bd_net -net hedgehog_ps_gdma_tack [get_bd_pins hedgehog/ps_gdma_tack] [get_bd_pins ps/perif_gdma_tack]
@@ -1773,7 +1759,6 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net ps_gdma_tvld_1 [get_bd_pins hedgehog/ps_gdma_tvld] [get_bd_pins ps/gdma_perif_tvld]
   connect_bd_net [get_bd_pins hedgehog/ps_gdma_clk] [get_bd_pins ps/perif_gdma_clk]
 
-  connect_bd_net -net ps_pl_clk0 [get_bd_pins hedgehog/PS_clk_250] [get_bd_pins ps/pl_clk0]
   connect_bd_net -net ps_pl_resetn0 [get_bd_pins hedgehog/PS_resetn] [get_bd_pins ps/pl_resetn0] [get_bd_pins xpm_cdc_DDR4_C0_aresetn/src_rst] [get_bd_pins xpm_cdc_DDR4_C1_aresetn/src_rst]
 
   connect_bd_net -net DDR4_C0_MIG_c0_ddr4_ui_clk [get_bd_pins DDR4_C0_MIG/c0_ddr4_ui_clk] [get_bd_pins hedgehog/DDR4_C0_ui_clk] [get_bd_pins xpm_cdc_DDR4_C0_aresetn/dest_clk] [get_bd_pins xpm_cdc_DDR4_C0_sys_rst/dest_clk]
@@ -1879,7 +1864,6 @@ preplace inst xpm_cdc_DDR4_C0_MIG -pg 1 -lvl 6 -x 3080 -y 1370 -defaultsOSRD
 preplace inst xpm_cdc_DDR4_C1_MIG -pg 1 -lvl 6 -x 3080 -y 1490 -defaultsOSRD
 preplace netloc ps_emio_gpio_o 1 2 4 1200 980 1690 970 N 970 N
 preplace netloc ps_pl_resetn0 1 2 4 1190 1120 N 1120 N 1120 2660
-preplace netloc ps_pl_clk0 1 2 4 1130J 1310 NJ 1310 NJ 1310 2650J
 preplace netloc DDR4_C0_MIG_c0_ddr4_ui_clk 1 5 3 2670 1590 NJ 1590 4060
 preplace netloc DDR4_C1_MIG_c0_ddr4_ui_clk 1 5 3 2680 1650 NJ 1650 4020
 preplace netloc hedgehog_PS_IRQ1 1 1 6 470 1570 NJ 1570 NJ 1570 NJ 1570 NJ 1570 3410J

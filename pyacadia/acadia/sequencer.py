@@ -12,9 +12,12 @@ from .compiler import ManagedResource, Symbol, Operation, Processor, Operable, P
 
 def is_numeric(obj):
     """
-    :return: `True` if a given object is suitable as a numeric argument for assembly.
-    :rtype: `bool`
+    Determines whether a given object is a valid numeric argument.
+
+    :return: ``True`` if a given object is suitable as a numeric argument for assembly.
+    :rtype: ``bool``
     """
+
     for t in [int, bool, DSPConfiguration, ProcessorInstruction]:
         if (isinstance(obj, t) 
             or (isinstance(obj, Symbol) 
@@ -36,8 +39,8 @@ def is_numeric(obj):
 
 @dataclass
 class SequencerDatapathPort:
-    major: "" = None
-    minor: "" = 0
+    major: object = None
+    minor: int = 0
 
     def __post_init__(self):
         if not isinstance(self.major, type(self).Major):
@@ -263,31 +266,31 @@ for z_name,z in [("", 0),("P", 0b010), ("C",0b011), ("I", 0b001), ("S", 0b110)]:
 class DSPConfiguration:
     """
     A container for a 32-bit value to be written to the DSP configuration port.
-    :param dsp: DSP to configure
-    :type dsp: `int`, :class:`Source`, :class:`Destination`, or 
-    :class:`Sequencer.DSP`
-    :param mode: Mode in which to operate the DSP slice at the next clock cycle
-    :type mode: :class:`DSPMode` or `str`
-    :param rst_p: If `True`, the RST pin of the P register is pulsed when
-    the configuration register is written.
-    :type rst_p: `bool`, optional
-    :param dsp_cep: Indicates how the clock enable for the DSP P register
-    should be driven. If "pulse", the P register will be pulsed for one
-    cycle immediately following the configuration. If "set", the input
-    will be set high until reset. If "reset", the input will be set low.
-    If `None` or omitted, no action will be taken and the pin will remain
-    in its current state.
-    :type dsp_cep: str, optional
     """
-    mode: [DSPMode, str] = "P" # By default do nothing by loading P -> P
+
+    # Mode in which to operate the DSP slice at the next clock cycle
+    # May be a string or a DSPMode
+    mode: [DSPMode, str] = "P" 
+
+    # If `True`, the RST pin of the P register is pulsed when
+    # the configuration register is written.
     rst_p: bool = False
+
+    # Indicates how the clock enable for the DSP P register
+    # should be driven. If "pulse", the P register will be pulsed for one
+    # cycle immediately following the configuration. If "set", the input
+    # will be set high until reset. If "reset", the input will be set low.
+    # If `None` or omitted, no action will be taken and the pin will remain
+    # in its current state.
     dsp_cep: str = None
     
     def __post_init__(self):
         """
         Assembles a 32-bit value which, when written to the DSP configuration
         destination on the sequencer, configures a given DSP slice.
+
         """
+
         if isinstance(self.mode, str):
             mode = DSP_MODES[self.mode]
         else:
@@ -363,7 +366,9 @@ class STP:
         """
         Return a nicely-formatted (and non-exhaustive) description of this 
         instruction.
+
         """
+
         s = ""
         if (str(self.src1) == "REG0" 
             and str(self.dest1) == "REG0"):
@@ -413,9 +418,11 @@ class STP:
     def assemble(self):
         """
         Assembles the instruction into a binary word.
+
         :return: A binary word representing the machine instruction.
         :rtype: int
         """
+
         tmp = 0
         # Opcode = 0 for STP
         tmp |= self.push_return << 104
@@ -507,7 +514,9 @@ class STC:
         """
         Return a nicely-formatted (and non-exhaustive) description of this 
         instruction.
+
         """
+
         s = ""
         if (str(self.src_stval) == "REG0" 
             and str(self.dest_stval) == "REG0"):
@@ -564,9 +573,11 @@ class STC:
     def assemble(self):
         """
         Assembles the instruction into a binary word.
+
         :return: A binary word representing the machine instruction.
         :rtype: int
         """
+
         tmp = 0
         tmp |= 1 << 112 # Opcode for STC
         tmp |= self.push_return << 104
@@ -612,6 +623,7 @@ class Sequencer(Processor):
     """
     A :class:`Processor` for the sequencer embedded in the Acadia control 
     system.
+
     """
     
     # The total number of general-purpose registers in the sequencer
@@ -660,6 +672,7 @@ class Sequencer(Processor):
             """
             Get a Destination corresponding to a DSP port.
             """
+
             if key == "AB":
                 return Destination(major=Destination.Major.DSP_AB,
                                    minor=dsp_self._resource_id)
@@ -748,11 +761,12 @@ class Sequencer(Processor):
         """
         Reads a value from the bus. If multiple reads are performed back-to-back, 
         the additional wait time needed to overcome the bus latency may be 
-        unnecessary and may be excluded by setting `wait` to `False`. Additionally,
+        unnecessary and may be excluded by setting ``wait`` to ``False``\. Additionally,
         if the address was already written to the bus address register, it may be
-        unnecessary to write it again, and setting `write_address` to `False` will
+        unnecessary to write it again, and setting ``write_address`` to ``False`` will
         skip this. 
         """
+
         if write_address:
             if address is None:
                 raise ValueError("Address must be provided when"
@@ -766,6 +780,7 @@ class Sequencer(Processor):
         """
         Writes a value to the bus.
         """
+
         self.STP(src1=address, 
                 dest1=Destination(Destination.Major.BUS_ADDR),
                 src2=data, 
@@ -777,6 +792,7 @@ class Sequencer(Processor):
         Halts the sequencer. The reset pin must be toggled in order for the
         sequencer to execute any further instructions.
         """
+
         self.store(src=0, dest=Destination(Destination.Major.PC, 
                                            Destination.PC_RELATIVE_HOLD))
         
@@ -794,6 +810,7 @@ class Sequencer(Processor):
         A direct abstraction of the STP instruction with additional source
         compilation.
         """
+
         kwargs = instruction_resource.kwargs
         instructions = []
         resources = []
@@ -853,17 +870,19 @@ class Sequencer(Processor):
     def store(self, instruction_resource):
         """
         A generalized method for storing data. It is assumed that multiple 
-        consecutive calls to `store` may be aggregated into a smaller number
+        consecutive calls to ``store`` may be aggregated into a smaller number
         of STP and/or STC instructions.
         
         Keyword arguments:
+
         :param src: The source of the data to store.
         :param dest: The destination for the data.
         :param when: The condition for the data to be stored. By default,
-        `store` operations are unconditional.
-        :type when: :class:`Operation`, optional
+            ``store`` operations are unconditional.
+        :type when: :class:`Operation`\, optional
         :param mask: Specifies the value to load into the mask register.
         """
+
         if len(instruction_resource.args) > 0:
             raise ValueError(f"Positional arguments not supported for store;"
                              f" must specify the source with the `src` keyword"
@@ -960,12 +979,13 @@ class Sequencer(Processor):
         (or multiple) will need to be allocated to compute the appropriate 
         source value; these resources and the additional instructions needed to
         operate them will be returned along with the compiled argument.
+
         :param obj: Object to translate
         :param dsp: If the eventual destination of the source is a DSP slice, 
-        this argument will contain the DSP object.
+            this argument will contain the DSP object.
         :type dsp: :class:`self.DSP`
-        :return: A reference to the object ready to be assembled, a `list` of 
-        generated instructions, and a `list` of allocated resources.
+        :return: A reference to the object ready to be assembled, a ``list`` of 
+            generated instructions, and a ``list`` of allocated resources.
         """
 
         if dsp is not None and not isinstance(dsp, self.DSP):
@@ -1133,15 +1153,17 @@ class Sequencer(Processor):
         (or multiple) will need to be allocated to compute the appropriate 
         source value; these resources and the additional instructions needed to
         operate them will be returned along with the compiled condition.
+
         :param condition: condition to translate
         :type condition: :class:`Operation`
         :param mask: The value to load into the mask, as indicated by "left" or
-        "right", which correspond to the left-hand side and right-hand side of 
-        the condition equation respectively. If not provided, an attempt to 
-        infer it is made and an error is thrown if not possible.
-        :return: A reference to the object ready to be assembled, a `list` of 
-        generated instructions, and a `list` of allocated resources.
+            "right", which correspond to the left-hand side and right-hand side of 
+            the condition equation respectively. If not provided, an attempt to 
+            infer it is made and an error is thrown if not possible.
+        :return: A reference to the object ready to be assembled, a ``list`` of 
+            generated instructions, and a ``list`` of allocated resources.
         """
+
         # Depending on what the condition ends up being, we'll populate a dict
         # with the eventual keyword arguments to the constructor for the 
         # instruction
@@ -1296,9 +1318,11 @@ class Sequencer(Processor):
         in situations where the compiler is able to determine that the relevant 
         resources are being modified, so it is encouraged for the user to verify
         the timings of expected procedures.
-        :return: `True` if the program was modified, otherwise `False`
+
+        :return: ``True`` if the program was modified, otherwise ``False``
         :rtype: bool
         """
+
         # If we used any DSP slices, we need to make sure that we add delays
         # to account for the computation latency
         # We'll do this by associating a counter with every DSP slice. When
@@ -1391,6 +1415,7 @@ class Sequencer(Processor):
         intermediate computations are buffered with an appropriate amount of
         pipeline cycles.
         """
+
         super().compile_all()
 
         # Add necessary latencies until it can be confirmed that no more are
@@ -1410,9 +1435,10 @@ class Sequencer(Processor):
         :type condition: :class:`Operation`
         :param mask: The object to load into the mask register, when provided
         :param speculation: The speculated outcome of the condition (e.g.,
-        `True` if the condition is expected to pass the majority of the time).
-        :type speculation: `bool`
+            ``True`` if the condition is expected to pass the majority of the time).
+        :type speculation: ``bool``
         """
+
         if speculation:
             # The block to execute if the condition passes is inline
             # Jump past the block if the condition fails
@@ -1458,6 +1484,7 @@ class Sequencer(Processor):
         at the end if the condition is not satisfied (analogous to a "do-while" 
         loop in other languages). 
         """
+
         return_instruction = self.Instruction.next_instance()
         yield
         
@@ -1489,17 +1516,19 @@ class Sequencer(Processor):
         Repeats a block of code multiple times. There are multiple valid call 
         signatures which must be used positionally (i.e., keyword arguments
         are not supported):
-        `loop()`
-        `loop(stop)`
-        `loop(start, stop)
-        `loop(start, stop, step)`
+
+        - ``loop()``
+        - ``loop(stop)``
+        - ``loop(start, stop)``
+        - ``loop(start, stop, step)``
+
         where the behavior and definitions of these parameters are identical to
-        those of `range`, and when no parameters are provided the loop will 
-        execute forever. 
-        The loop is implemented with a DSP, and the context target yielded by
-        this function is the allocated DSP object (which will inherently 
-        contain the iteration variable)
+        those of ``range``\, and when no parameters are provided the loop will 
+        execute forever. The loop is implemented with a DSP, and the context 
+        target yielded by this function is the allocated DSP object (which will
+        inherently contain the iteration variable)
         """
+
         dsp = None
         if len(args) == 0:
             # Do nothing

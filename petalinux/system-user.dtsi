@@ -17,16 +17,19 @@
     psddr {
         compatible = "mmio-sram";
         memory-region = <&psddr0>;
+        export;
     };
     
 	plddr0@4000000000 {
         compatible = "mmio-sram";
         reg = <0x40 0x00000000 0x1 0x00000000>;
+        export;
     }; 
     
     plddr1@4100000000 {
         compatible = "mmio-sram";
         reg = <0x41 0x00000000 0x1 0x00000000>;
+        export;
     }; 
 };
 	

@@ -187,6 +187,66 @@ class Firmware:
                             "CONFIG.CLKOUT2_PHASE_ERROR {79.008} "
                             "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
                             "CONFIG.CLKOUT2_DRIVES {Buffer}")
+
+    CLK_CONFIG_5CLKS_250MHz = ("CONFIG.PRIMITIVE {MMCM} "
+                            "CONFIG.USE_DYN_RECONFIG {true} "
+                            "CONFIG.USE_PHASE_ALIGNMENT {true} "
+                            "CONFIG.PRIM_SOURCE {Global_buffer} "
+                            "CONFIG.PRIM_IN_FREQ {250.0} "
+                            "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
+                            "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
+                            "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
+                            "CONFIG.MMCM_CLKFBOUT_MULT_F {5.000} "
+                            "CONFIG.MMCM_CLKIN1_PERIOD {4.0} "
+                            "CONFIG.MMCM_COMPENSATION {AUTO} "
+                            "CONFIG.PLL_CLKIN_PERIOD {4.0} "
+                            "CONFIG.CLKIN1_JITTER_PS {40.0} "
+                            "CONFIG.USE_INCLK_SWITCHOVER {false} "
+                            "CONFIG.SECONDARY_IN_FREQ {250.0} "
+                            "CONFIG.SECONDARY_SOURCE {Global_buffer} "
+                            "CONFIG.CLKIN2_JITTER_PS {40.0} "
+                            "CONFIG.MMCM_CLKIN2_PERIOD {4.0} "
+
+                            "CONFIG.NUM_OUT_CLKS {5} "
+
+                            "CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT1_PORT {seq_clk} "
+                            "CONFIG.CLKOUT1_JITTER {85.736} "
+                            "CONFIG.CLKOUT1_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT0_DIVIDE_F {5.000} "
+                            "CONFIG.CLKOUT1_DRIVES {Buffer} "
+
+                            "CONFIG.CLKOUT2_USED {true} "
+                            "CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT2_PORT {dac_clk} "
+                            "CONFIG.CLKOUT2_JITTER {85.736} "
+                            "CONFIG.CLKOUT2_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
+                            "CONFIG.CLKOUT2_DRIVES {Buffer} "
+
+                            "CONFIG.CLKOUT3_USED {true} "
+                            "CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT3_PORT {dac_tile3_clk} "
+                            "CONFIG.CLKOUT3_JITTER {85.736} "
+                            "CONFIG.CLKOUT3_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
+                            "CONFIG.CLKOUT3_DRIVES {Buffer} "
+                            
+                            "CONFIG.CLKOUT4_USED {true} "
+                            "CONFIG.CLKOUT4_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT4_PORT {adc_clk} "
+                            "CONFIG.CLKOUT4_JITTER {85.736} "
+                            "CONFIG.CLKOUT4_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
+                            "CONFIG.CLKOUT4_DRIVES {Buffer} "
+                            
+                            "CONFIG.CLKOUT5_USED {true} "
+                            "CONFIG.CLKOUT5_REQUESTED_OUT_FREQ {250.0} "
+                            "CONFIG.CLK_OUT5_PORT {adc_tile3_clk} "
+                            "CONFIG.CLKOUT5_JITTER {85.736} "
+                            "CONFIG.CLKOUT5_PHASE_ERROR {79.008} "
+                            "CONFIG.MMCM_CLKOUT1_DIVIDE {5} "
+                            "CONFIG.CLKOUT5_DRIVES {Buffer}")
     
     
     
@@ -536,10 +596,12 @@ class Firmware:
     def write_hdl(cls, project_dir, filename="python_modules.vhd"):
         """
         Writes a VHDL file with the modules
+
         :param filename: The name of the file in the project directory in which
-        to write the file.
+            to write the file.
         :type filename: str, optional
-        """        
+        """
+
         if not os.path.exists(project_dir):
             os.mkdir(project_dir)
             
@@ -553,6 +615,7 @@ class Firmware:
         """
         Write a TCL script to populate the HEDGEHOG logic in the standard image. 
         """
+
         if not hasattr(cls, "_hdl_filename"):
             raise ValueError("Call `write_hdl` before `write_hedgehog_tcl`.")
         with open(os.path.join(project_dir, tcl_filename), "w") as f, \
@@ -588,13 +651,13 @@ class Firmware:
             connect_bd_intf_net(f, "hedgehog/CLK_8A34001_Q3_OUT", "hedgehog/clk_8A34001_out3_ibufds/CLK_IN_D")
             
             # Create reset synchronizers for the various clock domains
-            create_ip(f, name="hedgehog/proc_sys_reset_PS_clk_250", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
-            connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_clk_250/slowest_sync_clk", f"hedgehog/PS_clk_250")
-            connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_clk_250/ext_reset_in", f"hedgehog/PS_resetn")
+            # create_ip(f, name="hedgehog/proc_sys_reset_PS_clk_250", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
+            # connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_clk_250/slowest_sync_clk", f"hedgehog/PS_clk_250")
+            # connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_clk_250/ext_reset_in", f"hedgehog/PS_resetn")
             
-            create_ip(f, name=f"hedgehog/xlconst_proc_sys_reset_PS_clk_250_locked", vlnv="xilinx.com:ip:xlconstant:1.1")
-            set_property(f, name=f"hedgehog/xlconst_proc_sys_reset_PS_clk_250_locked", properties={"CONST_WIDTH": 1, "CONST_VAL": 1})
-            connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_clk_250/dcm_locked", f"hedgehog/xlconst_proc_sys_reset_PS_clk_250_locked/Dout")
+            # create_ip(f, name=f"hedgehog/xlconst_proc_sys_reset_PS_clk_250_locked", vlnv="xilinx.com:ip:xlconstant:1.1")
+            # set_property(f, name=f"hedgehog/xlconst_proc_sys_reset_PS_clk_250_locked", properties={"CONST_WIDTH": 1, "CONST_VAL": 1})
+            # connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_clk_250/dcm_locked", f"hedgehog/xlconst_proc_sys_reset_PS_clk_250_locked/Dout")
             
             create_ip(f, name="hedgehog/proc_sys_reset_PS_AXI_clk", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
             connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_AXI_clk/slowest_sync_clk", f"hedgehog/PS_AXI_clk")
@@ -607,9 +670,9 @@ class Firmware:
             # We'll create an MMCM that will generate all the PL clocks
             create_ip(f, name="hedgehog/clk_wiz", vlnv="xilinx.com:ip:clk_wiz:6.0")
             set_property(f, name="hedgehog/clk_wiz", properties={"PRIM_IN_FREQ.VALUE_SRC": "USER"})
-            set_property(f, name="hedgehog/clk_wiz", properties=Firmware.CLK_CONFIG_2CLKS_250MHz)
-            connect_bd_net(f, f"hedgehog/clk_wiz/s_axi_aclk", f"hedgehog/PS_clk_250")
-            connect_bd_net(f, f"hedgehog/clk_wiz/s_axi_aresetn", f"hedgehog/proc_sys_reset_PS_clk_250/peripheral_aresetn")
+            set_property(f, name="hedgehog/clk_wiz", properties=Firmware.CLK_CONFIG_5CLKS_250MHz)
+            connect_bd_net(f, f"hedgehog/clk_wiz/s_axi_aclk", f"hedgehog/PS_AXI_clk")
+            connect_bd_net(f, f"hedgehog/clk_wiz/s_axi_aresetn", f"hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn")
 
             # Connect the CLK104 PL clock buffer output to the clock wizard and apply a constraint
             connect_bd_net(f, f"hedgehog/pl_clk_bufg/BUFG_O", f"hedgehog/clk_wiz/clk_in1")
@@ -638,10 +701,10 @@ class Firmware:
                          name="hedgehog/config_smartconnect", 
                          properties={"NUM_MI": 8, 
                                      "NUM_SI": 1, 
-                                     "NUM_CLKS": 3})
+                                     "NUM_CLKS": 2})
             connect_bd_net(f, f"hedgehog/config_smartconnect/aclk", f"hedgehog/PS_AXI_clk")
             connect_bd_net(f, f"hedgehog/config_smartconnect/aclk1", f"hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/config_smartconnect/aclk2", f"hedgehog/PS_clk_250")
+            # connect_bd_net(f, f"hedgehog/config_smartconnect/aclk2", f"hedgehog/PS_clk_250")
             connect_bd_net(f, f"hedgehog/config_smartconnect/aresetn", f"hedgehog/proc_sys_reset_PS_AXI_clk/interconnect_aresetn")
             
             # Connect it to the PS
@@ -1064,8 +1127,10 @@ class Firmware:
             
             set_property(f, name="hedgehog/rfdc", properties=rfdc_config_string)
             
-            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aclk", f"hedgehog/PS_clk_250")            
-            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aresetn", f"hedgehog/proc_sys_reset_PS_clk_250/peripheral_aresetn")
+            # connect_bd_net(f, f"hedgehog/rfdc/s_axi_aclk", f"hedgehog/PS_clk_250")            
+            # connect_bd_net(f, f"hedgehog/rfdc/s_axi_aresetn", f"hedgehog/proc_sys_reset_PS_clk_250/peripheral_aresetn")
+            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")            
+            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
 
             # Connect the analog inputs and outputs to the external ports through the hedgehog logic boundary
             for d in ["out", "in"]:
@@ -1079,9 +1144,9 @@ class Firmware:
             
             # Connect the RFDC stream clocks and resets
             for i in range(4):
-                connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aclk", f"hedgehog/clk_wiz/{'dac_tile3_clk' if i == 3 else 'dac_clk'}")
                 connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")        
-                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{'adc_tile3_clk' if i == 3 else 'seq_clk'}")
+                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{'adc_tile3_clk' if i == 3 else 'adc_clk'}")
                 connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")
 
             # Connect RFDC to the config smartconnect and assign it address space
@@ -1097,7 +1162,7 @@ class Firmware:
             # Synchronize the SYSREF signal from the CLK104
             create_module(f, f"hedgehog/pl_sysref_capture", "acadia_sysref_capture")
             connect_bd_intf_net(f, "hedgehog/CLK104_PL_SYSREF", "hedgehog/pl_sysref_capture/sysref")
-            connect_bd_net(f, "hedgehog/pl_sysref_capture/clk", "hedgehog/clk_wiz/seq_clk")
+            connect_bd_net(f, "hedgehog/pl_sysref_capture/clk", "hedgehog/clk_wiz/dac_clk")
             connect_bd_net(f, "hedgehog/pl_sysref_capture/sysref_out", "hedgehog/rfdc/user_sysref_dac")
             connect_bd_net(f, "hedgehog/pl_sysref_capture/sysref_out", "hedgehog/rfdc/user_sysref_adc")
             
@@ -1220,7 +1285,7 @@ class Firmware:
 
             # Create a RFDC real-time port register interface
             create_module(f, f"hedgehog/rfdc_rts_regs", "acadia_rfdc_rts_regs")
-            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nco_dest_clk", f"hedgehog/PS_clk_250")
+            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nco_dest_clk", f"hedgehog/PS_AXI_clk")
             connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
             connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/rfdc_rts_regs", f"hedgehog/rfdc_rts_regs/master_bus")
                              
@@ -1317,10 +1382,12 @@ class Firmware:
                                         "CONFIG.c_enable_s2mm {1} "
                                         "CONFIG.c_addr_width {40}")
 
-            # Connect clocks and resets for the command and status port (for some reason the clock pins are different between s2mm and mm2s)
-            connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_mm2s_cmdsts_aclk", "hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_mm2s_cmdsts_aresetn", "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-            connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_s2mm_cmdsts_awclk", "hedgehog/clk_wiz/seq_clk")
+            # Connect clocks and resets for the command and status port 
+            # (for some reason the clock pins are different between s2mm and mm2s,
+            # otherwise we could do this in the loop below)
+            connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_mm2s_cmdsts_aclk", "hedgehog/PS_AXI_clk")
+            connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_mm2s_cmdsts_aresetn", "hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn")
+            connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_s2mm_cmdsts_awclk", "hedgehog/PS_AXI_clk")
             connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axis_s2mm_cmdsts_aresetn", "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
 
             # For this DataMover, we want to connect the MM2S and S2MM streams to each other
@@ -1338,8 +1405,22 @@ class Firmware:
                 connect_bd_net(f, f"hedgehog/cfg_axi_dm/m_axi_{direction}_aresetn", "hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn")
 
                 # Connect the MM2S command and status interfaces to the bus-driven DataMover controller
-                connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm/S_AXIS_{direction.upper()}_CMD", f"hedgehog/datamover_controller/cfg_dm_{direction}_CMD")
-                connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm/M_AXIS_{direction.upper()}_STS", f"hedgehog/datamover_controller/cfg_dm_{direction}_STS")
+                # Use an AXIS FIFO with independent clocks
+                create_ip(f, name=f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo", vlnv="xilinx.com:ip:axis_data_fifo:2.0")
+                set_property(f, name=f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo", properties={"FIFO_DEPTH": 16, "IS_ACLK_ASYNC": 1})
+                connect_bd_net(f, f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo/m_axis_aclk", f"hedgehog/PS_AXI_clk")
+                connect_bd_net(f, f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo/s_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo/s_axis_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                connect_bd_intf_net(f, f"hedgehog/datamover_controller/cfg_dm_{direction}_cmd", f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo/S_AXIS")
+                connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm_{direction}_cmd_fifo/M_AXIS", f"hedgehog/cfg_axi_dm/S_AXIS_{direction.upper()}_CMD")
+                
+                create_ip(f, name=f"hedgehog/cfg_axi_dm_{direction}_sts_fifo", vlnv="xilinx.com:ip:axis_data_fifo:2.0")
+                set_property(f, name=f"hedgehog/cfg_axi_dm_{direction}_sts_fifo", properties={"FIFO_DEPTH": 16, "IS_ACLK_ASYNC": 1})
+                connect_bd_net(f, f"hedgehog/cfg_axi_dm_{direction}_sts_fifo/m_axis_aclk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/cfg_axi_dm_{direction}_sts_fifo/s_axis_aclk", f"hedgehog/PS_AXI_clk")
+                connect_bd_net(f, f"hedgehog/cfg_axi_dm_{direction}_sts_fifo/s_axis_aresetn", f"hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn")
+                connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm/M_AXIS_{direction.upper()}_STS", f"hedgehog/cfg_axi_dm_{direction}_sts_fifo/S_AXIS")
+                connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm_{direction}_sts_fifo/M_AXIS", f"hedgehog/datamover_controller/cfg_dm_{direction}_sts")
 
                 # Connect the error signal to the controller through a CDC
                 create_ip(f, name=f"hedgehog/xpm_cdc_cfg_axi_dm_{direction}_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
@@ -1347,6 +1428,7 @@ class Firmware:
                 connect_bd_net(f, f"hedgehog/xpm_cdc_cfg_axi_dm_{direction}_err/src_rst", f"hedgehog/cfg_axi_dm/{direction}_err")
                 connect_bd_net(f, f"hedgehog/xpm_cdc_cfg_axi_dm_{direction}_err/dest_rst_out", f"hedgehog/datamover_controller/cfg_dm_{direction}_err")
                 connect_bd_net(f, f"hedgehog/xpm_cdc_cfg_axi_dm_{direction}_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+
             
             # ------------------- Sequencer flags -------------------- #
             create_ip(f, name="hedgehog/xlconst_0", vlnv="xilinx.com:ip:xlconstant:1.1")
@@ -1723,6 +1805,7 @@ class ChannelSynchronizer(Synchronizer):
     expected to be passed in as a keyword argument; if so, the corresponding
     keyword value will be used).
     """
+
     STREAM = 1
     NCO_FREQUENCY = 2
     NCO_PHASE = 3
@@ -1881,12 +1964,41 @@ class ChannelSynchronizer(Synchronizer):
                     proc.bus_write(address=rts_address + 0x68, data=nco_phase_reset)
 
                 if nco_update_request != 0:
-                    # Pulse the update request for one cycle
-                    proc.bus_write(address=rts_address + 0x69, data=nco_update_request)
+                    # Carry out the procedure for a synchronized update with SYSREF
+                    # We'll assume that the SYSREF is already being generated continuously
+
+                    # 1. Set dac0_sysref_int_gating high and pulse dac0_nco_update_req
+                    proc.bus_write(address=rts_address + 0x69, data=((1 << 8) | (1 << 0)))
                     proc.nop()
+                    proc.bus_write(address=rts_address + 0x69, data=(1 << 8))
+
+                    # 2. Wait until dac0_nco_update_busy[1] goes high, indicating that
+                    #    SYSREF has been properly gated
+                    with proc.wait_until(proc.bus_read(rts_address) & (1 << 1) != 0):
+                        pass
+
+                    # 3. Pulse the rest of the nco_update_req signals (and make sure to keep
+                    #    dac0_sysref_int_gating high)
+                    proc.bus_write(address=rts_address + 0x69, data=((1 << 8) | nco_update_request))
                     proc.nop()
+                    proc.bus_write(address=rts_address + 0x69, data=(1 << 8))
+
+                    # 4. Wait until all the busy outputs (except for dac0_nco_update_busy[1])
+                    #    are low
+                    m = 0xFFFF & ~(1 << 1)
+                    with proc.wait_until(proc.bus_read(rts_address) & m == 0):
+                        pass
+
+                    # 5. Re-enable SYSREF by pulsing dac0_sysref_int_reenable
+                    proc.bus_write(address=rts_address + 0x69, data=((1 << 9)|(1 << 8)))
                     proc.nop()
-                    proc.bus_write(address=rts_address + 0x69, data=0)
+                    proc.bus_write(address=rts_address + 0x69, data=(1 << 8))
+
+                    # 6. Wait until dac0_nco_update_busy[1] goes low
+                    with proc.wait_until(proc.bus_read(rts_address) & 0xFFFF == 0):
+                        pass
+
+                    # Do we ever need to set dac0_nco_sysref_int_gating low? If so, do it here
 
                 if self._nco_pl_event:
                     # Write the PL event register
@@ -1998,7 +2110,8 @@ class Acadia:
     def attach(self):
         """
         Maps system memory and connects to hardware drivers.
-        """        
+        """
+
         self._mem_file = os.open("/dev/mem", os.O_SYNC | os.O_RDWR)
         self._mem_maps = []
         
@@ -2068,16 +2181,30 @@ class Acadia:
         PSGPIO.sysfs_export(self._sequencer_nrst)
         PSGPIO.sysfs_set_direction(self._sequencer_nrst, "out")
         PSGPIO.sysfs_write(self._sequencer_nrst, 0)
-            
-        # self._ddr_gpio_base = get_gpio_base(0x8002_0000)
-        # PSGPIO.sysfs_export(self._ddr_gpio_base)
-        # PSGPIO.sysfs_set_direction(self._ddr_gpio_base, "out")
-        # PSGPIO.sysfs_write(self._ddr_gpio_base, 0)
+
+        self._ddr4_c0_sys_rst_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C0_SYS_RST            
+        PSGPIO.sysfs_export(self._ddr4_c0_sys_rst_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c0_sys_rst_gpio, "out")
+        PSGPIO.sysfs_write(self._ddr4_c0_sys_rst_gpio, 0)
+
+        self._ddr4_c1_sys_rst_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C1_SYS_RST            
+        PSGPIO.sysfs_export(self._ddr4_c1_sys_rst_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c1_sys_rst_gpio, "out")
+        PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 0)
+
+        self._ddr4_c0_cal_cplt_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C0_CAL_CPLT           
+        PSGPIO.sysfs_export(self._ddr4_c0_cal_cplt_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c0_cal_cplt_gpio, "in")
+
+        self._ddr4_c1_cal_cplt_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C1_CAL_CPLT           
+        PSGPIO.sysfs_export(self._ddr4_c1_cal_cplt_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_cplt_gpio, "in")
         
     def detach(self):
         """
         Unmaps all system memory.
         """
+
         for m in self._mem_maps:
             m.close()
             
@@ -2090,6 +2217,7 @@ class Acadia:
         if a sequencer is not already active (in which case, that one is 
         returned).
         """
+
         if self._active_sequencer is not None:
             return self._active_sequencer
         
@@ -2106,6 +2234,7 @@ class Acadia:
         :return: A :class:`Sequencer` object containing the compiled sequence
         :rtype: :class:`Sequencer`
         """
+
         # Get a new sequence resource
         s = self.sequencer()
         
@@ -2136,6 +2265,7 @@ class Acadia:
         Compiles the programs for all internally-stored :class:`Processor` 
         objects.
         """
+
         for s in self._sequencer_type.instances:
             s.compile_all()
         for dma in self._dac_dmas:
@@ -2149,19 +2279,20 @@ class Acadia:
         """
         Assembles and optionally loads instruction memory for some or all 
         internally-stored :class:`Processor` objects.
-        :param load: If `True`, will only assemble and not load memory.
+
+        :param load: If ``True``, will only assemble and not load memory.
         :type load: bool
-        :param sequencer: If `False`, the sequencer instructions will not be
-        assembled or loaded.
+        :param sequencer: If ``False``, the sequencer instructions will not be
+            assembled or loaded.
         :type sequencer: bool
-        :param dac_dmas: If `False`, the DAC DMA descriptor memory will not be
-        assembled or loaded.
+        :param dac_dmas: If ``False``, the DAC DMA descriptor memory will not be
+            assembled or loaded.
         :type dac_dmas: bool
-        :param adc_dmas: If `False`, the ADC DMA descriptor memory will not be
-        assembled or loaded.
+        :param adc_dmas: If ``False``, the ADC DMA descriptor memory will not be
+            assembled or loaded.
         :type adc_dmas: bool
-        :param cmacc_dmas: If `False`, the CMACC DMA descriptor memory will not
-        be assembled or loaded.
+        :param cmacc_dmas: If ``False``, the CMACC DMA descriptor memory will not
+            be assembled or loaded.
         :type cmacc_dmas: bool
         """
         
@@ -2199,6 +2330,7 @@ class Acadia:
         Identical to :meth:`assemble`, but creates a string for loading memory
         in Verilog testbenches connected to the Zynq Ultrascale AXI VIP.
         """
+
         sim_string = ""
         if sequencer:
             for s in self._sequencer_type.instances:
@@ -2230,9 +2362,10 @@ class Acadia:
     def sequencer_pprint(self):
         """
         :return: a "pretty" representation of the programs compiled
-        for the sequencer
+            for the sequencer
         :rtype: str
         """
+
         for idx_seq,s in enumerate(self._sequencer_type.instances):
             print(f"---- Program {s} ----")
             for idx,instr in enumerate(s._compiled_program):
@@ -2247,6 +2380,7 @@ class Acadia:
         of all tiles is equal to that of the slowest. This method uses the
         RFDC Multi-Tile Synchronization (MTS) routines.
         """
+
         # Initialize MTS data structures
         Channel.MTS_init()
 
@@ -2265,10 +2399,11 @@ class Acadia:
         """
         Simultaneously reset the internal phase of multiple NCOs.
         By default, all NCOs are reset; to exclude an NCO from this process,
-        provide a keyword argument `DAC<x>=False` or `ADC<x>=False`, where
-        `<x>` is the ADC or DAC number to exclude from the update. Note that
+        provide a keyword argument ``DAC<x>=False`` or ``ADC<x>=False``, where
+        ``<x>`` is the ADC or DAC number to exclude from the update. Note that
         all included channels must have the same interface frequency. 
         """
+
         raise NotImplemented
     
     @Synchronizer.synchronized(ChannelSynchronizer.NCO_FREQUENCY, "synchronizer")
@@ -2277,6 +2412,7 @@ class Acadia:
         Configure some or all NCO settings. The three 16-bit registers for
         the frequency tuning word may be individually updated, allowing
         for lower latency when less precise changes are acceptable.
+
         :param frequency: Frequency in Hz
         :type frequency: float
         """     
@@ -2285,7 +2421,7 @@ class Acadia:
         
         proc = Processor.active_processor()
         if proc is None:
-            channel.update_nco_frequency_registers(frequency)
+            channel.update_nco_frequency_registers(frequency_word)
                 
         elif isinstance(proc, Sequencer):    
             frequency_base_reg = Firmware.rfdc_rts_regs.address().value() + channel.num*2
@@ -2304,17 +2440,18 @@ class Acadia:
     def update_nco_phase(self, channel, phase, low=True, high=True):
         """
         Set the NCO phase offset to the given word.
+
         :param phase: Phase tuning word
         :type phase: int
-        :param low: If `True`, the lower 16 bits will be set.
+        :param low: If ``True``, the lower 16 bits will be set.
         :type low: bool, optional
-        :param high: If `True`, the upper 2 bits will be set.
+        :param high: If ``True``, the upper 2 bits will be set.
         :type high: bool, optional
         """
         phase_word = int(round((2**18)*phase/(2*np.pi)))
         proc = Processor.active_processor()
         if proc is None:
-            channel.update_phase_registers(phase)
+            channel.update_phase_registers(phase_word)
                 
         elif isinstance(proc, Sequencer):
             phase_reg = Firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
@@ -2332,6 +2469,7 @@ class Acadia:
         """
         Reset the value of the NCO phase accumulator.
         """
+
         proc = Processor.active_processor()
         if proc is None:
             Channel.RFDC_call_checked("ResetNCOPhase",
@@ -2443,14 +2581,16 @@ class Acadia:
     def pulse_sysref(self, count=None):
         """
         Pulse the SYSREF of the LMK04828 a given number of times. 
-        Valid values for `count` are:
-        - `None`: SYSREF_MUX is set so that the SYSREF/SYNC path is driven
-                  continuously by the SYSREF clock
-        - `0`: SYSREF_MUX is set so that the SYSREF/SYNC path is driven by the
-               pulser.
-        - `1, 2, 4, 8`: SYSREF_PULSE_CNT is programmed to produce the given 
-                        number of pulses
+        Valid values for ``count`` are:
+
+        - ``None``: SYSREF_MUX is set so that the SYSREF/SYNC path is driven
+            continuously by the SYSREF clock
+        - ``0``: SYSREF_MUX is set so that the SYSREF/SYNC path is driven by the
+            pulser.
+        - ``1, 2, 4, 8``: SYSREF_PULSE_CNT is programmed to produce the given 
+            number of pulses
         """
+
         if count is None:
             RFClk.LMK.set_sysref_mux(3)
         elif count == 0:
@@ -2466,6 +2606,7 @@ class Acadia:
         :type clkin: float
         :return: A dictionary containing various clocking system parameters.
         """
+
         d = {}
         d["clock_source"] = "external" if RFClk.LMK.get_input() == 0 else "internal"
         d["PLL1_N"] = RFClk.LMK.get_PLL1_N()
@@ -2559,6 +2700,7 @@ class Acadia:
         :return: a :class:`Channel` representing a DAC.
         :rtype: :class:`Channel`
         """
+
         return self._DAC_channels[num]
 
     def ADC(self, num):
@@ -2566,39 +2708,42 @@ class Acadia:
         :return: a :class:`Channel` representing an ADC.
         :rtype: :class:`Channel`
         """
+
         return self._ADC_channels[num]
             
     def memcpy(self, src, dst, size=None, block=True, ps_fci=False, ps_fci_side=None):
         """
         Copy memory from one location to another using either the PS or the PL,
         depending on the active processor.
+
         :param src: Source array
         :type src: CacheArray, PSDDRArray, PLDDRArray, OCMArray, DACArray, 
-        CMACCKernelArray, bytes
+            CMACCKernelArray, bytes
         :param dst: Destination array
         :type dst: CacheArray, PSDDRArray, PLDDRArray, OCMArray, DACArray,
-        CMACCKernelArray
+            CMACCKernelArray
         :param size: Size of memory copy in bytes. If not provided, the size of
-        the source array is used if available, and if not, the destination size
-        is used. If unavailable, an error is thrown indicating that this 
-        argument must be populated.
+            the source array is used if available, and if not, the destination size
+            is used. If unavailable, an error is thrown indicating that this 
+            argument must be populated.
         :type size: int, optional
-        :param block: If `True`, the active processor will be instructed to halt
-        until the memory copy is completed. Otherwise, the function will return
-        immediately after initiating the transfer.
-        :param ps_fci: If `True`, the transfer is assumed to be carried out by
-        the PS using the DMA controlled by its flow control interface (FCI)
-        exposed to the PL. The sequencer is then responsible for initiating and
-        executing the transaction. When `True`, the active processor is ignored.
-        :return: If `ps_fci` is `True` or if the active processor is a 
-        :class:`PythonProcessor`, then the :class:`ZDMA` object representing 
-        the DMA configuration is returned. If the active processor is a 
-        :class:`Sequencer`, the value used for the DataMover TAG field is 
-        returned.
+        :param block: If ``True``\, the active processor will be instructed to halt
+            until the memory copy is completed. Otherwise, the function will return
+            immediately after initiating the transfer.
+        :param ps_fci: If ``True``\, the transfer is assumed to be carried out by
+            the PS using the DMA controlled by its flow control interface (FCI)
+            exposed to the PL. The sequencer is then responsible for initiating and
+            executing the transaction. When ``True``\, the active processor is ignored.
+        :return: If ``ps_fci`` is ``True`` or if the active processor is a 
+            :class:`PythonProcessor`, then the :class:`ZDMA` object representing 
+            the DMA configuration is returned. If the active processor is a 
+            :class:`Sequencer`\, the value used for the DataMover TAG field is 
+            returned.
         :type ps_fci: bool, optional
         :param ps_fci_side: The flow-controlled side; either "read" or "write"
         :type ps_fci_side: str
         """
+
         if size is None:
             if hasattr(src, "byte_length"):
                 size = src.byte_length()
@@ -2679,19 +2824,21 @@ class Acadia:
     def capture(self, channel, array, length=None, offset=None, integration_kernel=None, datamover_tag=0xB):
         """
         Capture a signal from an ADC into an array. 
+
         :param channel: Physical channel to capture from.
         :type channel: :class:`Channel` or int
         :param array: The array with which to populate the captured data. Optionally,
-        the array may be indexed using slice notation to indicate lengths and/or
-        offsets (in units of bytes). Note that negative slice values are NOT supported
-        and will result in undefined behavior.
+            the array may be indexed using slice notation to indicate lengths and/or
+            offsets (in units of bytes). Note that negative slice values are NOT supported
+            and will result in undefined behavior.
         :type array: :class:`PSDDRArray`, :class:`PLDDR0Array`, 
-        :class:`PSDDR1Array`, :class:`self.OCMArray`, or a `getitem` operation
-        acting on one of these
+            :class:`PSDDR1Array`, :class:`self.OCMArray`, or a ``getitem`` operation
+            acting on one of these
         :param integration_kernel: If provided, the captured trace will be
-        integrated against the kernel given by the array using a CMACC.
-        Otherwise, the signal will be captured with a regular ADC DMA.
-        """            
+            integrated against the kernel given by the array using a CMACC.
+            Otherwise, the signal will be captured with a regular ADC DMA.
+        """
+
         if not isinstance(channel, Channel):
             raise TypeError(f"Channel must be of type `Channel`;"
                             f" received {channel}.")
@@ -2822,14 +2969,18 @@ class Acadia:
         self._sequencer_command_dm(datamover_name, capture_address, capture_length, tag=datamover_tag)
     
     @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
-    def generate(self, channel, array):
+    def generate(self, channel, array, decimate=0):
         """
         Generate a pulse on a DAC channel.
+
         :param channel: Physical channel to capture from.
         :type channel: :class:`Channel` or int
         :param array: The array of samples to stream into the DAC
         :type array: :class:`DACArray`
+        :param decimate: Decimation amount
+        :type decimate: int, optional
         """
+
         if not isinstance(channel, Channel):
             raise TypeError(f"Channel must be of type `Channel`;"
                             f" received {channel}.")
@@ -2846,7 +2997,8 @@ class Acadia:
         # When we request the descriptor, we need to get the address aligned to
         # 128 bits. We need the word address
         descriptor = dma.request_descriptor(array.word_address(), 
-                                            array.byte_length() // 16)
+                                            array.byte_length() // 16,
+                                            decimate=decimate)
         
         fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
@@ -2857,14 +3009,16 @@ class Acadia:
     def generate_constant(self, channel, value, length):
         """
         Generate a constant signal on a DAC channel.
+
         :param channel: Physical channel to capture from.
         :type channel: :class:`Channel` or int
         :param value: The constant value to generate
         :type value: int, float, complex, or a Symbol with value type of int,
-        float, or complex
+            float, or complex
         :param length: The length of the signal in units of cycles. 
         :type length: int or Symbol
         """
+
         if not isinstance(channel, Channel):
             raise TypeError(f"Channel must be of type `Channel`;"
                             f" received {channel}.")
@@ -2925,10 +3079,12 @@ class Acadia:
     def channels_almost_done(self, *channels):
         """
         Create a condition that will determine whether the FIFOs of the DMAs
-        driving the given Channels are almost empty.
+        driving the given :class:`Channel`\s are almost empty.
+
         :param channels: Channel(s) to check
         :type channels: list of :class:`Channel`
         """
+
         mask = 0
         for channel in channels:
             dma = channel.dma
@@ -2940,10 +3096,12 @@ class Acadia:
     def channels_running(self, *channels):
         """
         Create a condition that will determine whether the DMAs
-        driving the given Channels are running.
+        driving the given :class:`Channel`\s are running.
+
         :param channels: Channel(s) to check
         :type channels: list of :class:`Channel`
         """
+
         mask = 0
         for channel in channels:
             dma = channel.dma
@@ -2958,9 +3116,11 @@ class Acadia:
         transferring captured ADC samples is complete. This check is performed
         by inspecting whether a valid status was provided by the DataMover
         corresponding to that channel and does not examine the status itself.
+
         :param channels: Channel(s) to check
         :type channels: list of :class:`Channel`
         """
+
         mask = 0
         for channel in channels:
             dma = channel.dma
@@ -2973,6 +3133,7 @@ class Acadia:
         Resets the FIFOs associated with the given channels. If none are 
         provided, all are reset.
         """
+
         mask = 0
         if args is None or len(args) == 0:
             mask = 0xFFFFFFFF
@@ -2991,6 +3152,7 @@ class Acadia:
         Resets the datamover controller channel associated with the given
         signal channels. If none are provided, all are reset.
         """
+
         mask = 0
         if args is None or len(args) == 0:
             mask = 0xFFFFFFFF
@@ -3012,9 +3174,10 @@ class Acadia:
         is provided, the instruction memory will be updated to jump to that
         sequence in instruction memory.
         
-        :param sequence: The Sequence resource to run.
-        :type sequence: Sequence
+        :param sequence: The sequence to run.
+        :type sequence: :class:`Sequence`
         """
+
         PSGPIO.sysfs_write(self._sequencer_nrst, 1)
         PSGPIO.sysfs_write(self._sequencer_gpio, 1)
 
@@ -3022,22 +3185,37 @@ class Acadia:
         """
         Halts the sequencer by driving its run pin low.
         """
+
         PSGPIO.sysfs_write(self._sequencer_gpio, 0)
         
     def sequencer_reset(self):
         """
         Resets the sequencer.
         """
+
         PSGPIO.sysfs_write(self._sequencer_nrst, 0)
             
     def reset_plddr0(self):
-        PSGPIO.sysfs_write(self._ddr_gpio_base, 1)
-        PSGPIO.sysfs_write(self._ddr_gpio_base, 0)
+        PSGPIO.sysfs_write(self._ddr4_c0_sys_rst_gpio, 1)
+        time.sleep(0.001)
+        PSGPIO.sysfs_write(self._ddr4_c0_sys_rst_gpio, 0)
+
+    def reset_plddr1(self):
+        PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 1)
+        time.sleep(0.001)
+        PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 0)
+
+    def is_plddr0_cal_complete(self):
+        return PSGPIO.sysfs_read(self._ddr4_c0_cal_cplt_gpio)
+    
+    def is_plddr1_cal_complete(self):
+        return PSGPIO.sysfs_read(self._ddr4_c1_cal_cplt_gpio)
         
     def reset_logic(self):
         """
         Resets the PL logic.
         """
+
         gpio = 338 + 3*26 + 95
         PSGPIO.sysfs_export(gpio)
         PSGPIO.sysfs_set_direction(gpio, "out")
@@ -3048,6 +3226,7 @@ class Acadia:
         """
         Triggers the DMAs according to a provided bitmask.
         """
+
         dma_trigger_device = Firmware.sequencer_bus_decoder["dma_trigger"]
         self._active_sequencer.bus_write(address=dma_trigger_device.address().value(),
                                  data=mask,
@@ -3057,6 +3236,7 @@ class Acadia:
         """
         Wait until the DMAs specified in the mask are not running.
         """
+
         dma_running_device = Firmware.sequencer_bus_decoder["dma_running"]
         dma_running = self._active_sequencer.bus_read(dma_running_device.address().value())
         with self._active_sequencer.wait_until(dma_running & mask == 0):
@@ -3065,12 +3245,14 @@ class Acadia:
     def gpio_set_direction(self, port, directions):
         """
         Set the GPIO directions for the signals in a given port.
+
         :param port: The port number (either 3 or 4).
         :type port: int
         :param directions: Each set bit configures the corresponding
-        pin as an output.
+            pin as an output.
         :type directions: int
         """
+
         proc = Processor.active_processor()
         if proc is None:
             self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3] = directions
@@ -3080,9 +3262,11 @@ class Acadia:
     def gpio_read(self, port):
         """
         Read the value of a 32-bit GPIO port. 
+
         :param port: The port number (either 3 or 4).
         :type port: int
         """
+
         if port not in [3,4]:
             raise ValueError(f"Invalid GPIO port {port}.")
         proc = Processor.active_processor()
@@ -3097,11 +3281,13 @@ class Acadia:
     def gpio_write(self, port, data):
         """
         Write data to a 32-bit GPIO port. 
+
         :param port: The port number (either 3 or 4).
         :type port: int
         :param data: The value to write
         :type data: int or bytes
         """
+
         if port not in [3,4]:
             raise ValueError(f"Invalid GPIO port {port}.")
         proc = Processor.active_processor()
@@ -3197,15 +3383,16 @@ class Acadia:
     def _attach_resource(self, resource_manager, mem_cast=np.uint8):
         """
         Maps the memory associated with a managed resource in the physical 
-        address space of the hardware. Instances of `memoryview` are assigned
-        to the resource instances under the attribute `memory`.
+        address space of the hardware. Instances of ``memoryview`` are assigned
+        to the resource instances under the attribute ``memory``.
         
         :param resource_manager: Resource with instances to be mapped
         :type resource_manager: :class:`ManagedResource`
         :param mem_cast: The memory type to which the view should be casted,
-        as indicated by a `struct` format character.
+            as indicated by a ``struct`` format character.
         :type mem_cast: str, optional
         """
+
         m = mmap.mmap(self._mem_file, 
             resource_manager.memory_size, 
             mmap.MAP_SHARED, 
@@ -3233,6 +3420,7 @@ class Acadia:
         :param size: Size of the space to map in bytes
         :type size: int
         """
+
         m = mmap.mmap(self._mem_file, 
             size, 
             mmap.MAP_SHARED, 
@@ -3246,19 +3434,21 @@ class Acadia:
     def _sequencer_command_dm(self, datamover_name, address, size, tag=0xA, incr=True):
         """
         Configure a DataMover (either MM2S or S2MM).
+
         :param datamover_name: Name of the DataMover on the sequencer's 
-        DataMover controller
+            DataMover controller
         :type datamover_name: str
         :param address: Address for the AXI interface
         :type address: int
         :param size: Transfer size in bytes
         :type size: int
         :param tag: Numeric tag to use in command. Must be between 0 and 15 
-        inclusive.
+            inclusive.
         :type tag: int, optional
-        :param incr: If `True`, the AXI transaction is in INCR mode.
+        :param incr: If ``True``\, the AXI transaction is in INCR mode.
         :type incr: bool, optional
         """
+
         if size > 2**23:
             raise ValueError(f"Size must be less than 8 MB; received {size}.")
                 
@@ -3290,4 +3480,3 @@ class Acadia:
         self._active_sequencer.bus_write(address=bus_address_base, 
                             data=addr_reg)
         
-    

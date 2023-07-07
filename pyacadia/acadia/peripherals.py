@@ -19,6 +19,7 @@ def get_gpio_base(axi_address):
     """
     Get the base sysfs GPIO number for a GPIO controller on the AXI network.
     """
+
     with open("/var/log/dmesg") as f:
         dmesg = f.read()
 
@@ -36,6 +37,7 @@ class RFClk:
     """
     A wrapper for the Xilinx XRFClk driver.
     """    
+
     @staticmethod
     def call(name, *args, **kwargs):
         if getattr(xrfclk.lib, f"XRFClk_{name}")(*args, **kwargs) != xrfclk.lib.XST_SUCCESS:
@@ -45,21 +47,25 @@ class RFClk:
     def init(cls, gpio):
         """
         Initialize the xrfclk driver.
+
         :param gpio: The GPIO ID of the SPI mux on the CLK104
         :type gpio: int
         """
+
         RFClk.call("Init", gpio)
         
     class RFClkChip(ABC):
         """
         Wrapper for operations on a particular chip
         """
+
         @classmethod
         @abstractmethod
         def chip_id(cls):
             """
             The chip ID, as designated by the XRFClk driver.
             """
+
             pass
         
         @classmethod
@@ -71,6 +77,7 @@ class RFClk:
             """
             Set a configuration present in the driver on the chip.
             """
+
             RFClk.call("SetConfigOnOneChipFromConfigId", cls.chip_id(), config_id)
             
         @classmethod
@@ -78,6 +85,7 @@ class RFClk:
             """
             Read a register on the chip.
             """
+
             value = xrfclk.ffi.new("unsigned int*", address << 8)
             RFClk.call("ReadReg", cls.chip_id(), value)
             return value[0]
@@ -87,6 +95,7 @@ class RFClk:
             """
             Write a register on the chip.
             """
+
             RFClk.call("WriteReg", cls.chip_id(), (address << 8) | (data & 0xFF))
         
     class LMK(RFClkChip):
@@ -109,6 +118,7 @@ class RFClk:
             """
             Read a big-endian 16-bit number.
             """
+
             regH = cls.read_reg(address)
             regL = cls.read_reg(address+1)
             return (regH << 8) | regL
@@ -118,6 +128,7 @@ class RFClk:
             """
             Write a big-endian 16-bit number.
             """
+
             cls.write_reg(address, (data >> 8) & (mask >> 8) & 0xFF)
             cls.write_reg(address+1, data & mask & 0xFF)
         
@@ -126,6 +137,7 @@ class RFClk:
             """
             Set the clock input mux.
             """
+
             cls.write_reg(0x147, (clkin << 4) | (2 << 2) | (2 << 0))
             
         @classmethod
@@ -133,6 +145,7 @@ class RFClk:
             """
             Get the setting of the clock input mux.
             """
+
             reg = cls.read_reg(0x147) >> 4
             return reg & 0x7
         
@@ -187,6 +200,7 @@ class RFClk:
             output and its corresponding SDCLK output. Provided
             output should be even-numbered.
             """
+
             if output % 2 != 0:
                 raise ValueError("Must set `output` to an even-numbered channel"
                                  f" (received {output}).")
@@ -197,6 +211,7 @@ class RFClk:
             """
             Sets the CLKout_X_Y_ODL field.
             """
+
             addr = cls.get_output_base(output)
             reg = cls.read_reg(addr)
             if en:
@@ -216,6 +231,7 @@ class RFClk:
             """
             Sets the CLKout_X_Y_IDL field.
             """
+
             addr = cls.get_output_base(output)
             reg = cls.read_reg(addr)
             if en:
@@ -235,6 +251,7 @@ class RFClk:
             """
             Set the value of an output divider on a DCLK output.
             """
+
             addr = cls.get_output_base(output)
             reg = cls.read_reg(addr)
             reg &= ~0x1F # Clear the bits associated with the field
@@ -247,6 +264,7 @@ class RFClk:
             """
             Set the value of an output divider on a DCLK output.
             """
+
             addr = cls.get_output_base(output)
             reg = cls.read_reg(addr) & 0x1F
             if reg == 0:
@@ -259,6 +277,7 @@ class RFClk:
             Sets the number of cycles the output is high and low by programming
             the DCLKOUTx_DDLY_CNTH/L registers.
             """
+
             reg = 0
             if count_high != 16:
                 reg |= count_high << 4
@@ -277,10 +296,11 @@ class RFClk:
         def set_output_analog_delay(cls, output, delay):
             """
             Configures the analog delay for an output by setting DCLKOUTx_ADLY
-            and DCLKOUTx_ADLY_PD. Set `delay` to 0 to disable the delay and
+            and DCLKOUTx_ADLY_PD. Set ``delay`` to 0 to disable the delay and
             power down the circuitry; otherwise the delay (in ps) must be
-            500 + k*25, where 1 <= k <= 23.
+            ``500 + k*25``\, where ``1 <= k <= 23``\.
             """
+
             # Power the analog delay up or down depending on the arguments
             pd_addr = cls.get_output_base(output) + 6
             pd_reg = cls.read_reg(pd_addr)
@@ -318,15 +338,16 @@ class RFClk:
             """
             Multiplexes a particular output by setting the DCLKOUTx_MUX and 
             DCLKOUTx_ADLY_MUX registers. Note that the output divider must not
-            be 1 when `mux` is 0; `mux` should be set to 1 or 7 when the 
-            divider is 1.
-            Valid values are:
-            - mux=0: Divider only
-            - mux=1: Divider with duty cycle correction and half-step
-            - mux=2: Bypass divider
-            - mux=3: Analog delay + divider without duty cycle correction or half-step
-            - mux=7: Analog delay + divider with duty cycle correction and half-step
+            be 1 when ``mux`` is 0; ``mux`` should be set to 1 or 7 when the 
+            divider is 1. Valid values are:
+
+            - ``mux=0``: Divider only
+            - ``mux=1``: Divider with duty cycle correction and half-step
+            - ``mux=2``: Bypass divider
+            - ``mux=3``: Analog delay + divider without duty cycle correction or half-step
+            - ``mux=7``: Analog delay + divider with duty cycle correction and half-step
             """      
+
             addr = cls.get_output_base(output) + 3
             reg = cls.read_reg(addr)
             reg &= ~0x7
@@ -341,9 +362,11 @@ class RFClk:
         def set_sdclk_mux(cls, output, mux):
             """
             Sets the input to the SDCLK outputs. Valid values are:
-            - `mux=0`: Device clock output
-            - `mux=1`: SYSREF output
+
+            - ``mux=0``: Device clock output
+            - ``mux=1``: SYSREF output
             """
+
             addr = cls.get_output_base(output-1) + 4
             reg = cls.read_reg(addr)
             if mux:
@@ -362,6 +385,7 @@ class RFClk:
             Sets the digital delay of an SDCLK output in units of VCO cycles. 
             Valid values are 0 or 2-11 inclusive.
             """
+
             addr = cls.get_output_base(output-1) + 4
             reg = cls.read_reg(addr)
             reg &= ~(0xF << 1)
@@ -381,9 +405,10 @@ class RFClk:
         def set_sdclk_analog_delay(cls, output, delay, enable=True):
             """
             Enable/disable and set value of analog delay.
-            Valid values of `delay` (in units of ps) are 0, 600, 750, 900,
+            Valid values of ``delay`` (in units of ps) are 0, 600, 750, 900,
             1050, 1200, 1350, 1500, 1650, 1800, 1950, 2100, or 2250.
             """
+
             reg = 0
             reg |= (enable << 4)
             
@@ -425,6 +450,7 @@ class RFClk:
             Set the power state of various elements on the output path of a 
             given output and its corresponding SDCLK output.
             """
+
             reg = 0
             reg |= disable_digital_delay << 7
             reg |= disable_glitchless_halfstep << 6
@@ -443,6 +469,7 @@ class RFClk:
             """
             Get the name of a drive standard from its register bits.
             """
+
             tmp = None
             if drive & 7 == 0:
                 tmp = "Power down"
@@ -471,22 +498,24 @@ class RFClk:
             """
             Sets the output voltage format and inverter settings for a 
             given output or SDCLK output. Valid values are:
-            - `drive=0`: Power down
-            - `drive=1`: LVDS
-            - `drive=2`: HSDS 6 mA
-            - `drive=3`: HSDS 8 mA
-            - `drive=4`: HSDS 10 mA
-            - `drive=5`: LVPECL 1600 mV
-            - `drive=6`: LVPECL 2000 mV
-            - `drive=7`: LCPECL
-            - `drive=9`: LVDS, inverted
-            - `drive=10`: HSDS 6 mA, inverted
-            - `drive=11`: HSDS 8 mA, inverted
-            - `drive=12`: HSDS 10 mA, inverted
-            - `drive=13`: LVPECL 1600 mV, inverted
-            - `drive=14`: LVPECL 2000 mV, inverted
-            - `drive=15`: LCPECL, inverted
+
+            - ``drive=0``: Power down
+            - ``drive=1``: LVDS
+            - ``drive=2``: HSDS 6 mA
+            - ``drive=3``: HSDS 8 mA
+            - ``drive=4``: HSDS 10 mA
+            - ``drive=5``: LVPECL 1600 mV
+            - ``drive=6``: LVPECL 2000 mV
+            - ``drive=7``: LCPECL
+            - ``drive=9``: LVDS, inverted
+            - ``drive=10``: HSDS 6 mA, inverted
+            - ``drive=11``: HSDS 8 mA, inverted
+            - ``drive=12``: HSDS 10 mA, inverted
+            - ``drive=13``: LVPECL 1600 mV, inverted
+            - ``drive=14``: LVPECL 2000 mV, inverted
+            - ``drive=15``: LCPECL, inverted
             """
+
             addr = cls.get_output_base(output - (output % 2)) + 7
             reg = cls.read_reg(addr)
             if output % 2 == 0:
@@ -510,6 +539,7 @@ class RFClk:
             """
             Controls the SYSREF_GBL_PD bit.
             """
+
             reg140 = cls.read_reg(0x140)
             if powerdown:
                 reg140 |= (1 << 3)
@@ -526,6 +556,7 @@ class RFClk:
             """
             Controls the SYSREF_PD bit.
             """
+
             reg140 = cls.read_reg(0x140)
             if powerdown:
                 reg140 |= (1 << 2)
@@ -542,6 +573,7 @@ class RFClk:
             """
             Controls the SYSREF_DDLY_PD bit.
             """
+
             reg140 = cls.read_reg(0x140)
             if powerdown:
                 reg140 |= (1 << 1)
@@ -558,6 +590,7 @@ class RFClk:
             """
             Controls the SYSREF_PLSR_PD bit.
             """
+
             reg140 = cls.read_reg(0x140)
             if powerdown:
                 reg140 |= (1 << 0)
@@ -574,6 +607,7 @@ class RFClk:
             """
             Controls the SYNC_EN bit.
             """
+
             reg143 = cls.read_reg(0x143)
             if state:
                 reg143 |= (1 << 4)
@@ -586,14 +620,16 @@ class RFClk:
             """
             Determine whether the SYNC_EN bit is set.
             """
+
             return bool(cls.read_reg(0x143) & (1 << 4))
 
         @classmethod
         def set_sync_polarity(cls, invert):
             """
-            Sets the SYNC polarity to non-inverted (`invert=False`) or 
-            inverted (`invert=True`).
+            Sets the SYNC polarity to non-inverted \(``invert=False``\) or 
+            inverted \(``invert=True``\).
             """
+
             reg143 = cls.read_reg(0x143)
             if invert:
                 reg143 |= (1 << 5)
@@ -606,6 +642,7 @@ class RFClk:
             """
             Determine whether the SYNC polarity is inverted or not.
             """
+
             return bool(cls.read_reg(0x143) & (1 << 5))
         
         @classmethod
@@ -614,6 +651,7 @@ class RFClk:
             Resets and arms the SDCLKoutY_DDLY path, allowing local digital 
             delays to take effect after a SYNC event
             """
+
             reg143 = cls.read_reg(0x143)
             if clr:
                 reg143 |= (1 << 7)
@@ -627,18 +665,21 @@ class RFClk:
             Determine whether the digital delay paths are armed for 
             synchronization.
             """
+
             return bool(cls.read_reg(0x143) & (1 << 7))
         
         @classmethod
         def set_sync_mode(cls, mode):
             """
             Sets the SYNC_MODE field. The behavior is:
-            - mode=0: SYNC and SYSREF disabled
-            - mode=1: SYNC generated by SYNC pin
-            - mode=2: SYNC generated by pulser upon transition of SYNC pin
-            - mode=3: SYNC generated by pulser when writing to the SYSREF pulse
-                      count register
+
+            - ``mode=0``: SYNC and SYSREF disabled
+            - ``mode=1``: SYNC generated by SYNC pin
+            - ``mode=2``: SYNC generated by pulser upon transition of SYNC pin
+            - ``mode=3``: SYNC generated by pulser when writing to the SYSREF pulse
+                count register
             """
+
             reg143 = cls.read_reg(0x143)
             reg143 &= ~0x3 # Clear the existing setting
             reg143 |= (mode & 0x3)
@@ -649,6 +690,7 @@ class RFClk:
             """
             Reads the SYNC_MODE field.
             """
+
             return cls.read_reg(0x143) & 0x3
 
         @classmethod
@@ -657,6 +699,7 @@ class RFClk:
             Instructs the SYSREF pulser to generate the desired number of 
             pulses. Only values of 1, 2, 4, or 8 are allowed.
             """
+
             if count == 1:
                 v = 0
             elif count == 2:
@@ -676,6 +719,7 @@ class RFClk:
             """
             Sets or clears the SYNC_DIS bit for the provided output.
             """
+
             reg = cls.read_reg(0x144)
             if disable:
                 reg |= (1 << (output // 2))
@@ -689,6 +733,7 @@ class RFClk:
             Determines whether a particular output will be synchronized
             upon a SYNC event by checking the value of the SYNC_DIS bit.
             """
+
             return bool(cls.read_reg(0x144) & (1 << (output // 2)))
         
         @classmethod
@@ -697,6 +742,7 @@ class RFClk:
             Enable or disable synchronization of the SYSREF divider upon a
             SYNC event by setting or clearing the SYNC_DISSYSREF bit.
             """
+
             reg = cls.read_reg(0x144)
             if disable:
                 reg |= (1 << 7)
@@ -713,6 +759,7 @@ class RFClk:
             """
             Sets the SYSREF digital delay by programming the SYSREF_DDLY field.
             """
+
             if not isinstance(delay, int):
                 raise TypeError("SYSREF delay must be an integer"
                                 f" (received {delay}).")
@@ -730,6 +777,7 @@ class RFClk:
             """
             Sets the SYSREF divider by programming the SYSREF_DIV field.
             """
+
             if not isinstance(div, int):
                 raise TypeError("SYSREF divider value must be an integer"
                                 f" (received {div}).")
@@ -747,12 +795,14 @@ class RFClk:
             """
             Multiplexes the signal driven on the SYNC/SYSREF path by setting
             the SYSREF_MUX and SYSREF_CLKin0_MUX fields. Valid options are:
-            - 0: Input from pin/SPI, re-clocked to distribution clock
-            - 1: Input from pin/SPI, re-clocked to SYSREF clock
-            - 2: SYSREF pulser
-            - 3: SYSREF continuous (directly driven by SYSREF clock)
-            - 4: CLKin0 direct
+
+            - ``mux=0``: Input from pin/SPI, re-clocked to distribution clock
+            - ``mux=1``: Input from pin/SPI, re-clocked to SYSREF clock
+            - ``mux=2``: SYSREF pulser
+            - ``mux=3``: SYSREF continuous (directly driven by SYSREF clock)
+            - ``mux=4``: CLKin0 direct
             """
+
             # No need to do read-then-write because these are the only bits in
             # the register
             cls.write_reg(0x139, mux)
@@ -778,6 +828,7 @@ class PSGPIO:
     """
     An interface to the GPIO pins of the PS exposed to the PL over EMIO.
     """
+
     PSGPIO3_IN_PSREG = 0x6C
     PSGPIO3_OUT_PSREG = 0x4C
     PSGPIO3_DIR_PSREG = 0x2C4
@@ -800,21 +851,28 @@ class PSGPIO:
     def sysfs_write(gpio, value):
         with open(f"/sys/class/gpio/gpio{gpio}/value", "w") as f:
             f.write(f"{value}\n")
+
+    @staticmethod
+    def sysfs_read(gpio):
+        with open(f"/sys/class/gpio/gpio{gpio}/value", "r") as f:
+            v = f.read()
+        return v
         
 @dataclass
 class ZDMA:
     """
     Configures a channel of the PS ZDMA.
     """
-    channel: "DMA channel ID" = None
-    src: "Address of transaction source or constant for write-only mode" = None
-    dst: "Transaction destination" = None
-    size: "Transaction size in bytes. If None, source size is used." = None
-    wr_only: "Operate the DMA in write-only mode" = False
-    fci_enable: "Enable flow control from the PL" = False
-    fci_side: "Selects read or write channel for flow control" = "read"
-    fci_buffer_usage: "Size of common buffer to use for FCI cache" = 256
-    fci_bus_address: "Sddress for the FCI controller on the sequencer's bus" = None
+
+    channel: int = None
+    src: int = None
+    dst: int = None
+    size: int = None
+    wr_only: bool = False
+    fci_enable: bool = False
+    fci_side: str = "read"
+    fci_buffer_usage: int = 256
+    fci_bus_address: int = None
     
     # Register offsets
     ERR_CTRL = 0
@@ -848,6 +906,7 @@ class ZDMA:
         """
         Populate internal fields with configuration values.
         """
+
         self._regs = {}
         # Settings for ZDMA_CH_CTRL0
         ch_ctrl0_value = 0
@@ -900,15 +959,18 @@ class ZDMA:
     def attach(self, mem):
         """
         Attaches the object to a memory map of the DMA registers.
+
         :param mem: A memory-mapped numpy array pointing to the DMA registers
         :type mem: numpy.ndarray with dtype np.uint32
         """ 
+
         self._mem = mem
         
     def configure_hardware(self):
         """
         Writes the internally-stored configuration to the hardware.
         """
+
         for reg,value in self._regs.items():
             self._mem[reg] = value
     
@@ -916,6 +978,7 @@ class ZDMA:
         """
         Starts the configured transfer.
         """
+
         proc = Processor.active_processor()
         if proc is None:
             self._mem[ZDMA.CH_CTRL2] = 1
@@ -933,6 +996,7 @@ class ZDMA:
         :param clear: Clear the total byte count.
         :type clear: bool, optional
         """
+
         count = self._mem[ZDMA.CH_TOTAL_BYTE]
         if clear:
             self._mem[ZDMA.CH_TOTAL_BYTE] = 0
@@ -943,10 +1007,12 @@ class ZDMA:
         Get the status of the DMA. On the PS, this is the value of the STATUS
         bitfield, and on the sequencer this is the value of the credit 
         acknowledgement counter.
+
         :return: 0 = done without error, 1 = paused without error, 2 = busy 
-        transferring, 3 = done with error
+            transferring, 3 = done with error
         :rtype: int
         """
+
         proc = Processor.active_processor()
         if proc is None:
             return self._mem[ZDMA.CH_STATUS]
@@ -961,9 +1027,11 @@ class ZDMA:
         Read the completion status of the DMA. On the PS, this compares the 
         DMA status value to that associated with successful completion. On the
         sequencer, this returns the transaction acknowledgement counter.
+
         :return: DMA completion status 
         :rtype: int
         """
+
         proc = Processor.active_processor()
         if proc is None:
             status = self.status()
@@ -978,6 +1046,7 @@ class ZDMA:
         """
         Clear the counters for managing the FCI in the ZDMA controller.
         """
+
         proc = Processor.active_processor()
         if isinstance(proc, Sequencer):
             # Clear credit acknowledgement counter
@@ -995,6 +1064,7 @@ class AXISSwitch:
     Methods for controlling the Xilinx AXIS switch IP over the AXI-Lite
     interface.
     """
+
     MUX0_REG = 0x40 >> 2
     DISABLE_VALUE = 1 << 31
     
@@ -1004,22 +1074,26 @@ class AXISSwitch:
     def attach(self, mem):
         """
         Attaches the instance to a view of its registers.
+
         :param mem: A memory-mapped numpy array pointing to the registers
         :type mem: numpy.ndarray with dtype np.uint32
         """
+
         self._mem = mem
     
     def connect(self, mi, si, commit=True):
         """
         Connect a master interface to a slave interface.
+
         :param mi: Master interface number
         :type mi: int
         :param si: Slave interface number
         :type si: int
-        :param commit: If `True`, the connection request is committed. 
-        Otherwise, only the connection register is updated.
+        :param commit: If ``True``, the connection request is committed. 
+            Otherwise, only the connection register is updated.
         :type commit: bool, optional
         """ 
+
         self._mem[AXISSwitch.MUX0_REG + mi] = si
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
@@ -1027,12 +1101,14 @@ class AXISSwitch:
     def disconnect(self, mi=None, commit=True):
         """
         Disconnect a master interface. If not provided, all are disconnected.
+
         :param mi: Interface number to disconnect.
         :type mi: int or None, optional
-        :param commit: If `True`, the connection request is committed. 
-        Otherwise, only the connection register is updated.
+        :param commit: If ``True``, the connection request is committed. 
+            Otherwise, only the connection register is updated.
         :type commit: bool, optional
         """ 
+        
         if mi is not None:
             self._mem[AXISSwitch.MUX0_REG + mi] = AXISSwitch.DISABLE_VALUE
         else:
@@ -1040,3 +1116,4 @@ class AXISSwitch:
                 self._mem[AXISSwitch.MUX0_REG + i] = AXISSwitch.DISABLE_VALUE
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
+            

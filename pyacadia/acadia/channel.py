@@ -20,24 +20,26 @@ class Channel:
     Some parameters of the channel can be configured to update on a particular
     event. These events can be:  
     
-         - `"immediate"`: The update is carried out when the update function is
-                        called.
-                        
-         - `"slice"`: The update is carried out when `nco_update_event` is called
-                    on a `Channel` with both a block and a tile.
-                    
-         - `"tile"`: The update is carried out when `nco_update_event` is called 
-                   on a `Channel` with no block specified. This can be used to 
-                   synchronize updates for multiple channels in a tile.
-                   
-         - `"sysref"`: The update is carried out when a SYSREF event is generated
-                     by the CLK104. This can be used to synchronize updates 
-                     across tiles when the interface frequencies are the same
-                     and MTS is enabled.
-                     
-         - `"pl"`: The update is carried out when the corresponding signal is 
-                 driven from the PL. 
+    - ``"immediate"``: The update is carried out when the update function is
+        called.
+                
+    - ``"slice"``: The update is carried out when ``nco_update_event`` is called
+        on a `Channel` with both a block and a tile.
+            
+    - ``"tile"``: The update is carried out when `nco_update_event` is called 
+        on a `Channel` with no block specified. This can be used to 
+        synchronize updates for multiple channels in a tile.
+            
+    - ``"sysref"``: The update is carried out when a SYSREF event is generated
+        by the CLK104. This can be used to synchronize updates 
+        across tiles when the interface frequencies are the same
+        and MTS is enabled.
+                
+    - ``"pl"``: The update is carried out when the corresponding signal is 
+        driven from the PL. 
+
     """
+
     tile: int = None
     block: int = None
     is_dac: bool = None
@@ -59,7 +61,6 @@ class Channel:
         return xrfdc.lib.def_XRFDC_BLOCK_BASE(self.converter_type(), 
                                               self.tile, 
                                               self.block)
-        raise ValueError(f"Unable to get register base address for channel {self}.")
     
     def converter_type(self):
         return xrfdc.lib.XRFDC_DAC_TILE if self.is_dac else xrfdc.lib.XRFDC_ADC_TILE
@@ -71,6 +72,7 @@ class Channel:
         driver instance internally. This function should only be called on live
         hardware.
         """
+
         cls._rfdc = xrfdc.ffi.new("XRFdc*")
         cls._device_ptr = xrfdc.ffi.new("struct metal_device**")
         
@@ -87,10 +89,12 @@ class Channel:
     def RFDC_call(cls, func_name, *args, **kwargs):
         """
         Call a function in the XRFDC driver. 
+
         :param func_name: Name of RFDC function to execute. Omit any "XRFdc_"
-        prefix.
+            prefix.
         :type func_name: str
         """
+
         if not hasattr(cls, "_rfdc"):
             raise ValueError("RFDC driver not initialized.")
             
@@ -101,10 +105,12 @@ class Channel:
         """
         Call a function in the XRFDC driver and throw an exception if the call
         returns a failure code.
+
         :param func_name: Name of RFDC function to execute. Omit any "XRFdc_"
-        prefix.
+            prefix.
         :type func_name: str
         """
+
         if not hasattr(cls, "_rfdc"):
             raise ValueError("RFDC driver not initialized.")
             
@@ -116,6 +122,7 @@ class Channel:
         """
         Get a definition from the XRFDC library by name.
         """ 
+
         return getattr(xrfdc.lib, name)
     
     @classmethod
@@ -123,6 +130,7 @@ class Channel:
         """
         Get a definition from the XRFDC library by name.
         """
+
         if not hasattr(cls, "_rfdc"):
             raise ValueError("RFDC driver not initialized.")
             
@@ -133,6 +141,7 @@ class Channel:
         """
         Get the status of the RFDC IP.
         """
+
         s = xrfdc.ffi.new("XRFdc_IPStatus*")
         cls.RFDC_call_checked("GetIPStatus", s)
         
@@ -154,6 +163,7 @@ class Channel:
         """
         Get the status of the converter.
         """
+
         s = xrfdc.ffi.new("XRFdc_BlockStatus*")
         self.RFDC_call_checked("GetBlockStatus", 
                    self.converter_type(), 
@@ -277,16 +287,17 @@ class Channel:
         """
         Configures the modulator and NCO settings for the channel. The frequency
         and phase of the NCO will be cleared.
-        :param enable: If `False`, the NCO is disabled.
+
+        :param enable: If ``False``, the NCO is disabled.
         :type enable: bool, optional
         :param frequency: The frequency of the NCO in Hz.
-        :param phase: The phase offset of the NCO in degrees (must be between 
-        -180 and 180 exclusive).
+        :param phase: The phase offset of the NCO in radians
         :param update_source: The source of events upon which the NCO frequency
-        and phase are updated. See the description of update event sources in the
-        documentation of the :class:`Channel` object.
+            and phase are updated. See the description of update event sources in the
+            documentation of the :class:`Channel` object.
         :type update_source: str, optional
         """
+
         if (update_source is not None 
               and update_source.upper() not in ["IMMEDIATE", "SLICE", "TILE", "SYSREF", "PL", "MARKER"]):
             raise ValueError(f"Invalid source {update_source}.")
@@ -302,7 +313,7 @@ class Channel:
             settings.Freq = frequency/1e6
             
         if phase is not None:
-            settings.PhaseOffset = phase
+            settings.PhaseOffset = 180*phase/np.pi
             
         if update_source is not None:
             settings.EventSource = self.RFDC_def(f"XRFDC_EVNT_SRC_{update_source.upper()}")
@@ -327,6 +338,7 @@ class Channel:
         :return: A dict with NCO settings
         :rtype: dict
         """
+
         settings = self.RFDC_struct("XRFdc_Mixer_Settings*")
         self.RFDC_call_checked("GetMixerSettings",
                        self.converter_type(), 
@@ -379,6 +391,7 @@ class Channel:
     def configure_delay(self, delay=None, update_source=None):
         """
         Configures the delay line of the channel.
+
         :param delay: Number of samples to delay the output. 
         :type delay: int, optional
         :param update_source: Event source for updating the delay.
@@ -413,6 +426,7 @@ class Channel:
         :return: The number of samples by which the channel is delayed.
         :rtype: int
         """
+
         settings = self.RFDC_struct("XRFdc_CoarseDelay_Settings*")
         self.RFDC_call_checked("GetCoarseDelaySettings",
                        self.converter_type(), 
@@ -426,6 +440,7 @@ class Channel:
         """
         Trigger a delay update event from the RFDC software driver.
         """
+
         self.RFDC_call_checked("UpdateEvent", 
                        self.converter_type(), self.tile, self.block,
                        self.RFDC_def("XRFDC_EVENT_CRSE_DLY"))
@@ -434,6 +449,7 @@ class Channel:
         """
         Converts a frequency in Hz to the nearest integer tuning word for the
         NCO.
+
         :param frequency: Frequency in Hz
         :type frequency: float
         :return: NCO tuning word corresponding to the provided frequency
@@ -465,18 +481,20 @@ class Channel:
         Configure some or all NCO settings. The three 16-bit registers for
         the frequency tuning word may be individually updated, allowing
         for lower latency when less precise changes are acceptable.
+
         :param frequency: Frequency in Hz
         :type frequency: float
         :param low: Indicates whether the low bits of the frequency tuning word
-        are to be updated
+            are to be updated
         :type low: bool, optional
         :param mid: Indiciates whether the middle bits of the frequency tuning
-        word are to be updated
+            word are to be updated
         :type mid: bool, optional
         :param high: Indicates whether the high bits of the frequency tuning
-        word are to be updated
+            word are to be updated
         :type high: bool, optional
-        """     
+        """   
+
         frequency_word = self.frequency_to_nco_tuning_word(frequency)
         
         if low:
@@ -498,13 +516,15 @@ class Channel:
     def update_nco_phase_registers(self, phase, low=True, high=True):
         """
         Set the NCO phase offset to the given word.
+
         :param phase: Phase tuning word
         :type phase: int
-        :param low: If `True`, the lower 16 bits will be set.
+        :param low: If ``True``, the lower 16 bits will be set.
         :type low: bool, optional
-        :param high: If `True`, the upper 2 bits will be set.
+        :param high: If ``True``, the upper 2 bits will be set.
         :type high: bool, optional
         """
+
         if low:
             self.RFDC_call("WriteReg16Wrapper", 
                             self.register_base_address(), 
@@ -521,6 +541,7 @@ class Channel:
         """
         Reset the value of the NCO phase accumulator.
         """
+
         self.RFDC_call_checked("ResetNCOPhase", 
                                self.converter_type(), 
                                self.tile, 
@@ -530,6 +551,7 @@ class Channel:
         """
         Trigger an NCO update event from the RFDC software driver.
         """
+
         self.RFDC_call_checked("UpdateEvent", 
                        self.converter_type(), self.tile, self.block,
                        self.RFDC_def("XRFDC_EVENT_MIXER"))
@@ -537,9 +559,11 @@ class Channel:
     def set_vop(self, vop):
         """
         Sets the variable output power (VOP) of a DAC channel.
+
         :param vop: VOP output current setting in uA
         :type vop: int
         """
+
         if not self.is_dac:
             raise TypeError("VOP can only be set on DAC channels.")
          
@@ -561,6 +585,7 @@ class Channel:
         :return: The output current in mA.
         :rtype: int
         """
+
         n = xrfdc.ffi.new("int*")
         self.RFDC_call_checked("GetOutputCurr", self.tile, self.block, n)
         return n
@@ -568,9 +593,11 @@ class Channel:
     def set_dsa(self, dsa):
         """
         Sets the digital step attenuator (DSA).
+
         :param dsa: Attenuation in dB
         :type dsa: float
         """
+
         if self.is_dac:
             raise TypeError("DSA can only be set on ADC channels.")
             
@@ -589,10 +616,9 @@ class Channel:
             
     def get_dsa(self):
         """
-        Sets the digital step attenuator (DSA).
-        :param dsa: Attenuation in dB
-        :type dsa: float
+        Gets the value of the digital step attenuator (DSA).
         """
+
         if self.is_dac:
             raise TypeError("DSA can only be read on ADC channels.")
             
@@ -610,6 +636,7 @@ class Channel:
         Set time-division duplexing (TDD) mode. Note that in the current version
         of the firmware, this will only apply for DACs.
         """
+
         # Do nothing. the synchronizer will calculate the register value and
         # write it
         pass
@@ -617,9 +644,11 @@ class Channel:
     def set_nyquist_zone(self, nz):
         """
         Sets the Nyquist zone setting of the channel to the specified number.
+
         :param nz: Nyquist zone
         :type nz: int
         """ 
+
         reg_value = self.RFDC_def(f"XRFDC_{'EVEN' if nz % 2 == 0 else 'ODD'}_NYQUIST_ZONE")
         
         self.RFDC_call_checked("SetNyquistZone", 
@@ -630,6 +659,7 @@ class Channel:
         :return: The Nyquist zone configured for the channel.
         :rtype: int
         """
+
         n = xrfdc.ffi.new("int*")
         self.RFDC_call_checked("GetNyquistZone", self.tile, self.block, n)
         return n
@@ -637,9 +667,11 @@ class Channel:
     def set_decoder_mode(self, mode):
         """
         Sets the DAC decoder mode.
+
         :param mode: One of "low noise" or "high linearity"
         :type mode: str
         """
+
         if not self.is_dac:
             raise TypeError("Decoder mode may only be set for DACs.")
             
@@ -657,6 +689,7 @@ class Channel:
         :return: The Nyquist zone configured for the channel.
         :rtype: int
         """
+
         if not self.is_dac:
             raise TypeError("Decoder mode may only be set for DACs.")
             
@@ -672,10 +705,12 @@ class Channel:
     def set_inv_sinc_FIR(self, mode):
         """
         Sets the mode of the inverse-sinc FIR filter.
+        
         :param mode: Filter mode. May be 0 (disable), 1 (first Nyquist zone),
-        or 2 (second Nyquist zone)
+            or 2 (second Nyquist zone)
         :type mode: int
         """
+
         if not self.is_dac:
             raise TypeError("InvSincFIR may only be set for DACs.")
             
@@ -687,9 +722,10 @@ class Channel:
     def get_inv_sinc_FIR(self):
         """
         :return: The band for which the inverse-sinc FIR filter is programmed
-        (see the definitions of return values in :meth:`set_inv_sinc_FIR`).
+            (see the definitions of return values in :meth:`set_inv_sinc_FIR`).
         :rtype: int
         """
+
         if not self.is_dac:
             raise TypeError("InvSincFIR may only be set for DACs.")
             
@@ -700,9 +736,11 @@ class Channel:
     def set_dither(self, mode):
         """
         Enables or disables ADC dithering.
-        :param mode: If `True`, dithering is enabled; otherwise, it is disabled.
+
+        :param mode: If ``True``, dithering is enabled; otherwise, it is disabled.
         :type mode: bool
         """
+
         if self.is_dac:
             raise TypeError("Dithering may only be set for ADCs.")
             
@@ -710,9 +748,10 @@ class Channel:
         
     def get_dither(self):
         """
-        :return: `True` if dithering is enabled.
+        :return: ``True`` if dithering is enabled.
         :rtype: bool
         """
+
         if self.is_dac:
             raise TypeError("Dithering may only be set for ADCs.")
             
@@ -725,6 +764,7 @@ class Channel:
         :return: Clock source for a tile
         :rtype: str
         """
+
         n = xrfdc.ffi.new("int*")
         self.RFDC_call_checked("GetClockSource", self.converter_type(), self.tile, n)
         sources = [f"DAC{i}" for i in range(4)] + [f"ADC{i}" for i in range(4)]
@@ -734,12 +774,14 @@ class Channel:
         """
         Configures the PLL and enables switching between internal and external
         clocking.
+
         :param source: One of "external" or "internal"
         :type source: str
         :param ref_clk_frequency: Frequency of the reference clock in MHz
         :type ref_clk_frequency: float
         :param sample_rate: Sample rate in MHz
         """ 
+
         if self.block is not None:
             raise ValueError("Clocking can only be configured for tiles; block must be None.")
             
@@ -756,9 +798,10 @@ class Channel:
         
     def is_PLL_enabled(self):
         """
-        :return: `True` if the tile PLL is enabled.
+        :return: ``True`` if the tile PLL is enabled.
         :rtype: bool
         """
+
         settings = self.RFDC_struct("XRFdc_PLL_Settings*")
         self.RFDC_call_checked("GetPLLConfig",
                        self.converter_type(), 
@@ -772,6 +815,7 @@ class Channel:
         :return: The programmed reference clock of the PLL.
         :rtype: float
         """
+
         settings = self.RFDC_struct("XRFdc_PLL_Settings*")
         self.RFDC_call_checked("GetPLLConfig",
                        self.converter_type(), 
@@ -785,6 +829,7 @@ class Channel:
         :return: The programmed sample clock of the PLL.
         :rtype: float
         """
+
         settings = self.RFDC_struct("XRFdc_PLL_Settings*")
         self.RFDC_call_checked("GetPLLConfig",
                        self.converter_type(), 
@@ -795,9 +840,10 @@ class Channel:
         
     def is_PLL_locked(self):
         """
-        :return: `True` if tile PLL is locked.
+        :return: ``True`` if tile PLL is locked.
         :rtype: bool
         """
+
         n = xrfdc.ffi.new("int*")
         self.RFDC_call_checked("GetPLLLockStatus", self.tile, self.block, n)
         return n
@@ -805,9 +851,11 @@ class Channel:
     def set_imr_passband(self, mode):
         """
         Sets the passband for a DAC NCO IMR filter, when enabled.
+
         :param mode: One of "lowpass" or "highpass"
         :type mode: str
         """
+
         if not self.is_dac:
             raise TypeError("IMR passband can only be set on DAC channels.")
             
@@ -823,6 +871,7 @@ class Channel:
         :return: The IMR passband
         :rtype: str
         """
+
         if not self.is_dac:
             raise TypeError("IMR passband can only be set on DAC channels.")
             
@@ -839,12 +888,14 @@ class Channel:
     def set_datapath_mode(self, mode):
         """
         Sets the datapath mode for DACs.
+
         :param mode: Datapath mode. Must be one of:
-        - "Full-bandwidth NCO"
-        - "Half-bandwidth NCO (lowpass)"
-        - "Half-bandwidth NCO (highpass)"
-        - "Bypass NCO"
+            - "Full-bandwidth NCO"
+            - "Half-bandwidth NCO (lowpass)"
+            - "Half-bandwidth NCO (highpass)"
+            - "Bypass NCO"
         """
+
         if not self.is_dac:
             raise TypeError("Datapath mode can only be set on DAC channels.")
             
@@ -866,6 +917,7 @@ class Channel:
         :return: The datapath mode for the DAC
         :rtype: str
         """
+
         if not self.is_dac:
             raise TypeError("Datapath mode can only be set on DAC channels.")
             
@@ -886,9 +938,11 @@ class Channel:
     def setup_fifo(self, enable):
         """
         Enables or disables the interface FIFO to a DAC or ADC tile.
-        :param enable: If `True`, the FIFO is enabled.
+
+        :param enable: If ``True``, the FIFO is enabled.
         :type enable: bool
         """ 
+
         self.RFDC_call_checked("SetupFIFO", self.converter_type(), self.tile, enable)
             
     def set_interpolation(self, factor):
@@ -896,9 +950,11 @@ class Channel:
         Sets the interpolation factor for a DAC tile. The fabric write width
         is maintained at 128 bits with the understanding that the external 
         stream clock rate will be adjusted accordingly.
+
         :param factor: Interpolation factor
         :type factor: int
         """
+
         if not self.is_dac:
             raise TypeError("Interpolation can only be set on DAC channels.")
 
@@ -915,6 +971,7 @@ class Channel:
         :return: The interpolation factor set for the DAC channel.
         :rtype: int
         """
+
         n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetInterpolationFactor", self.tile, self.block, n)
         return n
@@ -924,9 +981,11 @@ class Channel:
         Sets the decimation factor for an ADC tile. The fabric read width
         is maintained at 128 bits with the understanding that the external 
         stream clock rate will be adjusted accordingly.
+
         :param factor: Decimation factor
         :type factor: int
         """
+
         if self.is_dac:
             raise TypeError("Decimation can only be set on ADC channels.")
             
@@ -943,6 +1002,7 @@ class Channel:
         :return: The decimation factor set for the ADC channel.
         :rtype: int
         """
+
         n = xrfdc.ffi.new("int*")
         self.RFDC_call_checked("GetDecimationFactor", self.tile, self.block, n)
         return n
@@ -952,6 +1012,7 @@ class Channel:
         :return: The width of the interface in bits.
         :rtype: int
         """
+
         n = xrfdc.ffi.new("int*")
         self.RFDC_call_checked(f"GetFab{'Wr' if self.is_dac else 'Rd'}VldWords", 
                        self.tile, 
@@ -970,6 +1031,7 @@ class Channel:
         """
         Enable or disable analog SYSREF capture.
         """
+
         cls.RFDC_call_checked("MTS_Sysref_Config", 
                               cls.dac_mts_config, 
                               cls.adc_mts_config,
@@ -987,6 +1049,7 @@ class Channel:
         """
         Run multi-tile synchronization.
         """
+
         cls.ADC_MTS_config.RefTile = 0
         cls.ADC_MTS_config.Tiles = 0xF
         cls.ADC_MTS_config.Target_Latency = -1
@@ -1029,9 +1092,10 @@ class Channel:
         :param samples: Number of samples
         :type samples: int
         :return: The amount of memory in bytes consumed by the given number of
-        samples
+            samples
         :rtype: int
         """
+
         # if not hasattr(self, "complex_samples"):
         #     raise ValueError("Channel missing sample rate information."
         #                      " Make sure that `configure_rfdc` was"
@@ -1044,9 +1108,10 @@ class Channel:
         :param num_bytes: Amount of memory in bytes
         :type num_bytes: int
         :return: The number of samples resulting from interpreting the memory
-        as an array of samples
+            as an array of samples
         :rtype: int
         """
+
         # if not hasattr(self, "complex_samples"):
         #     raise ValueError("Channel missing sample rate information."
         #                      " Make sure that `configure_rfdc` was"
@@ -1071,6 +1136,7 @@ class Channel:
         :return: The number of samples corresponding to the given time interval
         :rtype: int
         """
+
         if not hasattr(self, "interface_sample_frequency"):
             raise ValueError("Channel missing sample rate information."
                              " Make sure that `configure_rfdc` was"
@@ -1098,9 +1164,10 @@ class Channel:
         :param samples: Number of samples to convert into a time interval
         :type samples: int
         :return: The duration of time in seconds corresponding to the given
-        number of samples
+            number of samples
         :rtype: float
         """
+
         if not hasattr(self, "interface_sample_frequency"):
             raise ValueError("Channel missing sample rate information."
                              " Make sure that `configure_rfdc` was"
@@ -1114,9 +1181,10 @@ class Channel:
         :param duration: Duration in seconds
         :type duration: float
         :return: The amount of memory in bytes occupied by the number of 
-        samples corresponding to the given duration
+            samples corresponding to the given duration
         :rtype: int
         """
+
         # if not hasattr(self, "complex_samples"):
         #     raise ValueError("Channel missing sample rate information."
         #                      " Make sure that `configure_rfdc` was"
@@ -1129,9 +1197,10 @@ class Channel:
         :param num_bytes: Amount of memory in bytes
         :type num_bytes: int
         :return: The length of time in seconds of the signal produced by 
-        interpreting the memory as an array of samples
+            interpreting the memory as an array of samples
         :rtype: float
         """
+
         if not hasattr(self, "interface_sample_frequency"):
             raise ValueError("Channel missing sample rate information."
                              " Make sure that `configure_rfdc` was"
@@ -1148,12 +1217,14 @@ class Channel:
         if the array is expected to be loaded into memory, it is recommended to 
         use :meth:`seconds_to_samples` to create the input array in order to 
         ensure predictable behavior.
+
         :param array: Input array of numbers to be converted into samples
         :type array: numpy.ndarray
         :param out: If provided, samples are written into this array rather
-        than into a newly-allocated array.
+            than into a newly-allocated array.
         :type out: numpy.ndarray
         """
+
         # Check input type
         if isinstance(array, memoryview):
             array = np.frombuffer(array, dtype=np.complex128)
@@ -1187,12 +1258,14 @@ class Channel:
         performed, so if the array is expected to be loaded into memory, it is
         recommended to use :meth:`seconds_to_samples` to create the input array
         in order to ensure predictable behavior.
+
         :param array: Input array of samples to be converted into complex numbers
         :type array: numpy.ndarray or memoryview
         :param out: If provided, complex values are written into this array 
-        rather than into a newly-allocated array.
+            rather than into a newly-allocated array.
         :type out: numpy.ndarray
         """
+
         # Check input type
         if isinstance(array, memoryview):
             array = np.frombuffer(array, dtype=np.int16)
@@ -1214,3 +1287,4 @@ class Channel:
         # TODO: incorporate option for float32
         out[:] = array.astype(np.float64).view(np.complex128) / 32768
         return out
+    

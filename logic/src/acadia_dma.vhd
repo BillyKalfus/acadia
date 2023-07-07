@@ -121,13 +121,15 @@ architecture rtl of acadia_dma is
     -- Descriptor fields
     signal descriptor_lm1   : unsigned(ADDRESS_COUNTER_WIDTH-1 downto 0);
     signal descriptor_addr  : unsigned(ADDRESS_WIDTH-1 downto 0);
-    signal descriptor_blank : std_logic;
+    signal descriptor_dec   : std_logic_vector(1 downto 0);
     signal descriptor_fixed : std_logic;
+    signal descriptor_blank : std_logic;
     
     -- Progress counters
     signal descriptor_point : unsigned(ADDRESS_COUNTER_WIDTH-1 downto 0);
     
     -- Combinational progress flags
+    signal decimation_valid : std_logic;
     signal descriptor_done  : std_logic;
     
 begin    
@@ -183,8 +185,9 @@ begin
             if(trigger = '1' or descriptor_done = '1') then
                 descriptor_lm1   <= unsigned(descriptor_mem_dout(ADDRESS_COUNTER_WIDTH-1 downto 0));
                 descriptor_addr  <= unsigned(descriptor_mem_dout(ADDRESS_COUNTER_WIDTH + ADDRESS_WIDTH-1 downto ADDRESS_COUNTER_WIDTH));
-                descriptor_blank <= descriptor_mem_dout(descriptor_mem_dout'high-1);
-                descriptor_fixed <= descriptor_mem_dout(descriptor_mem_dout'high);
+                descriptor_dec   <= descriptor_mem_dout(descriptor_mem_dout'high-2 downto descriptor_mem_dout'high-3);
+                descriptor_fixed <= descriptor_mem_dout(descriptor_mem_dout'high-1);
+                descriptor_blank <= descriptor_mem_dout(descriptor_mem_dout'high);
             end if;
         end if;
     end process descriptor_field_load_proc;
@@ -202,34 +205,50 @@ begin
         
     -- Drive the output interfaces
     mem_control_clk <= clk;
+
+    -- We'll choose to make the last sample in the decimation the 
+    -- valid one solely because then we can condition the "last"
+    -- signal on this and descriptor_done
+    decimation_valid <= '1' when descriptor_dec = "00" else
+                        '1' when (descriptor_dec = "01" and descriptor_point(0) = '1') else
+                        '1' when (descriptor_dec = "10" and descriptor_point(1 downto 0) = "11") else
+                        '1' when (descriptor_dec = "11" and descriptor_point(2 downto 0) = "111") else
+                        '0';
       
     output_proc: process(clk) begin
         if rising_edge(clk) then
-            -- Stream the address out of the AXI-stream port
-            -- Data present on the stream is considered valid when its NOT during decimation
-            address_tvalid <= running_int;
-            address_tlast  <= descriptor_done and running_int;
             
-            if(descriptor_fixed = '1') then
-                address_tdata <= std_logic_vector(descriptor_addr);
-            else
-                address_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
-            end if;
-            
-            -- Control the memory master port
-            mem_control_rst <= (not running_int) or descriptor_blank;
-            mem_control_en  <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
-        
-            if(descriptor_fixed = '1') then
+            -- Update the address outputs depending on whether the descriptor is fixed or not
+            if(descriptor_fixed = '1') then                
+                address_tdata    <= std_logic_vector(descriptor_addr);
                 mem_control_addr <= std_logic_vector(descriptor_addr);
+            elsif(descriptor_dec = "01") then
+                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr);
+                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr);
+            elsif(descriptor_dec = "10") then
+                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr);
+                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr);
+            elsif(descriptor_dec = "11") then
+                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr);
+                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr);
             else
+                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
                 mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
             end if;
 
-            -- Data master stream
-            data_tdata  <= din;
-            data_tvalid <= running_int;
-            data_tlast  <= descriptor_done and running_int;
+            -- Set the valid outputs depending on run state and decimation mode
+            address_tvalid <= running_int and decimation_valid;
+            data_tvalid    <= running_int and decimation_valid;
+            
+            -- Set the last outputs depending on run state, decimation mode, and descriptor done
+            address_tlast  <= descriptor_done and running_int and decimation_valid;
+            data_tlast     <= descriptor_done and running_int and decimation_valid;
+            
+            -- Control the emaining ancillary signals
+            mem_control_rst <= (not running_int) or descriptor_blank;
+            mem_control_en  <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
+            data_tdata      <= din;
+            
         end if;
     end process output_proc;
     

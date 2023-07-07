@@ -73,6 +73,7 @@ class HDLModule:
     """
     An object representing a custom HDL module.
     """
+
     def __init__(self, module_name):
         self._module_name = module_name
         
@@ -90,6 +91,7 @@ class BusDevice:
     def __init__(self, name, size=0, bus_data_bits=32, bus_addr_bits=32):
         """
         A device which can be added to a memory bus.
+
         :param name: Name of the device to be added
         :type name: str
         :param size: Number of words needed in the address space of the bus.
@@ -101,6 +103,7 @@ class BusDevice:
         :param address: The address of the device, whose interpretation is left to be defined by child classes
         :type address: int, optional
         """
+
         self._name = name
         self._size = size
         self._bus_data_bits = bus_data_bits
@@ -111,9 +114,11 @@ class BusDevice:
     def assign_address(self, value):
         """
         Assign the address of the device.
+
         :param value: Address to assign
         :type value: int
         """
+
         self._address.assign(value)
         
     def address_assigned(self):
@@ -128,6 +133,7 @@ class BusDevice:
         :return: The name of the device.
         :rtype: str
         """
+
         return self._name
         
     @property
@@ -137,6 +143,7 @@ class BusDevice:
         :rtype: int
         :raises: :class:`ValueError` when called on an object of zero size, as this generally indicates an instantiation error
         """
+
         if self._size == 0:
             raise ValueError("Object of zero size queried.")
             
@@ -147,6 +154,7 @@ class BusDevice:
         :return: The equivalent number of words required by this device for a given word width
         :rtype: int
         """
+
         return self.size * self._bus_data_bits / bus_data_bits
     
     @property
@@ -155,6 +163,7 @@ class BusDevice:
         :return: The width of the data word
         :rtype: int
         """
+
         return self._bus_data_bits
     
     @property
@@ -163,9 +172,15 @@ class BusDevice:
         :return: The width of the bus address space
         :rtype: int
         """
+
         return self._bus_addr_bits
     
 class BusDataport(BusDevice, HDLModule):
+    """
+    A module to split the data signals of a memory bus port. Optionally,
+    the output signals may be gated by the memory enable signal to either 
+    be reset when not enabled, or latched when not written.
+    """
     
     INPUT = "in"
     OUTPUT = "out"
@@ -174,13 +189,10 @@ class BusDataport(BusDevice, HDLModule):
     
     def __init__(self, name, ports, bus_data_bits=32, bus_addr_bits=32):
         """
-        A module to split the data signals of a memory bus port. Optionally,
-        the output signals may be gated by the memory enable signal to either 
-        be reset when not enabled, or latched when not written.
         :param name: name of the module
         :type name: str
         :param ports: List of ports 
-        :type ports: `list` of `dict`, where each element specifies a port. 
+        :type ports: ``list`` of ``dict``, where each element specifies a port. 
         Valid keys are: "name", "from", "to", "direction", "gate", "pipeline"
         """
         self._ports = {}
@@ -338,6 +350,7 @@ class BusDecoder(BusDevice, HDLModule):
     def __init__(self, name, bus_data_bits=32, bus_addr_bits=32, pipeline_miso=False, byte_write=False):
         """
         Generate an HDL file for a memory bus decoder.
+
         :param name: name of the decoder to generate
         :type name: str
         :param bus_data_bits: number of bits in the data word
@@ -555,41 +568,46 @@ class BusDataMoverController(BusDevice, HDLModule):
         interacting with a given DataMover, where the base address of the 
         registers for that DataMover is the base address of this device, plus
         4 times the DataMover number.
+        
         The registers are:
-            0: CMD_ADDR/STS
-                Writing to this register issues a command to the DataMover 
-                command FIFO whose address field is populated with the data
-                written to this register. The values of the other fields are 
-                derived from prior writes to other registers (see below).
-                Reading this register returns the most recently retrieved word 
-                from the status FIFO.
-            1: CMD_BTT/STS_VLD
-                This register stores the number of bytes for the DataMover to
-                transfer when its next command is issued. Reading this register 
-                returns a value with one bit per DataMover; a bit is set when 
-                the corresponding DataMover has presented a status word to the 
-                controller.
-            2: CMD_MISC/CMD_ACK
-                This register stores additional miscellaneous bits needed for a
-                DataMover command:
-                    0     : TYPE
-                    1     : EOF
-                    5-2   : TAG
-                    9-6   : xCACHE
-                    13-10 : xUSER
-                    ADDR_BITS+14 - 14 : ADDR high bits
-                Reading this register returns a value with one bit per DataMover.
-                This bit is set once the DataMover command interface sets TREADY
-                after this module sets TVALID, indicating that it accepted the 
-                command driven by the module (this includes when TREADY is already
-                set when the command is issued).
-            3: RST/DM_ERR
-                Writing a value to this register with a given bit set clears 
-                CMD_ACK and STS_VLD signals for the DataMover corresponding to
-                that bit position. Multiple bits may be set to clear multiple 
-                registers at once. The value returned by this register contains 
-                one bit per DataMover, where each bit is directly connected to 
-                the error signal for the DataMover.
+
+        - 0: CMD_ADDR/STS
+            Writing to this register issues a command to the DataMover 
+            command FIFO whose address field is populated with the data
+            written to this register. The values of the other fields are 
+            derived from prior writes to other registers (see below).
+            Reading this register returns the most recently retrieved word 
+            from the status FIFO.
+
+        - 1: CMD_BTT/STS_VLD
+            This register stores the number of bytes for the DataMover to
+            transfer when its next command is issued. Reading this register 
+            returns a value with one bit per DataMover; a bit is set when 
+            the corresponding DataMover has presented a status word to the 
+            controller.
+
+        - 2: CMD_MISC/CMD_ACK
+            This register stores additional miscellaneous bits needed for a
+            DataMover command:
+                0     : TYPE
+                1     : EOF
+                5-2   : TAG
+                9-6   : xCACHE
+                13-10 : xUSER
+                ADDR_BITS+14 - 14 : ADDR high bits
+            Reading this register returns a value with one bit per DataMover.
+            This bit is set once the DataMover command interface sets TREADY
+            after this module sets TVALID, indicating that it accepted the 
+            command driven by the module (this includes when TREADY is already
+            set when the command is issued).
+
+        - 3: RST/DM_ERR
+            Writing a value to this register with a given bit set clears 
+            CMD_ACK and STS_VLD signals for the DataMover corresponding to
+            that bit position. Multiple bits may be set to clear multiple 
+            registers at once. The value returned by this register contains 
+            one bit per DataMover, where each bit is directly connected to 
+            the error signal for the DataMover.
                 
         :param datamovers: A list of strings containing the names of the DataMovers
         """
@@ -607,6 +625,7 @@ class BusDataMoverController(BusDevice, HDLModule):
     def __getitem__(self, key):
         """
         Return the Symbol associated with the registers for a particular datamover, as indexed by name or number.
+        
         :param key: a number or string indexing the datamover
         :type key: int or str
         """
@@ -851,46 +870,47 @@ class AXIMemoryArray(HDLModule):
         :param elements: Number of memory elements to create
         :type elements: int, optional
         :param primitive: The memory primitive to use. One of "auto", "block", 
-        "distributed", "mixed", "ultra"
+            "distributed", "mixed", "ultra"
         :type primitive: str, optional
-        :param synchronous: If `True`, the memory will be a synchronous 
-        single-clock memory driven by the AXI clock. Otherwise, a separate
-        clock signal will be created on the memory interface.
+        :param synchronous: If ``True``, the memory will be a synchronous 
+            single-clock memory driven by the AXI clock. Otherwise, a separate
+            clock signal will be created on the memory interface.
         :param controller_width: Width of the port connected to the controller
         :type controller_width: int
         :param controller_port_input_pipeline: Number of pipeline stages to
-        add to the memory's input signals (din, addr, we) on the port connected
-        to the controller.
+            add to the memory's input signals (din, addr, we) on the port connected
+            to the controller.
         :type controller_port_input_pipeline: int
         :param controller_port_output_pipeline: Number of pipeline stages to
-        add to the memory's data output signal on the port connected to the 
-        controller.
+            add to the memory's data output signal on the port connected to the 
+            controller.
         :type controller_port_output_pipeline: int
         :param user_port_input_pipeline: Number of pipeline stages to
-        add to the memory's input signals (din, addr, we) on the user port.
+            add to the memory's input signals (din, addr, we) on the user port.
         :type user_port_output_pipeline: int
         :param user_port_output_pipeline: Number of pipeline stages to
-        add to the memory's data output signal on the user port.
+            add to the memory's data output signal on the user port.
         :type user_port_output_pipeline: int
-        :param axi4_lite: If `True`, the BRAM controller will be implemented
-        with an AXI4-Lite interface instead of full AXI4.
+        :param axi4_lite: If ``True``, the BRAM controller will be implemented
+            with an AXI4-Lite interface instead of full AXI4.
         :type axi4_lite: bool, optional
         :param axi_id_width: The width of the ID port on the AXI interface
         :type axi_id_width: int
-        :param read_only: If `True`, the write enable of the user port will be 
-        tied low.
+        :param read_only: If ``True``, the write enable of the user port will be 
+            tied low.
         :type read_only: bool, optional
-        :param use_rst: If `False`, the reset signal of the exposed port will 
-        be tied low. If `True`, an additional output pipeline stage with a 
-        reset input will be added.
+        :param use_rst: If ``False``, the reset signal of the exposed port will 
+            be tied low. If ``True``, an additional output pipeline stage with a 
+            reset input will be added.
         :type use_rst: bool, optional
         :param read_data_pipeline: The number of additional pipeline stages to
-        add to the data output of the memory.
+            add to the data output of the memory.
         :type read_data_pipeline: int, optional
         :param synth_jobs: Number of processor jobs to use for synthesizing the
-        BRAM controller IP
+            BRAM controller IP
         :type synth_jobs: int, optional
         """
+
         self._size_bits = size_bits
         self._width = width
         self._synchronous = synchronous
@@ -1448,10 +1468,12 @@ class AXIMemoryArray(HDLModule):
     def generate_ip_tcl(self, project_dir):
         """
         Generate TCL commands to create the IP and add it to the project.
+
         :param project_dir: The directory in which the project is located,
         needed for generating IP files into the correct locations.
         :type project_dir: str
         """
+
         ip_name = self._module_name + "_ip"
         s = ''
         s += (f'create_ip'
@@ -1493,3 +1515,4 @@ class AXIMemoryArray(HDLModule):
         s += f'] -use_ip_compiled_libs -force -quiet\n'
         
         return s
+    

@@ -64,7 +64,6 @@ CONFIG_man-pages
 CONFIG_parted
 CONFIG_libgcc
 CONFIG_libgcc-dev
-CONFIG_libmali-xlnx
 CONFIG_neon
 CONFIG_neon-dev
 CONFIG_neon-dbg

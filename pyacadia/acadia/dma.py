@@ -11,14 +11,17 @@ class Descriptor:
     An analog of machine instructions for direct memory access (DMA) modules,
     descriptors define a single transfer to be carried out by a DMA.
     """
+
     trace_length: [int, Symbol, Operation]
     trace_address: [int, Symbol, Operation]
+    decimate: int = 0
     blank: [bool, Symbol] = False
     fixed: [bool, Symbol] = False
     
     def __eq__(self, other):
         return (hasattr(other, "trace_length") and self.trace_length is other.trace_length
             and hasattr(other, "trace_address") and self.trace_address is other.trace_address
+            and hasattr(other, "decimate") and self.fixed is other.decimate
             and hasattr(other, "fixed") and self.fixed is other.fixed
             and hasattr(other, "blank") and self.blank is other.blank)
     
@@ -35,15 +38,20 @@ class Descriptor:
         else:
             tmp |= self.trace_address << 32
             
-        if isinstance(self.blank, Symbol):
-            tmp |= self.blank.value() << 62
+        if isinstance(self.decimate, Symbol) or isinstance(self.decimate, Operation):
+            tmp |= self.decimate.value() << 60
         else:
-            tmp |= self.blank << 62
+            tmp |= self.decimate << 60
             
         if isinstance(self.fixed, Symbol):
-            tmp |= self.fixed.value() << 63
+            tmp |= self.fixed.value() << 62
         else:
-            tmp |= self.fixed << 63
+            tmp |= self.fixed << 62
+
+        if isinstance(self.blank, Symbol):
+            tmp |= self.blank.value() << 63
+        else:
+            tmp |= self.blank << 63
               
         return tmp
     
@@ -52,24 +60,29 @@ class DMA(Processor):
     An abstraction of the real-time direct memory access (DMA) modules used for
     streaming data in and out of the Acadia hardware.
     """
-    def request_descriptor(self, trace_address, trace_length, blank=False, fixed=False):
+
+    def request_descriptor(self, trace_address, trace_length, decimate=0, fixed=False, blank=False):
         """
         Request the DMA to stream a trace. All existing descriptors will be 
         checked to determine whether one exists that is equal to the one
         requested, and if so, it is returned. Otherwise, a new descriptor is
         allocated.
-        :param trace_address: The trace to be streamed from the DMA.
-        :type trace_address: Address of the trace in trace memory
-        :param trace_length:
-        :param blank: The value of the `blank` flag in the descriptor.
+
+        :param trace_address: Address of the trace in trace memory
+        :type trace_address: int
+        :param trace_length: The length of the trace in cycles.
+        :type trace_length: int
+        :param blank: If ``True``, the DMA will hold its valid output low.
         :type blank: bool
-        :param fixed: The value of the `blank` flag in the descriptor
+        :param fixed: If ``True``, the address output of the DMA will not
+            increment each cycle.
         :type fixed: bool
         """
         request_descriptor = Descriptor(trace_address=trace_address, 
                                         trace_length=trace_length, 
-                                        blank=blank,
-                                        fixed=fixed)
+                                        fixed=fixed,
+                                        decimate=decimate,
+                                        blank=blank)
         
         for instruction in self.Instruction.instances:
             cmp_descriptor = Descriptor(**instruction.kwargs)
@@ -78,8 +91,9 @@ class DMA(Processor):
             
         return self.add_descriptor(trace_address=trace_address, 
                                     trace_length=trace_length, 
-                                    blank=blank,
-                                    fixed=fixed)
+                                    fixed=fixed,
+                                    decimate=decimate,
+                                    blank=blank)
     
     @Processor.instruction()
     def add_descriptor(self, instruction_resource):
@@ -88,5 +102,6 @@ class DMA(Processor):
         by calling :meth:`len` on the first (and only allowed) positional
         argument. Two additional optional keyword arguments are detailed below.
         """
+        
         descriptor = Descriptor(**instruction_resource.kwargs)
         instruction_resource.compiled = [descriptor]

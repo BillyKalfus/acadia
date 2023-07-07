@@ -51,25 +51,25 @@ class Operable(type):
         """
         A function factory for creating functions for operator calls. This is
         mainly necessary because if we try to loop through the list of 
-        operators in __new__ like this:
-        
-        ```
-        for op in supported_operators:
-            def op_func(*args, **kwargs):
-                return handler(op, *args, **kwargs)
-            dct[f"__{op}__"] = op_func
-        ```
-        
-        then the iteration variable `op` will be evaluated when `op_func` is
-        called, instead of when `op_func` is defined (you can think of this 
+        operators in __new__ like this::
+
+            for op in supported_operators:
+                def op_func(*args, **kwargs):
+                    return handler(op, *args, **kwargs)
+                dct[f"__{op}__"] = op_func
+
+        then the iteration variable ``op`` will be evaluated when ``op_func`` is
+        called, instead of when ``op_func`` is defined (you can think of this 
         like referencing a global variable in a function; this is technically
-        exactly what's happening, since `for` loops in Python don't create a 
+        exactly what's happening, since ``for`` loops in Python don't create a 
         scope). Instead, we want to create a closure that will capture the 
-        value of `op` at the time of the function definition and appropriately
-        return an :class:`Operation` that stores it. See `this StackOverflow 
-        post <https://stackoverflow.com/questions/3431676/creating-functions-or-lambdas-in-a-loop-or-comprehension>` 
-        for more information.
+        value of ``op`` at the time of the function definition and appropriately
+        return an :class:`Operation` that stores it. See this_ StackOverflow 
+        post for more information.
+
+        .. _this: https://stackoverflow.com/questions/3431676/creating-functions-or-lambdas-in-a-loop-or-comprehension
         """
+
         def op_func(*args, **kwargs):
             operation = Operation(op, *args, **kwargs)
             if op in Operable.HANDLED_OPERATORS:
@@ -108,18 +108,19 @@ class Operable(type):
         Creates a new :class:`Operable` type.
         
         :param operators: A list of operators that this :class:`Operable` will
-        capture. The elements in this list should be the names of the operator
-        methods to override, without the underscores.
-        :type operators: `list` of `str`
+            capture. The elements in this list should be the names of the operator
+            methods to override, without the underscores.
+        :type operators: list of str
         :param operaror_handler: For operators that are understood to modify an object 
-        in place (such as +=), the corresponding dunder method will have to 
-        return the object itself in order to not overwrite it with the 
-        :class:`Operation` object. Therefore, we designate a function as the 
-        "augmentation handler" for the :class:`Operable`. When an augmenting
-        operator is called on the :class:`Operable`, the augmentation handler
-        will be called and passed the newly-created :class:`Operation` as its
-        sole argument.
+            in place (such as +=), the corresponding dunder method will have to 
+            return the object itself in order to not overwrite it with the 
+            :class:`Operation` object. Therefore, we designate a function as the 
+            "augmentation handler" for the :class:`Operable`. When an augmenting
+            operator is called on the :class:`Operable`, the augmentation handler
+            will be called and passed the newly-created :class:`Operation` as its
+            sole argument.
         """
+
         dct.update(Operable.make_operator_functions(operators, support_handled_operators))
         return super().__new__(cls, name, bases, dct)
     
@@ -131,19 +132,18 @@ class Operation(metaclass=Operable):
     is its metaclass), thereby creating nested :class:`Operation` objects. 
     It is left to the eventual receiver of the :class:`Operation` object to 
     decide whether this is acceptable.
-    
-    :param op: An object representing the operation being performed on the 
-    provided arguments. This can be any object, since it is up to the eventual 
-    receiver of these objects to interpret this field. For example, the eventual 
-    receiver may want this to be a callable object that it can directly call 
-    on the arguments, or it may want it to be a string that it can interpret, etc.
-    
-    :type op: object
-    
-    :param operator_handler: A function to be called when the :class:`Operation`
-    is acted on with an augmenting operator (e.g., +=). 
     """
+
     def __init__(self, op, *args, **kwargs):  
+        """
+        :param op: An object representing the operation being performed on the 
+            provided arguments. This can be any object, since it is up to the eventual 
+            receiver of these objects to interpret this field. For example, the eventual 
+            receiver may want this to be a callable object that it can directly call 
+            on the arguments, or it may want it to be a string that it can interpret, etc.
+        :type op: object
+        """
+
         self._op = op
         self._args = args
         self._kwargs = kwargs
@@ -175,30 +175,31 @@ class Operation(metaclass=Operable):
         Since operations do not support augmentation, throw an error if acted
         upon by an augmenting operator.
         """
+
         raise ValueError(f"Operation object {self} acted upon by augmenting"
                          f" operator with operation {operation}.")
     
 class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):
     """
-    A symbolic variable with a value not necessarily known to the user but 
-    guaranteed to be available at the time of translation. A canonical example 
-    of an :class:`Operable` class, it allows objects or values to be 
+    A symbolic variable with a value not necessarily known at the point of 
+    instantiation, but to which a reference should be maintained. A canonical 
+    example of an :class:`Operable` class, it allows objects or values to be 
     distributed throughout a program that depend on the future decisions of 
     higher-level entities (e.g., a program translator deciding memory locations
     or array lengths). This requires operator evaluation to be deferred to a 
     future time (and potentially in different ways, depending on the involved 
     objects). In such a situation, this object acts as a placeholder for the 
     desired object.
-    
-    :param value: The value of the :class:`Symbol`, if known at instantiation. 
-    If not provided, may be assigned later.
-    
-    :type value: object, optional
-    
-    :param value_type: The type of the value, which may be specified when the
-    value is not provided.
     """
+
     def __init__(self, value=None, value_type=None):
+        """
+        :param value: The value of the :class:`Symbol`\, if known at instantiation. 
+            If not provided, may be assigned later.
+        :type value: object, optional
+        :param value_type: The type of the value, which may be specified when the
+            value is not provided.
+        """
         if (value is not None
             and value_type is not None 
             and type(value) != value_type):
@@ -221,17 +222,16 @@ class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):
                 
     def assign(self, v, force=False):
         """
-        Assigns a value to the :class:`Symbol`. By default, assignment is only
+        Assigns a value to the :class:`Symbol`\. By default, assignment is only
         supposed to occur once, so an error will be thrown if this is called on
-        an already-assigned :class:`Symbol`. This can be overridden by setting 
-        `force=True`.
+        an already-assigned :class:`Symbol`\. This can be overridden by setting 
+        ``force=True``\.
         
         :param v: Value to assign
-        
-        :param force: If `True`, allows reassignment of already-assigned instances.
-        
+        :param force: If ``True``\, allows reassignment of already-assigned instances.
         :type force: bool
         """
+
         if Symbol.assigned(self) and not force:
             raise ValueError("Attempted reassignment of Symbol. If you're sure that this is the correct operation, set argument force=True.")
             
@@ -265,6 +265,7 @@ class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):
         Since :class:`Symbol` objects are considered immutable,
         throw an error if acted upon by an augmenting operator.
         """
+
         raise ValueError(f"Symbol object {self} acted upon by augmenting"
                          f" operator with operation {operation}.")
         
@@ -272,32 +273,27 @@ class ManagedResource(type):
     """
     Metaclass for creating autonomous hardware resource factories. This 
     metaclass implements resource allocation by assigning unique IDs to
-    created instances of derived classes (henceforth referred to as "resource 
-    objects"), as well as resource recycling by tracking whether the resource 
+    created instances of derived classes (henceforth referred to as resource 
+    objects), as well as resource recycling by tracking whether the resource 
     object is released in the future. Its implementation as a metaclass allows
     resource tracking to take place in a class field, which in turn allows 
     multiple identical resource factories to be created and have them each 
     track their own resources without interference simply by subclassing 
-    :class:`ManagedResource`. This also allows the resource objects themselves 
+    :class:`ManagedResource`\. This also allows the resource objects themselves 
     to be of any type. Additionally, it allows allocation to occur immediately 
     when resource objects are created and potentially return existing resource 
-    objects if necessary. This is a subclass of :class:`Operable`, so that 
+    objects if necessary. This is a subclass of :class:`Operable`\, so that 
     actions on resource objects can be inferred by analyzing produced 
     :class:`Operation` objects.
-    
-    :param instance_limit: The maximum number of instances that may be 
-    created by the class.
-    :type instance_limit: int, optional
-    :param required_parameters: A list of parameters which must be supplied to
-    instances' initializers. The supplied values are assigned to the instance
-    as attributes.
-    :type required_parameters: list of str, optional
-    :param use_instance_size: If `True`, indicates that the allocation 
-    offset should be increased by an amount equal to the provided `size` 
-    keyword.
-    :type use_instance_size: bool, optional
     """
+
     def __call__(type_self, *args, **kwargs):
+        """
+        Creates a new instance of the resource. The only supported keyword 
+        argument is ``size``, the meaning of which will depend on the type being
+        instantiated.
+        """
+
         if (type_self._allocation_limit is not None 
             and type_self._allocation_index >= type_self._allocation_limit):
             # Find a free instance we can use, as indicated by noting that
@@ -329,13 +325,15 @@ class ManagedResource(type):
         :return: The number of instances created.
         :rtype: int
         """
+
         return len(type_self.instances)
 
     def next_instance(type_self):
         """
         :return: A :class:`Symbol` that will be populated with the next instance of
-        the resource once generated. 
+            the resource once generated. 
         """
+
         if (not hasattr(type_self, "_next_instance_symbol")) or type_self.next_instance_assigned():
             type_self._next_instance_symbol = Symbol(value_type=type_self)
 
@@ -344,8 +342,9 @@ class ManagedResource(type):
     def next_instance_assigned(type_self):
         """
         :return: A :class:`Symbol` that will be populated with the next instance of
-        the resource once generated.
+            the resource once generated.
         """
+
         if not hasattr(type_self, "_next_instance_symbol"):
             return False
 
@@ -380,7 +379,7 @@ class ManagedMemory(ManagedResource):
                  default_getitem=True):
         """
         Creates a new type of managed memory. The total region of memory
-        is comprised of a finite number of entries, referred to as "words".
+        is comprised of a finite number of entries, referred to as words.
         Words may have arbitrary widths. It is assumed that this memory is 
         shared and that the memory has (possibly disjoint) address mappings 
         in the spaces into which it is mapped. It is assumed that one space
@@ -392,14 +391,15 @@ class ManagedMemory(ManagedResource):
         :param word_width: Width of a word in bits.
         :type word_width: int
         :param base_word_address: The starting address of the memory region in
-        the word-addressed space.
+            the word-addressed space.
         :param base_byte_address: The starting address of the memory region in
-        the byte-addressed space.
-        :param default_getitem: If `True`, a __getitem__ method will be created
-        for the instances of the type that returns an :class:`Operation`
-        instance with operation string "getitem" and with the instance and key
-        as arguments.
+            the byte-addressed space.
+        :param default_getitem: If ``True``\, a __getitem__ method will be created
+            for the instances of the type. This method will return an 
+            :class:`Operation` instance with operation ``getitem`` and with the 
+            instance and key as arguments.
         """
+
         type_instance = super().__new__(type_self, 
                                         type_name, 
                                         type_bases, 
@@ -413,8 +413,9 @@ class ManagedMemory(ManagedResource):
         def res_word_length(self):
             """
             :return: The length of the array in words
-            :rtype int:
+            :rtype: int
             """
+
             width = self.word_width
             l = self.byte_length() * 8 / (width() if callable(width) else width)
             if round(l, 3) != l:
@@ -426,14 +427,16 @@ class ManagedMemory(ManagedResource):
             :return: The length of the array in bytes
             :rtype: int
             """
+
             return self.size
 
         def res_word_address(self):
             """
             :return: The address of the array within the word-indexed address 
-            space
+                space
             :rtype: int
             """
+
             width = self.word_width
             a = self.base_word_address + (self._resource_id * 8 / (width() if callable(width) else width))
             if round(a, 3) != a:
@@ -443,9 +446,10 @@ class ManagedMemory(ManagedResource):
         def res_byte_address(self):
             """
             :return: The address of the array within the byte-indexed address 
-            space
+                space
             :rtype: int
             """
+
             return self.base_byte_address + self._resource_id 
         
         type_instance.word_length = res_word_length
@@ -467,41 +471,41 @@ class ProcessorInstruction:
     Stores the fields required for an instruction call for a generic processor.
     These fields are as follows:
     
-    * `instruction`: The name of the instruction to execute, which 
+    * ``instruction``\: The name of the instruction to execute, which 
         is used to look up the translation function in the dictionary 
         defining the class' instruction set.
 
-    * `args`: Positional arguments provided to the instruction.
+    * ``args``\: Positional arguments provided to the instruction.
 
-    * `kwargs`: Keywords arguments provided to the instruction.
+    * ``kwargs``\: Keywords arguments provided to the instruction.
 
-    * `block_start`: If `True`, indicates that this instruction 
+    * ``block_start``\: If ``True``\, indicates that this instruction 
     is the first in a non-inlined block.
 
-    * `block_end`: If `True`, indicates that this instruction is 
+    * ``block_end``\: If ``True``\, indicates that this instruction is 
     the last in a non-inlined block.
 
-    * `inline_block_start`: If `True`, indicates that this 
+    * ``inline_block_start``\: If ``True``\, indicates that this 
     instruction is the first in an inlined block. This is primarily
     used for bookkeeping and keeping track of indentation.
 
-    * `inline_block_end`: If `True`, indicates that this 
+    * ``inline_block_end``\: If ``True``\, indicates that this 
     instruction is the first in an inlined block. This is primarily
     used for bookkeeping and keeping track of indentation.
 
-    * `inline_block_level`: The nesting level of the inline block
+    * ``inline_block_level``\: The nesting level of the inline block
     to which this instruction belongs. This is primarily used for 
     bookkeeping and keeping track of indentation. This field is 
     automatically populated during compilation and should not be
     manually manipulated.
 
-    * `address`: When this instruction is compiled, it will be assigned
-    an "address" whose value may carry different meanings depending on the
+    * ``address``\: When this instruction is compiled, it will be assigned
+    an address whose value may carry different meanings depending on the
     :class:`Processor` type. This :class:`Symbol` will be automatically 
     populated during compilation and should not be manually manipulated.
 
-    * `compiled_instructions`: The output of compiling this
-    instruction, which is a list list of any object with an `assemble`
+    * ``compiled_instructions``\: The output of compiling this
+    instruction, which is a list list of any object with an ``assemble``
     method that returns a bytes-like object (or an object that can be 
     converted to bytes). This field is automatically populated during
     compilation and should not be manually manipulated.
@@ -552,12 +556,12 @@ class ProcessorInstruction:
 class Processor:
     """
     A base class for objects that represent entities capable of being commanded
-    by a set of callable "instructions". These instructions are defined in 
+    by a set of callable instructions. These instructions are defined in 
     subclasses by decorating methods :meth:`Processor.instruction` (see its 
     documentation for a description of its utilization). 
 
     Instances of :class:`Processor` maintain an internal list of all 
-    instructions invoked on it, referred to as the "program list". It is 
+    instructions invoked on it, referred to as the program list. It is 
     understood that the ordering of the program list represents the order in 
     which the hardware will actually execute the instructions contained in it, 
     unless branching occurs. 
@@ -576,7 +580,7 @@ class Processor:
     directly abstracts the hardware's native instruction for loading a 
     register, but whose arguments can be of type :class:`Operation` in order to
     express the intent to perform a mathematical operation on data and write 
-    the result into a register. Although the call to `write_register` would be 
+    the result into a register. Although the call to ``write_register`` would be 
     only one entry in the program list, for the hardware to actually carry out 
     the intended action, two additional hardware instructions would first need 
     to be generated to load the data into the ALU (and potentially wait for the
@@ -615,13 +619,13 @@ class Processor:
         of this step is to translate the symbolic arguments passed
         to the instructions and potentially insert additional instructions 
         when needed (such as for expanding compound expressions). At the 
-        end of this stage, the "compiled" field of all instructions will be
+        end of this stage, the `compiled` field of all instructions will be
         populated with data representing the compiled instruction and 
         arguments. While this data is ultimately hardware-specific, it is 
         assumed that the data is in a form that allows it to be directly 
         translated into machine code with no further symbolic solving 
         (except for potentially retrieving the value of an assigned 
-        :class:`Symbol`). The program list will also be rearranged to match
+        :class:`Symbol`\). The program list will also be rearranged to match
         the desired block structure.
 
     #. Assembly
@@ -631,7 +635,7 @@ class Processor:
         contained in instructions will be accessed, and simplifications 
         may be performed. 
 
-    In some situations it is desirable to define a distinct "block" of 
+    In some situations it is desirable to define a distinct block of 
     instructions which are to be executed (potentially conditionally), and
     then have program flow continue from the point immediately following 
     that at which the block was invoked. The compiler must decide where to
@@ -648,7 +652,7 @@ class Processor:
     at the expense of increased program memory usage should the block need 
     to be reused in multiple places. This concept arises in other 
     programming languages when defining subroutines, typically referred to
-    as "inlining" the subroutine. In contrast, if it is expected that the 
+    as inlining the subroutine. In contrast, if it is expected that the 
     block will typically not be executed (for example, because a condition
     determining its execution will typically not be satisfied), it is 
     preferable to place the block elsewhere so that the majority of the 
@@ -656,7 +660,7 @@ class Processor:
     instruction with no additional latency incurred.
 
     The ability to dynamically choose between these methods is referred to
-    as "speculative execution" and is a hardware feature of most modern 
+    as speculative execution and is a hardware feature of most modern 
     processors (which, rather than deciding where to place instructions, 
     make decisions about the locations in instruction memory from which to
     load the instructions following the branch). Here, we choose to defer 
@@ -668,9 +672,9 @@ class Processor:
     instances of the same hardware). To prevent the code from becoming 
     unnecessarily verbose, instances of :class:`Processor` can act as context 
     managers. Upon entering the context, the :class:`Processor` instance will
-    update a class variable that keeps track of the "active" processor context.
+    update a class variable that keeps track of the active processor context.
     External functions that create commands for systems of :class:`Processor`
-    objects can then query this variable (using :meth:`active_processor`) to 
+    objects can then query this variable (using :meth:`active_processor`\) to 
     determine where and how instructions should be generated.
     """
     
@@ -683,11 +687,10 @@ class Processor:
     @classmethod
     def make_instruction_func(cls, name):
         """
-        Creates a function that appends an instruction dictionary to a 
-        program list. The `dict` encapsulated by the 
-        :class:`ManagedResource` contains a few dedicated fields:
-
+        Creates a function that appends a new instruction with the given name 
+        to a program list.
         """
+
         def append_instruction(self, *args, **kwargs):
             instruction_resource = self.Instruction(
                 name=name, 
@@ -711,17 +714,17 @@ class Processor:
     @classmethod
     def instruction(cls, name=None):
         """
-        A decorator for specifying an instruction "natively" implemented by the
-        entity abstracted by this :class:`Processor`. The decorated method is 
+        A decorator for specifying an instruction natively implemented by the
+        entity abstracted by this :class:`Processor`\. The decorated method is 
         understood to compile an :class:`Instruction` object (passed as the 
         sole argument) into a list of objects that directly encapsulate a 
         section of machine code for the hardware.  
         
         Functions decorated with this should be instance methods that accept
-        (in addition to the `self` argument required for all instance methods)
+        (in addition to the ``self`` argument required for all instance methods)
         a single argument, which will be populated with the instruction 
         resource being compiled. The function should populate the instruction
-        resource `"compiled_instructions"` when compilation is successful.
+        resource ``compiled_instructions`` when compilation is successful.
         
         Calling a decorated method on a :class:`Processor` instance expresses 
         an intent to command the :class:`Processor` to execute the represented 
@@ -751,9 +754,9 @@ class Processor:
     def __init__(self):
         """
         Creates an instance with an optional instruction limit.
+
         :param instruction_limit: Maximum number of instructions allowed to 
-        be called on the :class:`Processor`.
-        
+            be called on the :class:`Processor`\.
         :type instruction_limit: int, optional
         """
         # A cache for storing arbitrary data and arguments inside the
@@ -791,10 +794,12 @@ class Processor:
     def active_processor(cls):
         """
         Get the innermost processor context.
+
         :return: The :class:`Processor` instance establishing the innermost
-        context.
+            context.
         :rtype: :class:`Processor`
         """
+
         if len(cls._processor_contexts) == 0:
             return None
             
@@ -804,14 +809,16 @@ class Processor:
         """
         Indicate that the next instruction called is the first in a
         block. Optionally, this can be applied to the previous instruction by
-        setting `previous_instruction=True`.
-        :param inline: If `True`, indicates that the block being created is inline.
-        :type inline: `bool`, optional
-        :param previous_instruction: if `True`, indicates that the most recent instruction
-        added should be the start of the block, rather than the next one to be 
-        added.
-        :type previous_instruction: `bool`, optional
+        setting ``previous_instruction=True``\.
+
+        :param inline: If ``True``\, indicates that the block being created is inline.
+        :type inline: bool, optional
+        :param previous_instruction: if ``True``\, indicates that the most recent instruction
+            added should be the start of the block, rather than the next one to be 
+            added.
+        :type previous_instruction: bool, optional
         """
+
         if previous_instruction:
             if inline:
                 self.Instruction.instances[-1].inline_block_start = True
@@ -827,13 +834,15 @@ class Processor:
         """
         Indicate that the previous instruction called is the last in a 
         block. Optionally, this can be applied to the next 
-        instruction by setting `next_instruction=True`.
-        :param inline: If `True`, indicates that the block being created is inline.
-        :type inline: `bool`, optional
-        :param next_instruction: if `True`, indicates that the next instruction added 
-        should be the end of the block, rather than the previous one.
-        :type next_instruction: `bool`, optional
+        instruction by setting ``next_instruction=True``\.
+
+        :param inline: If ``True``\, indicates that the block being created is inline.
+        :type inline: bool, optional
+        :param next_instruction: if ``True``\, indicates that the next instruction added 
+            should be the end of the block, rather than the previous one.
+        :type next_instruction: bool, optional
         """
+
         if next_instruction:
             if inline:
                 self._inline_block_end_next = True
@@ -850,9 +859,11 @@ class Processor:
         Compiles the complete program by iterating through the program list and
         calling every instruction's compilation method, while restructuring the
         program to obey the desired block structure. If compilation results
-        already exist, `overwrite` must be set to `True` to overwrite them.
-        :param overwrite: If `True`, overwrites existing compilation results
+        already exist, ``overwrite`` must be set to ``True`` to overwrite them.
+
+        :param overwrite: If ``True``\, overwrites existing compilation results
         """
+
         if self._data is not None and not overwrite:
             raise ValueError("Processor data is non-empty; set overwrite=True to overwrite.")
             
@@ -932,6 +943,7 @@ class Processor:
         Inserts instructions into a precompiled program and updates the 
         addresses of all others to reflect the insertion.
         """
+
         # Iterate in reverse because when we insert an element at a particular 
         # index, the existing element gets bumped forward
         for instruction in reversed(instructions):
@@ -945,24 +957,25 @@ class Processor:
         
     def __eq__(self, other):
         """
-        Wrap the "is" operator.
+        Wrap the `is` operator.
         """
         return self is other
     
 class ProcessorSubroutineMixin(ABC):
     """
     A mixin for subclasses of :class:`Processor` for defining subroutines. 
-    In this context, a "subroutine" simply means a named block of instructions; 
+    In this context, a subroutine simply means a named block of instructions; 
     note that this does not necessarily imply that the hardware has the ability
     to branch program execution.
     """
+
     _subroutines = {}
     
     @classmethod
     def subroutine(cls, func):
         """
         A decorator for creating callable subroutines from Python functions. 
-        Because `__getattr__` cannot distinguish between method calls and 
+        Because ``__getattr__`` cannot distinguish between method calls and 
         member field accesses, the primary purpose of this decorator is to 
         indicate that when the decorated function is accessed as an attribute 
         of a :class:`Processor` instance, an :class:`Instruction` should be 
@@ -972,6 +985,7 @@ class ProcessorSubroutineMixin(ABC):
         subroutine call will be used to populate a new temporary variable, 
         which is then provided to the function.   
         """
+
         key = func.__name__
         cls._subroutines[key] = func
         cls.instruction(name=key)(cls.call_subroutine)
@@ -981,10 +995,11 @@ class ProcessorSubroutineMixin(ABC):
     @abstractmethod
     def call_subroutine(self, instruction_resource):
         """
-        A method for compiling a subroutine call. The "instruction" field of
+        A method for compiling a subroutine call. The instruction field of
         the instruction resource will contain the name of the subroutine being
         called.
         """
+
         pass
     
 class Synchronizer:
@@ -998,31 +1013,30 @@ class Synchronizer:
     Instances of :class:`Synchronizer` are context managers and the statements
     within them define the operations to be synchronized in some way. In order
     for an operation to be considered a valid command for a given type of 
-    :class:`Synchronizer`, it must be a function decorated with the 
+    :class:`Synchronizer`\, it must be a function decorated with the 
     :meth:`synchronized` decorator. This decorator wraps the decorated function 
     with logic that stores the call information in the appropriate 
-    :class:`Synchronizer`.
+    :class:`Synchronizer`\.
     
     Synchronization is carried out almost entirely by Python dunder methods, so
     following the flow of function calls can be nontrivial. Let's walk through 
-    an example to illustrate the interplay between the classes:
+    an example to illustrate the interplay between the classes::
     
-    ```
-    class Something:
-        def __init__(self):
-            self.synchronizer_inst = Synchronizer()
+        class Something:
+            def __init__(self):
+                self.synchronizer_inst = Synchronizer()
 
-        @Synchronizer.synchronized(some_unique_name, "synchronizer_inst")
-        def command(self, *args, **kwargs):
-            do_synchronized_things()
-    ```
+            @Synchronizer.synchronized(some_unique_name, "synchronizer_inst")
+            def command(self, *args, **kwargs):
+                do_synchronized_things()
     
     The call to :meth:`Synchronizer.synchronized` produces a function decorator
-    that will associate calls to `command` with the name `some_unique_name`. 
+    that will associate calls to ``command`` with the name ``some_unique_name``\. 
     The decorator will then create a new function to replace `command` that 
-    will add a record of the function call to the `synchronizer_inst` attribute 
-    of an instance of `Something` when `command` is called on it.
+    will add a record of the function call to the ``synchronizer_inst`` attribute 
+    of an instance of ``Something`` when ``command`` is called on it.
     """
+
     @staticmethod
     def synchronized(name, synchronizer_name):
         """
@@ -1030,6 +1044,7 @@ class Synchronizer:
         :class:`Synchronizer` for a detailed description of the interaction
         between this function and instance methods.
         """
+
         def make(func):
             def synchronized_func(self, *args, **kwargs):
                 retval = func(self, *args, **kwargs)
@@ -1049,6 +1064,7 @@ class Synchronizer:
         """
         Configures the :class:`Synchronizer` when the context is being entered.
         """
+
         self._kwargs = kwargs
         return self
     
@@ -1072,8 +1088,4 @@ class Synchronizer:
         self._active = False
         self._kwargs = {}
 
-        
-        
-   
-    
         
