@@ -827,24 +827,30 @@ architecture rtl of acadia_rfdc_rts_regs is
     signal zero : std_logic;
 begin
 
-    bus_delay_proc : process(master_bus_clk) begin
-        if rising_edge(master_bus_clk) then
-            master_bus_en_d <= master_bus_en;
-            master_bus_en_dd <= master_bus_en_d;
+    master_bus_en_dd <= master_bus_en;
+    master_bus_wr_dd <= master_bus_wr;
+    master_bus_addr_dd <= master_bus_addr(7 downto 0);
+    master_bus_mosi_dd <= master_bus_mosi;
+    nrst_dd <= nrst;
+
+--    bus_delay_proc : process(master_bus_clk) begin
+--        if rising_edge(master_bus_clk) then
+--            master_bus_en_d <= master_bus_en;
+--            master_bus_en_dd <= master_bus_en_d;
             
-            master_bus_wr_d <= master_bus_wr;
-            master_bus_wr_dd <= master_bus_wr_d;
+--            master_bus_wr_d <= master_bus_wr;
+--            master_bus_wr_dd <= master_bus_wr_d;
             
-            master_bus_addr_d <= master_bus_addr(7 downto 0);
-            master_bus_addr_dd <= master_bus_addr_d;
+--            master_bus_addr_d <= master_bus_addr(7 downto 0);
+--            master_bus_addr_dd <= master_bus_addr_d;
             
-            master_bus_mosi_d <= master_bus_mosi;
-            master_bus_mosi_dd <= master_bus_mosi_d;
+--            master_bus_mosi_d <= master_bus_mosi;
+--            master_bus_mosi_dd <= master_bus_mosi_d;
             
-            nrst_d <= nrst;
-            nrst_dd <= nrst_d;
-        end if;
-    end process bus_delay_proc;
+--            nrst_d <= nrst;
+--            nrst_dd <= nrst_d;
+--        end if;
+--    end process bus_delay_proc;
        
     regs_proc: process(master_bus_clk) begin
         if rising_edge(master_bus_clk) then
@@ -1984,7 +1990,4 @@ begin
 
         end generate asynchronous_gen;
             
-        
-        
-
 end rtl;

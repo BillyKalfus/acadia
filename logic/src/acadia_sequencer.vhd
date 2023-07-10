@@ -89,13 +89,15 @@ architecture rtl of acadia_sequencer is
 
     -- Some constants that will encode source and destination IDs (except for the last three bits)
     constant SRC_REG         : std_logic_vector(3 downto 0) := "0000";
-    constant SRC_PC          : std_logic_vector(3 downto 0) := "0001";
-    constant SRC_IMM         : std_logic_vector(3 downto 0) := "0010";
-    constant SRC_EXT         : std_logic_vector(3 downto 0) := "0011";
-    constant SRC_STACK       : std_logic_vector(3 downto 0) := "0100";
-    constant SRC_BUS_DATA    : std_logic_vector(3 downto 0) := "0101";
-    constant SRC_DSP_PATTERN : std_logic_vector(3 downto 0) := "0110";
-    constant SRC_DSP_DATA    : std_logic_vector(3 downto 0) := "0111";
+    constant SRC_REG_LO      : std_logic_vector(3 downto 0) := "0001";
+    constant SRC_REG_HI      : std_logic_vector(3 downto 0) := "0010";
+    constant SRC_PC          : std_logic_vector(3 downto 0) := "0100";
+    constant SRC_IMM         : std_logic_vector(3 downto 0) := "0101";
+    constant SRC_EXT         : std_logic_vector(3 downto 0) := "0110";
+    constant SRC_STACK       : std_logic_vector(3 downto 0) := "0111";
+    constant SRC_BUS_DATA    : std_logic_vector(3 downto 0) := "1000";
+    constant SRC_DSP_PATTERN : std_logic_vector(3 downto 0) := "1001";
+    constant SRC_DSP_DATA    : std_logic_vector(3 downto 0) := "1010";
     
     constant DEST_REG        : std_logic_vector(3 downto 0) := "0000";
     constant DEST_PC         : std_logic_vector(3 downto 0) := "0001";
@@ -311,6 +313,8 @@ begin
                             
     -- Multiplex the input source according to the instruction field
     src1 <= r(to_integer(unsigned(instr_src1_min)))         when instr_src1_maj = SRC_REG      else
+            x"0000" & r(to_integer(unsigned(instr_src1_min)))(15 downto 0)         when instr_src1_maj = SRC_REG_LO      else
+            x"0000" & r(to_integer(unsigned(instr_src1_min)))(31 downto 16)        when instr_src1_maj = SRC_REG_HI      else
             x"0000" & pc                                    when instr_src1_maj = SRC_PC       else
             instr_imm1                                      when instr_src1_maj = SRC_IMM      else
             ext_in                                          when instr_src1_maj = SRC_EXT      else
@@ -320,10 +324,12 @@ begin
             (others => '0');
             
     src2 <= r(to_integer(unsigned(instr_src2_min)))         when instr_src2_maj = SRC_REG      else
+            x"0000" & r(to_integer(unsigned(instr_src2_min)))(15 downto 0)         when instr_src2_maj = SRC_REG_LO      else
+            x"0000" & r(to_integer(unsigned(instr_src2_min)))(31 downto 16)        when instr_src2_maj = SRC_REG_HI      else
             x"0000" & pc                                    when instr_src2_maj = SRC_PC       else
             instr_imm2                                      when instr_src2_maj = SRC_IMM      else
             ext_in                                          when instr_src2_maj = SRC_EXT      else
-            stack_out                                   when instr_src2_maj = SRC_STACK    else
+            stack_out                                       when instr_src2_maj = SRC_STACK    else
             mem_bus_miso                                    when instr_src2_maj = SRC_BUS_DATA else
             dsp_p_reg(to_integer(unsigned(instr_src2_min))) when instr_src2_maj = SRC_DSP_DATA else
             (others => '0');

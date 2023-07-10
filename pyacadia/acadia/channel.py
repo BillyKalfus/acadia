@@ -1246,7 +1246,7 @@ class Channel:
             out = np.frombuffer(out, dtype=np.int16)
 
         # TODO: do this better
-        float_type = np.float64 if array.dtype is np.complex128 else np.float32
+        float_type = np.float64 if array.dtype == np.complex128 else np.float32
         out[:] = (array*(2**13 - 1)).round().view(float_type).astype(np.int16) << 2
         return out
     

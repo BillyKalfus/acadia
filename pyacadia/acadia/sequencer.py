@@ -73,13 +73,16 @@ class SequencerDatapathPort:
 class Source(SequencerDatapathPort, metaclass=Operable):
     class Major(Enum):
         REG = 0
-        PC = 1
-        IMM = 2
-        EXT = 3
-        STACK = 4
-        BUS_DATA = 5
-        DSP_PATTERN = 6
-        DSP_P = 7
+        REG_LO = 1
+        REG_HI = 2
+        # 3 is skipped intentionally
+        PC = 4
+        IMM = 5
+        EXT = 6
+        STACK = 7
+        BUS_DATA = 8
+        DSP_PATTERN = 9
+        DSP_P = 10
             
 class Destination(SequencerDatapathPort):
     PC_ABSOLUTE_BRANCH = 0b00
@@ -757,7 +760,7 @@ class Sequencer(Processor):
                                     dsp_dct, 
                                     allocation_limit=Sequencer.NUM_DSP)
      
-    def bus_read(self, address=None, write_address=True):
+    def bus_read(self, address=None, write_address=True, **kwargs):
         """
         Reads a value from the bus. If multiple reads are performed back-to-back, 
         the additional wait time needed to overcome the bus latency may be 
@@ -772,7 +775,8 @@ class Sequencer(Processor):
                 raise ValueError("Address must be provided when"
                                  " `write_address=True`.")
             self.STP(src1=address, 
-                     dest1=Destination(Destination.Major.BUS_ADDR))
+                     dest1=Destination(Destination.Major.BUS_ADDR),
+                     **kwargs)
         
         return Source(Source.Major.BUS_DATA)
     
@@ -800,9 +804,10 @@ class Sequencer(Processor):
         self.store(src=target, dest=Destination(Destination.Major.PC, 
                                                 Destination.PC_ABSOLUTE_BRANCH))
         
-    def nop(self):
+    def nop(self, **kwargs):
         self.store(src=Source(Source.Major.REG), 
-                   dest=Destination(Destination.Major.REG))
+                   dest=Destination(Destination.Major.REG),
+                   **kwargs)
             
     @Processor.instruction()
     def STP(self, instruction_resource):
@@ -968,8 +973,11 @@ class Sequencer(Processor):
                 res._released = True
                 
         if "comment" in kwargs:
-            for instr in instructions:
-                instr.comment = kwargs["comment"]
+            if len(instructions) == 1:
+                instructions[0].comment = kwargs["comment"]
+            else:
+                for idx_instr,instr in enumerate(instructions):
+                    instr.comment = f"({idx_instr+1}) " + kwargs["comment"]
 
         instruction_resource.compiled = instructions
     
