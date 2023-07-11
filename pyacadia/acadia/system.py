@@ -3042,7 +3042,7 @@ class Acadia:
     
     @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
     @requires_sequencer
-    def generate(self, channel, array, decimate=0):
+    def generate(self, channel, array, decimate=0, blank=False):
         """
         Generate a pulse on a DAC channel.
 
@@ -3071,7 +3071,7 @@ class Acadia:
         # 128 bits. We need the word address
         descriptor = dma.request_descriptor(array.word_address(), 
                                             array.byte_length() // 16,
-                                            decimate=decimate)
+                                            decimate=decimate, blank=blank)
         
         fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
