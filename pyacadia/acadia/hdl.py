@@ -576,15 +576,12 @@ class BusDataMoverController(BusDevice, HDLModule):
             command FIFO whose address field is populated with the data
             written to this register. The values of the other fields are 
             derived from prior writes to other registers (see below).
-            Reading this register returns the most recently retrieved word 
-            from the status FIFO.
+            Reading this register pops a word from the status FIFO.
 
-        - 1: CMD_BTT/STS_VLD
+        - 1: CMD_BTT/STS_CNT
             This register stores the number of bytes for the DataMover to
             transfer when its next command is issued. Reading this register 
-            returns a value with one bit per DataMover; a bit is set when 
-            the corresponding DataMover has presented a status word to the 
-            controller.
+            returns the number of status words currently in the FIFO.
 
         - 2: CMD_MISC/CMD_ACK
             This register stores additional miscellaneous bits needed for a
@@ -648,7 +645,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices).")
             
         # Finally, write the HDL for the decoder
-        hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\n'
+        hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\nlibrary xpm;\nuse xpm.vcomponents.all;\n\n'
         hdl += f'entity {self.name} is\n'
         hdl += f'    port (\n'
         
@@ -706,18 +703,18 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER of datamover_cmd_clk: SIGNAL is "ASSOCIATED_BUSIF {":".join(bus_names)}";\n'
             
         hdl += f'    signal dm_err     : std_logic_vector(31 downto 0);\n'
-        hdl += f'    signal dm_sts_vld : std_logic_vector(31 downto 0);\n'
         hdl += f'    signal dm_cmd_ack : std_logic_vector(31 downto 0);\n'
         hdl += f'    signal dm_rst     : std_logic_vector(31 downto 0);\n\n'
             
         for datamover in self._datamovers:
             hdl += f'    signal {datamover}_cmd_waiting : std_logic;\n\n'
             hdl += f'    signal {datamover}_cmd_btt     : std_logic_vector(22 downto 0);\n'
-            hdl += f'    signal {datamover}_cmd_misc    : std_logic_vector({self._addr_bits-32+14-1} downto 0);\n'
-            hdl += f'    signal {datamover}_sts         : std_logic_vector(31 downto 0);\n\n'
-        
+            hdl += f'    signal {datamover}_cmd_misc    : std_logic_vector({self._addr_bits-32+14-1} downto 0);\n\n'
+            hdl += f'    signal {datamover}_sts         : std_logic_vector(31 downto 0);\n'
+            hdl += f'    signal {datamover}_sts_rd      : std_logic;\n'
+            hdl += f'    signal {datamover}_sts_cnt     : std_logic_vector(3 downto 0);\n'
         hdl += f'begin\n\n'
-
+        
         hdl += f'    reg_wr_proc: process(master_bus_clk) begin\n'
         hdl += f'        if rising_edge(master_bus_clk) then\n'
         hdl += f'            if (nrst = \'0\') then\n'
@@ -785,29 +782,6 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'        end if;\n'
         hdl += f'    end process dm_cmd_ack_proc;\n\n'
         
-        hdl += f'    dm_sts_proc: process(master_bus_clk) begin\n'
-        hdl += f'        if rising_edge(master_bus_clk) then\n'
-        hdl += f'            if (nrst = \'0\') then\n'
-        hdl += f'                dm_sts_vld    <= (others => \'0\');\n'
-        for i,datamover in enumerate(self._datamovers):  
-            hdl += f'                {datamover}_sts        <= (others => \'0\');\n'
-            hdl += f'                {datamover}_sts_tready <= \'0\';\n'
-        hdl += f'            else\n'
-        
-        for i,datamover in enumerate(self._datamovers):  
-            hdl += f'                {datamover}_sts_tready <= \'1\';\n'
-            hdl += f'                if ({datamover}_sts_tvalid = \'1\') then\n'
-            hdl += f'                    {datamover}_sts <= {datamover}_sts_tdata;\n'
-            hdl += f'                    dm_sts_vld({i}) <= \'1\';\n'
-            hdl += f'                elsif (dm_rst({i}) = \'1\') then\n'
-            hdl += f'                    {datamover}_sts <= (others => \'0\');\n'
-            hdl += f'                    dm_sts_vld({i}) <= \'0\';\n'
-            hdl += f'                end if;\n\n'
-        
-        hdl += f'            end if;\n'
-        hdl += f'        end if;\n'
-        hdl += f'    end process dm_sts_proc;\n\n'
-        
         hdl += f'    -- Combine the DataMover error signals into one vector\n'
         for i,datamover in enumerate(self._datamovers):
             hdl += f'    dm_err({i}) <= {datamover}_err;\n'
@@ -821,7 +795,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'                when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= {datamover}_sts;\n'
             hdl += f'                when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= dm_sts_vld;\n'
+            hdl += f'                    master_bus_miso <= x"0000000" & {datamover}_sts_cnt;\n'
             hdl += f'                when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= dm_cmd_ack;\n'
             hdl += f'                when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
@@ -832,6 +806,57 @@ class BusDataMoverController(BusDevice, HDLModule):
         hdl += f'            end case;\n'
         hdl += f'        end if;\n'
         hdl += f'    end process rd_proc;\n\n'
+
+        hdl += f'    -- Create FIFOs for the status words\n'
+        for i,datamover in enumerate(self._datamovers): 
+            hdl += f'    {datamover}_sts_tready <= nrst and not dm_rst({i});\n'
+            hdl += f'    {datamover}_sts_rd <= \'1\' when master_bus_addr({bus_addr_bits-1} downto 0) = "{f"{(i*4):b}".zfill(bus_addr_bits)}" and master_bus_en = \'1\' and master_bus_wr = \'0\' else \'0\';\n\n' 
+            hdl += f'    {datamover}_sts_fifo : xpm_fifo_sync\n'
+            hdl += f'        generic map (\n'
+            hdl += f'            DOUT_RESET_VALUE    => "0",\n'
+            hdl += f'            ECC_MODE            => "no_ecc",\n'
+            hdl += f'            FIFO_MEMORY_TYPE    => "distributed", -- String\n'
+            hdl += f'            FIFO_READ_LATENCY   => 1,\n'
+            hdl += f'            FIFO_WRITE_DEPTH    => 16,\n'
+            hdl += f'            FULL_RESET_VALUE    => 0,\n'
+            hdl += f'            PROG_EMPTY_THRESH   => 10,\n'
+            hdl += f'            PROG_FULL_THRESH    => 10,\n'
+            hdl += f'            RD_DATA_COUNT_WIDTH => 4,\n'
+            hdl += f'            READ_DATA_WIDTH     => 32,\n'
+            hdl += f'            READ_MODE           => "std",\n'
+            hdl += f'            SIM_ASSERT_CHK      => 0,\n'
+            hdl += f'            USE_ADV_FEATURES    => "0400",\n'
+            hdl += f'            WAKEUP_TIME         => 0,\n'
+            hdl += f'            WRITE_DATA_WIDTH    => 32,\n'
+            hdl += f'            WR_DATA_COUNT_WIDTH => 4\n'
+            hdl += f'        )\n'
+            hdl += f'        port map (\n'
+            hdl += f'            almost_empty  => open,\n'
+            hdl += f'            almost_full   => open,\n'
+            hdl += f'            data_valid    => open,\n'
+            hdl += f'            dbiterr       => open,\n'
+            hdl += f'            dout          => {datamover}_sts,\n'
+            hdl += f'            empty         => open,\n'
+            hdl += f'            full          => open,\n'
+            hdl += f'            overflow      => open,\n'
+            hdl += f'            prog_empty    => open,\n'
+            hdl += f'            prog_full     => open,\n'
+            hdl += f'            rd_data_count => {datamover}_sts_cnt,\n'
+            hdl += f'            rd_rst_busy   => open,\n'
+            hdl += f'            sbiterr       => open,\n'
+            hdl += f'            underflow     => open,\n'
+            hdl += f'            wr_ack        => open,\n'
+            hdl += f'            wr_data_count => open,\n'
+            hdl += f'            wr_rst_busy   => open,\n'
+            hdl += f'            din           => {datamover}_sts_tdata,\n'
+            hdl += f'            injectdbiterr => \'0\',\n'
+            hdl += f'            injectsbiterr => \'0\',\n'
+            hdl += f'            rd_en         => {datamover}_sts_rd,\n'
+            hdl += f'            rst           => dm_rst({i}),\n'
+            hdl += f'            sleep         => \'0\',\n'
+            hdl += f'            wr_clk        => master_bus_clk,\n'
+            hdl += f'            wr_en         => {datamover}_sts_tvalid\n'
+            hdl += f'        );\n\n'
         
         
         hdl += f'end rtl;\n\n'

@@ -65,8 +65,10 @@ class Firmware:
     CMACC_KERNEL_MEMORY_SIZE_BITS = 2048*32
     CMACC_KERNEL_MEMORY_BASE_ADDRESS = 0x00_8600_0000
     
-    DAC_MEMORY_SIZE_BITS = 128*8192
-    DAC_MEMORY_BASE_ADDRESS = 0x00_8800_0000
+    DAC_TILE_MEMORY_PRIMITIVE = ["ultra", "ultra", "ultra", "ultra"]
+    DAC_TILE_WIDTH = [128, 128, 128, 128]
+    DAC_TILE_MEMORY_SIZE_BITS = [2**20, 2**20, 2**20, 2**20]
+    DAC_TILE_MEMORY_BASE_ADDRESS = [0x00_8800_0000, 0x00_8A00_0000, 0x00_8C00_0000, 0x00_8E00_0000]
 
     CACHE_MEMORY_SIZE_BITS = 2**20
     CACHE_MEMORY_ADDRESS = 0x00_B000_0000
@@ -528,18 +530,21 @@ class Firmware:
         user_port_output_pipeline=0)
     hdl_modules.append(instruction_memory_controller)
 
-    dac_memory_controller = AXIMemoryArray(f"dac", 
-        size_bits=DAC_MEMORY_SIZE_BITS, 
-        width=128, 
-        elements=NUM_DAC, 
-        read_only=True,
-        use_rst=True,
-        primitive="ultra", 
-        controller_port_input_pipeline=2,
-        controller_port_output_pipeline=2,   
-        user_port_input_pipeline=1,
-        user_port_output_pipeline=2)
-    hdl_modules.append(dac_memory_controller)
+    dac_tile_memory_controllers = []
+    for i in range(4):
+        memory_controller = AXIMemoryArray(f"dac_tile{i}", 
+            size_bits=DAC_TILE_MEMORY_SIZE_BITS[i], 
+            width=DAC_TILE_WIDTH[i], 
+            elements=4, 
+            read_only=True,
+            use_rst=True,
+            primitive=DAC_TILE_MEMORY_PRIMITIVE[i], 
+            controller_port_input_pipeline=2,
+            controller_port_output_pipeline=2,   
+            user_port_input_pipeline=1,
+            user_port_output_pipeline=2)
+        hdl_modules.append(memory_controller)
+        dac_tile_memory_controllers.append(memory_controller)
 
     cmacc_kernel_memory_controller = AXIMemoryArray(f"cmacc_kernel", 
         size_bits=CMACC_KERNEL_MEMORY_SIZE_BITS, 
@@ -626,11 +631,12 @@ class Firmware:
             # Write the TCL that will generate the IP for the AXI memory controllers
             memory_tcl = cls.cache_memory_controller.generate_ip_tcl(project_dir)
             memory_tcl += cls.instruction_memory_controller.generate_ip_tcl(project_dir)
-            memory_tcl += cls.dac_memory_controller.generate_ip_tcl(project_dir)
             memory_tcl += cls.cmacc_kernel_memory_controller.generate_ip_tcl(project_dir)
             memory_tcl += cls.dac_dma_descriptor_memory_controller.generate_ip_tcl(project_dir)
             memory_tcl += cls.adc_dma_descriptor_memory_controller.generate_ip_tcl(project_dir)
             memory_tcl += cls.cmacc_dma_descriptor_memory_controller.generate_ip_tcl(project_dir)
+            for controller in cls.dac_tile_memory_controllers:
+                memory_tcl += controller.generate_ip_tcl(project_dir)
             f.write(memory_tcl)
             
             # ------------------- Clock Management -------------------- #
@@ -696,16 +702,18 @@ class Firmware:
 
             # Create a SmartConnect for simple configuration peripherals
             # 1 Master: PS AXI LPD Master
-            # 8 Slaves: RFDC, Clocking, ADC Axis Switch, ADC DMA descriptors, CMACC DMA descriptors, CMACC kernel memory, DAC memory, DAC DMA descriptor
+            # 11 Slaves: RFDC, Clocking, ADC Axis Switch, 
+            #            ADC DMA descriptors, CMACC DMA descriptors, DAC DMA descriptor,
+            #            CMACC kernel memory, 
+            #            DAC Tile 0 memory, DAC Tile 1 memory, DAC Tile 2 memory, DAC Tile 3 memory
             create_ip(f, name="hedgehog/config_smartconnect", vlnv="xilinx.com:ip:smartconnect:1.0")
             set_property(f, 
                          name="hedgehog/config_smartconnect", 
-                         properties={"NUM_MI": 8, 
+                         properties={"NUM_MI": 11, 
                                      "NUM_SI": 1, 
                                      "NUM_CLKS": 2})
             connect_bd_net(f, f"hedgehog/config_smartconnect/aclk", f"hedgehog/PS_AXI_clk")
             connect_bd_net(f, f"hedgehog/config_smartconnect/aclk1", f"hedgehog/clk_wiz/seq_clk")
-            # connect_bd_net(f, f"hedgehog/config_smartconnect/aclk2", f"hedgehog/PS_clk_250")
             connect_bd_net(f, f"hedgehog/config_smartconnect/aresetn", f"hedgehog/proc_sys_reset_PS_AXI_clk/interconnect_aresetn")
             
             # Connect it to the PS
@@ -718,18 +726,18 @@ class Firmware:
             # Create an AXI Crossbar for more rapid access to cache and instruction memories
             # 2 Masters: PS AXI Master 1, CFG AXI DataMover S2MM
             # 2 slaves: cache, instruction memory
-            create_ip(f, name="hedgehog/memory_crossbar", vlnv="xilinx.com:ip:axi_crossbar:2.1")
-            set_property(f, name="hedgehog/memory_crossbar", 
+            create_ip(f, name="hedgehog/sequencer_memory_crossbar", vlnv="xilinx.com:ip:axi_crossbar:2.1")
+            set_property(f, name="hedgehog/sequencer_memory_crossbar", 
                          properties={"NUM_SI": 2,
                                      "NUM_MI": 2,
                                      "STRATEGY": 1,
                                      "CONNECTIVITY_MODE": "SAMD"})
                         
-            connect_bd_net(f, "hedgehog/memory_crossbar/aclk", "hedgehog/PS_AXI_clk")
-            connect_bd_net(f, "hedgehog/memory_crossbar/aresetn", "hedgehog/proc_sys_reset_PS_AXI_clk/interconnect_aresetn")
+            connect_bd_net(f, "hedgehog/sequencer_memory_crossbar/aclk", "hedgehog/PS_AXI_clk")
+            connect_bd_net(f, "hedgehog/sequencer_memory_crossbar/aresetn", "hedgehog/proc_sys_reset_PS_AXI_clk/interconnect_aresetn")
 
             # Connect it to the PS
-            connect_bd_intf_net(f, f"hedgehog/memory_crossbar/S00_AXI", f"hedgehog/PS_M_AXI1")
+            connect_bd_intf_net(f, f"hedgehog/sequencer_memory_crossbar/S00_AXI", f"hedgehog/PS_M_AXI1")
 
             # Changed advanced properties to get:
             # set_property -dict [list CONFIG.ADVANCED_PROPERTIES { __view__ { timing { S00_Buffer { AR_M_SEND_PIPE 0 AW_M_SEND_PIPE 0 W_M_SEND_PIPE 0 } M00_Buffer { B_M_SEND_PIPE 0 R_M_SEND_PIPE 0 } S00_Entry { MMU_REGSLICE 0 TR_REGSLICE 0 } M00_Exit { REGSLICE 0 } SW0 { AR_M_PIPE 0 AW_M_PIPE 0 B_M_PIPE 0 R_M_PIPE 0 W_M_PIPE 0 } } }}] [get_bd_cells hedgehog/memory_interconnect]
@@ -986,38 +994,38 @@ class Firmware:
                                    "CONFIG.DAC_Coarse_Mixer_Freq31 {3} "
                                    "CONFIG.DAC_Coarse_Mixer_Freq32 {3} "
                                    "CONFIG.DAC_Coarse_Mixer_Freq33 {3} "
-                                   "CONFIG.DAC_Data_Width00 {8} "
-                                   "CONFIG.DAC_Data_Width01 {8} "
-                                   "CONFIG.DAC_Data_Width02 {8} "
-                                   "CONFIG.DAC_Data_Width03 {8} "
-                                   "CONFIG.DAC_Data_Width10 {8} "
-                                   "CONFIG.DAC_Data_Width11 {8} "
-                                   "CONFIG.DAC_Data_Width12 {8} "
-                                   "CONFIG.DAC_Data_Width13 {8} "
-                                   "CONFIG.DAC_Data_Width20 {8} "
-                                   "CONFIG.DAC_Data_Width21 {8} "
-                                   "CONFIG.DAC_Data_Width22 {8} "
-                                   "CONFIG.DAC_Data_Width23 {8} "
-                                   "CONFIG.DAC_Data_Width30 {8} "
-                                   "CONFIG.DAC_Data_Width31 {8} "
-                                   "CONFIG.DAC_Data_Width32 {8} "
-                                   "CONFIG.DAC_Data_Width33 {8} "
-                                   "CONFIG.DAC_Interpolation_Mode00 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode01 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode02 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode03 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode10 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode11 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode12 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode13 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode20 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode21 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode22 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode23 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode30 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode31 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode32 {6} "
-                                   "CONFIG.DAC_Interpolation_Mode33 {6} "
+                                   f"CONFIG.DAC_Data_Width00 {{{Firmware.DAC_TILE_WIDTH[0]//16}}} "
+                                   f"CONFIG.DAC_Data_Width01 {{{Firmware.DAC_TILE_WIDTH[0]//16}}} "
+                                   f"CONFIG.DAC_Data_Width02 {{{Firmware.DAC_TILE_WIDTH[0]//16}}} "
+                                   f"CONFIG.DAC_Data_Width03 {{{Firmware.DAC_TILE_WIDTH[0]//16}}} "
+                                   f"CONFIG.DAC_Data_Width10 {{{Firmware.DAC_TILE_WIDTH[1]//16}}} "
+                                   f"CONFIG.DAC_Data_Width11 {{{Firmware.DAC_TILE_WIDTH[1]//16}}} "
+                                   f"CONFIG.DAC_Data_Width12 {{{Firmware.DAC_TILE_WIDTH[1]//16}}} "
+                                   f"CONFIG.DAC_Data_Width13 {{{Firmware.DAC_TILE_WIDTH[1]//16}}} "
+                                   f"CONFIG.DAC_Data_Width20 {{{Firmware.DAC_TILE_WIDTH[2]//16}}} "
+                                   f"CONFIG.DAC_Data_Width21 {{{Firmware.DAC_TILE_WIDTH[2]//16}}} "
+                                   f"CONFIG.DAC_Data_Width22 {{{Firmware.DAC_TILE_WIDTH[2]//16}}} "
+                                   f"CONFIG.DAC_Data_Width23 {{{Firmware.DAC_TILE_WIDTH[2]//16}}} "
+                                   f"CONFIG.DAC_Data_Width30 {{{Firmware.DAC_TILE_WIDTH[3]//16}}} "
+                                   f"CONFIG.DAC_Data_Width31 {{{Firmware.DAC_TILE_WIDTH[3]//16}}} "
+                                   f"CONFIG.DAC_Data_Width32 {{{Firmware.DAC_TILE_WIDTH[3]//16}}} "
+                                   f"CONFIG.DAC_Data_Width33 {{{Firmware.DAC_TILE_WIDTH[3]//16}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode00 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[0]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode01 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[0]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode02 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[0]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode03 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[0]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode10 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[1]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode11 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[1]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode12 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[1]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode13 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[1]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode20 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[2]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode21 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[2]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode22 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[2]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode23 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[2]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode30 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[3]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode31 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[3]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode32 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[3]}}} "
+                                   f"CONFIG.DAC_Interpolation_Mode33 {{{6 * 128 // Firmware.DAC_TILE_WIDTH[3]}}} "
                                    "CONFIG.DAC_Mixer_Mode00 {0} "
                                    "CONFIG.DAC_Mixer_Mode01 {0} "
                                    "CONFIG.DAC_Mixer_Mode02 {0} "
@@ -1216,36 +1224,37 @@ class Firmware:
                 connect_bd_intf_net(f, f"hedgehog/adc{channel}_pipeline/M_AXIS", 
                                        f"hedgehog/axis_switch_adc/S{channel:02d}_AXIS")
                 
-            # ------------------- DAC Memory -------------------- #
-            create_module(f, f"hedgehog/dac_memory", f"dac_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/dac_memory/s_axi", "hedgehog/config_smartconnect/M03_AXI")
-            connect_bd_net(f, f"hedgehog/dac_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/dac_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-                
             # ------------------- DAC DMA Descriptor Memory -------------------- #
             create_module(f, f"hedgehog/dac_dma_descriptor_memory", f"dac_dma_descriptor_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi", "hedgehog/config_smartconnect/M04_AXI")
+            connect_bd_intf_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi", "hedgehog/config_smartconnect/M03_AXI")
             connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
             connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
                 
             # ------------------- ADC DMA Descriptor Memory -------------------- #
             create_module(f, f"hedgehog/adc_dma_descriptor_memory", f"adc_dma_descriptor_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi", f"hedgehog/config_smartconnect/M05_AXI")
+            connect_bd_intf_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi", f"hedgehog/config_smartconnect/M04_AXI")
             connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
             connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
             
             # ------------------- CMACC Kernel Memory -------------------- #
             create_module(f, f"hedgehog/cmacc_kernel_memory", f"cmacc_kernel_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/cmacc_kernel_memory/s_axi", f"hedgehog/config_smartconnect/M06_AXI")
+            connect_bd_intf_net(f, f"hedgehog/cmacc_kernel_memory/s_axi", f"hedgehog/config_smartconnect/M05_AXI")
             connect_bd_net(f, f"hedgehog/cmacc_kernel_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
             connect_bd_net(f, f"hedgehog/cmacc_kernel_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
             
             # ------------------- CMACC DMA Descriptor Memory -------------------- #
             create_module(f, f"hedgehog/cmacc_dma_descriptor_memory", f"cmacc_dma_descriptor_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/cmacc_dma_descriptor_memory/s_axi", f"hedgehog/config_smartconnect/M07_AXI")
+            connect_bd_intf_net(f, f"hedgehog/cmacc_dma_descriptor_memory/s_axi", f"hedgehog/config_smartconnect/M06_AXI")
             connect_bd_net(f, f"hedgehog/cmacc_dma_descriptor_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
             connect_bd_net(f, f"hedgehog/cmacc_dma_descriptor_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
             
+            # ------------------- DAC Memory -------------------- #
+            for tile in range(4):
+                create_module(f, f"hedgehog/dac_tile{tile}_memory", f"dac_tile{tile}_axi_memory")
+                connect_bd_intf_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi", f"hedgehog/config_smartconnect/M{7+tile:02d}_AXI")
+                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+
             # ------------------- Sequencer ----------------------------- #
             
             # Slice the PS GPIO for the sequencer run signal
@@ -1337,7 +1346,7 @@ class Firmware:
             create_module(f, f"hedgehog/cache_memory", f"cache_axi_memory")
             
             # Connect the cache to the smartconnect
-            connect_bd_intf_net(f, f"hedgehog/cache_memory/s_axi", f"hedgehog/memory_crossbar/M00_AXI")
+            connect_bd_intf_net(f, f"hedgehog/cache_memory/s_axi", f"hedgehog/sequencer_memory_crossbar/M00_AXI")
             connect_bd_net(f, "hedgehog/cache_memory/s_axi_aclk", "hedgehog/PS_AXI_clk")
             connect_bd_net(f, "hedgehog/cache_memory/s_axi_aresetn", "hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn")
             
@@ -1346,7 +1355,7 @@ class Firmware:
             
             # ------------------- Sequencer Instruction Memory -------------------- #
             create_module(f, "hedgehog/instruction_memory", "instruction_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/instruction_memory/s_axi", f"hedgehog/memory_crossbar/M01_AXI")
+            connect_bd_intf_net(f, f"hedgehog/instruction_memory/s_axi", f"hedgehog/sequencer_memory_crossbar/M01_AXI")
             connect_bd_net(f, "hedgehog/instruction_memory/s_axi_aclk", "hedgehog/PS_AXI_clk")
             connect_bd_net(f, "hedgehog/instruction_memory/s_axi_aresetn", "hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn")
             
@@ -1375,6 +1384,7 @@ class Firmware:
                                         "CONFIG.c_include_s2mm_stsfifo {true} "
                                         "CONFIG.c_s2mm_btt_used {23} "
                                         "CONFIG.c_s2mm_support_indet_btt {true} "
+                                        "CONFIG.c_mm2s_support_indet_btt {true} "
                                         "CONFIG.c_s2mm_addr_pipe_depth {3} "
                                         "CONFIG.c_mm2s_include_sf {false} "
                                         "CONFIG.c_s2mm_include_sf {false} "
@@ -1398,7 +1408,7 @@ class Firmware:
             connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm/M_AXI_MM2S", f"hedgehog/bulk_smartconnect/S09_AXI")
 
             # Connect the S2MM AXI master to the memory crossbar
-            connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm/M_AXI_S2MM", f"hedgehog/memory_crossbar/S01_AXI")
+            connect_bd_intf_net(f, f"hedgehog/cfg_axi_dm/M_AXI_S2MM", f"hedgehog/sequencer_memory_crossbar/S01_AXI")
 
             for direction in ["mm2s","s2mm"]:
                 # Connect AXI Master clocks and resets
@@ -1706,12 +1716,12 @@ class Firmware:
 
                 # Create a DMA for the DAC and connect it to the read port of the BRAM
                 create_module(f, f"hedgehog/dac_dma{channel}", "acadia_dma")
-                connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}/mem_control", f"hedgehog/dac_memory/mem{channel}")
+                connect_bd_intf_net(f, f"hedgehog/dac_dma{channel}/mem_control", f"hedgehog/dac_tile{tile}_memory/mem{block}")
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_net(f, f"hedgehog/dac_dma{channel}/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
 
                 # Connect the DAC memory output to the RFDAC interface
-                connect_bd_net(f, f"hedgehog/dac_memory/mem{channel}_dout", f"hedgehog/rfdc/s{tile}{block}_axis_tdata")
+                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/mem{block}_dout", f"hedgehog/rfdc/s{tile}{block}_axis_tdata")
 
                 # Connect the DAC DMA to the registers
                 connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac_dma{channel}_fifo_mosi", f"hedgehog/dac_dma{channel}/descriptor_address_fifo_in")
@@ -1758,9 +1768,10 @@ class Firmware:
                                                      Firmware.INSTRUCTION_MEMORY_ADDRESS, 
                                                      Firmware.INSTRUCTION_MEMORY_SIZE_BITS // 8)
             
-            memory_segments[f"dac_memory"] = (f"hedgehog/dac_memory/s_axi/reg0", 
-                                 Firmware.DAC_MEMORY_BASE_ADDRESS, 
-                                 Firmware.DAC_MEMORY_SIZE_BITS*Firmware.NUM_DAC//8)
+            for i in range(4):
+                memory_segments[f"dac_tile{i}_memory"] = (f"hedgehog/dac_tile{i}_memory/s_axi/reg0", 
+                                    Firmware.DAC_TILE_MEMORY_BASE_ADDRESS[i], 
+                                    Firmware.DAC_TILE_MEMORY_SIZE_BITS[i]*4//8)
                 
             memory_segments["cmacc_kernel_memory"] = (f"hedgehog/cmacc_kernel_memory/s_axi/reg0", 
                                      Firmware.CMACC_KERNEL_MEMORY_BASE_ADDRESS, 
@@ -1778,10 +1789,16 @@ class Firmware:
                                      Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS, 
                                      Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS*Firmware.NUM_CMACC//8)
 
-            for target_address_space in ["/ps/Data", "hedgehog/cfg_axi_dm/Data_S2MM"]:
-                for segment,address,rng in memory_segments.values():
-                    assign_bd_address(f, target_address_space=target_address_space, offset=address, range=rng, addr_seg=segment)
-                    
+            for segment,address,rng in memory_segments.values():
+                assign_bd_address(f, target_address_space="/ps/Data", offset=address, range=rng, addr_seg=segment)
+
+            for key in ["cache_memory", "instruction_memory"]:
+                assign_bd_address(f, 
+                                target_address_space="hedgehog/cfg_axi_dm/Data_S2MM", 
+                                offset=memory_segments[key][1], 
+                                range=memory_segments[key][2], 
+                                addr_seg=memory_segments[key][0])
+
             bulk_address_spaces = ["/ps/Data", "hedgehog/cfg_axi_dm/Data_MM2S"]
             bulk_address_spaces += [f"/hedgehog/adc_dm{i}/Data_S2MM" for i in range(Firmware.NUM_ADC)]
             bulk_address_spaces += [f"/hedgehog/cmacc_dm{i}/Data_S2MM" for i in range(Firmware.NUM_CMACC)]
@@ -2972,10 +2989,15 @@ class Acadia:
         
             # Integration kernel is always 1 sample wide
             if isinstance(capture_length, int):
-                if integration_kernel.byte_length() // 4 != (capture_length // 16):
+                if capture_length % 8 != 0:
+                    raise ValueError("Capture length for integration must be"
+                                     " a multiple of 8 bytes (received"
+                                     f" {capture_length}).")
+
+                if integration_kernel.byte_length() != capture_length:
                     raise ValueError(f"Integration kernel length"
-                                    f" ({integration_kernel.byte_length() // 4})"
-                                    f" does not match array length ({capture_length // 16}).")
+                                    f" ({integration_kernel.byte_length()})"
+                                    f" does not match array length ({capture_length}).")
             else:
                 print("WARNING: Unable to determine length of capture at compile time."
                       " Make sure that the capture has a valid length and start"
@@ -2998,9 +3020,9 @@ class Acadia:
             capture_length_cycles = capture_length // 4
         else:
             if isinstance(capture_length, int):
-                if capture_length % 16 != 0:
+                if capture_length % 32 != 0:
                     raise ValueError(f"An array for ADC capture without integration"
-                                    " must have a size that is a multiple of 16"
+                                    " must have a size that is a multiple of 32"
                                     f" bytes; found {capture_length} bytes.")
             else:
                 print("WARNING: Unable to determine length of capture at compile time."
@@ -3022,7 +3044,7 @@ class Acadia:
             fifo_name = f"adc_dma{dma._resource_id}_fifo"
             datamover_name = f"adc_dm{dma._resource_id}"
             dma_address = 0
-            capture_length_cycles = capture_length // 16
+            capture_length_cycles = capture_length // channel.interface_width_bytes
             
         # Store a reference to the DMA chosen in the Channel object
         channel.dma = dma
@@ -3070,7 +3092,7 @@ class Acadia:
         # When we request the descriptor, we need to get the address aligned to
         # 128 bits. We need the word address
         descriptor = dma.request_descriptor(array.word_address(), 
-                                            array.byte_length() // 16,
+                                            array.byte_length() // channel.interface_width_bytes,
                                             decimate=decimate)
         
         fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
@@ -3111,11 +3133,11 @@ class Acadia:
             if value == 0:
                 descriptor = dma.request_descriptor(0, length, fixed=True, blank=True)
             else:
-                mem = self.DACArray[channel.num](size=16)
+                mem = self.DACArray[channel.num](size=channel.interface_width_bytes)
                 self._dac_constants.append((mem,value))
                 descriptor = dma.request_descriptor(mem.word_address(), length, fixed=True)
         elif isinstance(value, Symbol) and value.value_type() in [int, float, complex]:
-            mem = self.DACArray[channel.num](size=16)
+            mem = self.DACArray[channel.num](size=channel.interface_width_bytes)
             self._dac_constants.append((mem,value))
             descriptor = dma.request_descriptor(mem.word_address(), length, fixed=True)
         else:
@@ -3296,9 +3318,8 @@ class Acadia:
         """
 
         # Load DAC constants
-        # The DAC interface width is 128 bits, which is 4 complex samples
         for mem,constant in self._dac_constants:
-            mem.memory[:] = Channel.to_samples(np.array([constant]*4))
+            mem.memory[:] = Channel.to_samples(np.array([constant]*(len(mem)//4)))
 
         # Configure the ADC AXIS Switch according to the DMA settings
         # For any DMAs with instructions, connect to the stored physical channel

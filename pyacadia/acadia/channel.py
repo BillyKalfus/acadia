@@ -1096,12 +1096,7 @@ class Channel:
         :rtype: int
         """
 
-        # if not hasattr(self, "complex_samples"):
-        #     raise ValueError("Channel missing sample rate information."
-        #                      " Make sure that `configure_rfdc` was"
-        #                      " called on the `Acadia` instance that produced"
-        #                      " this `Channel` object.")
-        return samples*4 #(4 if self.complex_samples else 2)
+        return samples*4 
     
     def bytes_to_samples(self, num_bytes):
         """
@@ -1111,23 +1106,12 @@ class Channel:
             as an array of samples
         :rtype: int
         """
-
-        # if not hasattr(self, "complex_samples"):
-        #     raise ValueError("Channel missing sample rate information."
-        #                      " Make sure that `configure_rfdc` was"
-        #                      " called on the `Acadia` instance that produced"
-        #                      " this `Channel` object.")
             
         # if self.complex_samples:
         if int(round(num_bytes/4, 3)) != num_bytes // 4:
             raise ValueError(f"Number of bytes ({num_bytes}) must be a"
                                 " multiple of 4.")
         return num_bytes // 4
-        # else:
-        #     if int(round(num_bytes/2, 3)) != num_bytes // 2:
-        #         raise ValueError(f"Number of bytes ({num_bytes}) must be a"
-        #                          " multiple of 2.")
-        #     return num_bytes // 2
     
     def seconds_to_samples(self, duration):
         """
@@ -1137,7 +1121,8 @@ class Channel:
         :rtype: int
         """
 
-        if not hasattr(self, "interface_sample_frequency"):
+        if (not hasattr(self, "interface_sample_frequency")
+            or not hasattr(self, "interface_width_bytes")):
             raise ValueError("Channel missing sample rate information."
                              " Make sure that `configure_rfdc` was"
                              " called on the `Acadia` instance that produced"
@@ -1150,7 +1135,7 @@ class Channel:
 
         # Make sure that the number of samples in the pulse results in a valid 
         # number of cycles
-        clock_speed = self.interface_sample_frequency / 4 #(4 if self.complex_samples else 2)
+        clock_speed = self.interface_sample_frequency / (self.interface_width_bytes // 4)
         duration_cycles = int(round(duration * clock_speed))
         if abs(duration * clock_speed - duration_cycles) > 1e-6:
             raise ValueError("Array must be an integer number of cycles;"
@@ -1185,12 +1170,7 @@ class Channel:
         :rtype: int
         """
 
-        # if not hasattr(self, "complex_samples"):
-        #     raise ValueError("Channel missing sample rate information."
-        #                      " Make sure that `configure_rfdc` was"
-        #                      " called on the `Acadia` instance that produced"
-        #                      " this `Channel` object.")
-        return self.seconds_to_samples(duration)*4 #(4 if self.complex_samples else 2)
+        return self.seconds_to_samples(duration)*4 
     
     def bytes_to_seconds(self, num_bytes):
         """

@@ -182,7 +182,7 @@ begin
     -- - If we're in the last cycle of a descriptor, then we need to load.
     descriptor_field_load_proc: process(clk) begin
         if rising_edge(clk) then
-            if(trigger = '1' or descriptor_done = '1') then
+            if((trigger = '1' and running_int = '0') or descriptor_done = '1') then
                 descriptor_lm1   <= unsigned(descriptor_mem_dout(ADDRESS_COUNTER_WIDTH-1 downto 0));
                 descriptor_addr  <= unsigned(descriptor_mem_dout(ADDRESS_COUNTER_WIDTH + ADDRESS_WIDTH-1 downto ADDRESS_COUNTER_WIDTH));
                 descriptor_dec   <= descriptor_mem_dout(descriptor_mem_dout'high-2 downto descriptor_mem_dout'high-3);
@@ -195,7 +195,7 @@ begin
     -- Progress through the descriptor one point at a time
     descriptor_point_proc: process(clk) begin
         if rising_edge(clk) then
-            if(trigger = '1' or descriptor_done = '1') then
+            if((trigger = '1' and running_int = '0') or descriptor_done = '1') then
                 descriptor_point <= (others => '0');
             else
                 descriptor_point <= descriptor_point + 1;

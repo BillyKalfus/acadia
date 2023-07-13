@@ -22,6 +22,7 @@ CONFIG_make
 CONFIG_cmake
 CONFIG_libmetal
 CONFIG_libmetal-dev
+CONFIG_iperf3
 CONFIG_coreutils
 CONFIG_gdb
 CONFIG_gdbserver
@@ -131,3 +132,4 @@ CONFIG_python3-pydot
 CONFIG_python3-psutil
 CONFIG_python3-pandas
 CONFIG_python3-ipywidgets
+CONFIG_python3-mpmath
