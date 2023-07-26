@@ -141,6 +141,9 @@ begin
     descriptor_mem_clk  <= clk;
     
     descriptor_address_fifo_inst: entity work.acadia_dma_fifo
+        generic map(
+            WIDTH => DESCRIPTOR_MEM_ADDR_WIDTH
+        )
         port map(
             clk          => clk, 
             nrst         => nrst, 

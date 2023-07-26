@@ -21,7 +21,7 @@ class Descriptor:
     def __eq__(self, other):
         return (hasattr(other, "trace_length") and self.trace_length is other.trace_length
             and hasattr(other, "trace_address") and self.trace_address is other.trace_address
-            and hasattr(other, "decimate") and self.fixed is other.decimate
+            and hasattr(other, "decimate") and self.decimate is other.decimate
             and hasattr(other, "fixed") and self.fixed is other.fixed
             and hasattr(other, "blank") and self.blank is other.blank)
     

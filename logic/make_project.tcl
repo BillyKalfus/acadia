@@ -710,6 +710,14 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_bd_pin -dir O -from 7 -to 0 ps_gdma_tack
   create_bd_pin -dir I -from 7 -to 0 ps_gdma_tvld
   create_bd_pin -dir O CLK104_SYNC_IN
+  create_bd_pin -dir O PS_MAXIHPM0_FPD_aclk
+  create_bd_pin -dir O PS_MAXIHPM1_FPD_aclk
+  create_bd_pin -dir O PS_MAXIHPM0_LPD_aclk
+  create_bd_pin -dir O PS_SAXIHPC0_FPD_aclk
+  create_bd_pin -dir O PS_SAXIHP0_FPD_aclk
+  create_bd_pin -dir O PS_SAXIHPC1_FPD_aclk
+  create_bd_pin -dir O PS_SAXIHP1_FPD_aclk
+  create_bd_pin -dir O clk_wiz_locked
 
   # Create interface connections
 
@@ -982,13 +990,14 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
 
   set xlconcat_ps_gpio_in [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_ps_gpio_in ]
   set_property -dict [ list \
-   CONFIG.NUM_PORTS {4} \
+   CONFIG.NUM_PORTS {5} \
    CONFIG.IN0_WIDTH.VALUE_SRC USER \
    CONFIG.IN1_WIDTH.VALUE_SRC USER \
    CONFIG.IN0_WIDTH {80} \
    CONFIG.IN1_WIDTH {1} \
    CONFIG.IN2_WIDTH {1} \
-   CONFIG.IN3_WIDTH {9} \
+   CONFIG.IN3_WIDTH {1} \
+   CONFIG.IN4_WIDTH {8} \
  ] $xlconcat_ps_gpio_in
 
   # Create instance: hedgehog
@@ -1528,7 +1537,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__LPD_SLCR__CSUPMU__FREQMHZ {100.000000} \
    CONFIG.PSU__MAXIGP0__DATA_WIDTH {128} \
    CONFIG.PSU__MAXIGP1__DATA_WIDTH {128} \
-   CONFIG.PSU__MAXIGP2__DATA_WIDTH {32} \
+   CONFIG.PSU__MAXIGP2__DATA_WIDTH {128} \
    CONFIG.PSU__OVERRIDE__BASIC_CLOCK {0} \
    CONFIG.PSU__PL_CLK0_BUF {TRUE} \
    CONFIG.PSU__PL_CLK1_BUF {TRUE} \
@@ -1743,14 +1752,16 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net -net hedgehog_PS_IRQ0 [get_bd_pins hedgehog/PS_IRQ0] [get_bd_pins ps/pl_ps_irq0]
   connect_bd_net -net hedgehog_PS_IRQ1 [get_bd_pins hedgehog/PS_IRQ1] [get_bd_pins ps/pl_ps_irq1]
 
+  connect_bd_net [get_bd_pins hedgehog/clk_wiz_locked] [get_bd_pins xlconcat_ps_gpio_in/In3]
+
   connect_bd_net [get_bd_pins hedgehog/PS_AXI_clk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/maxihpm0_fpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/maxihpm1_fpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/saxihpc0_fpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/saxihp0_fpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/saxihpc1_fpd_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins ps/saxihp1_fpd_aclk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins ps/maxihpm0_fpd_aclk] [get_bd_pins hedgehog/PS_MAXIHPM0_FPD_aclk]
+  connect_bd_net [get_bd_pins ps/maxihpm1_fpd_aclk] [get_bd_pins hedgehog/PS_MAXIHPM1_FPD_aclk]
+  connect_bd_net [get_bd_pins ps/maxihpm0_lpd_aclk] [get_bd_pins hedgehog/PS_MAXIHPM0_LPD_aclk]
+  connect_bd_net [get_bd_pins ps/saxihpc0_fpd_aclk] [get_bd_pins hedgehog/PS_SAXIHPC0_FPD_aclk]
+  connect_bd_net [get_bd_pins ps/saxihp0_fpd_aclk] [get_bd_pins hedgehog/PS_SAXIHP0_FPD_aclk]
+  connect_bd_net [get_bd_pins ps/saxihpc1_fpd_aclk] [get_bd_pins hedgehog/PS_SAXIHPC1_FPD_aclk]
+  connect_bd_net [get_bd_pins ps/saxihp1_fpd_aclk] [get_bd_pins hedgehog/PS_SAXIHP1_FPD_aclk]
 
   connect_bd_net -net hedgehog_ps_gdma_cvld [get_bd_pins hedgehog/ps_gdma_cvld] [get_bd_pins ps/perif_gdma_cvld]
   connect_bd_net -net hedgehog_ps_gdma_tack [get_bd_pins hedgehog/ps_gdma_tack] [get_bd_pins ps/perif_gdma_tack]

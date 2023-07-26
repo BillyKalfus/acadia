@@ -34,15 +34,18 @@ entity acadia_adc_fifo is
         OUTPUT_WORDS  : positive := 8;
         INPUT_DEPTH   : positive := 512;
         MEMORY_TYPE   : string   := "auto";
-        ASYNCHRONOUS  : boolean  := true
+        ASYNCHRONOUS  : boolean  := true;
+        MONITOR_SYNC  : boolean  := true  -- Set to true if monitor_clk is synchronous to signal_in_clk
     );
     port (
         signal_in_clk    : in  std_logic;
-        nrst             : in  std_logic;
-        aux_rst          : in  std_logic;
-        
-        overflow         : out std_logic;
-        misalignment     : out std_logic;
+        signal_in_nrst   : in  std_logic;
+
+        -- A port for monitoring the status of the FIFO and resetting it
+        monitor_clk          : in  std_logic;
+        monitor_rst          : in  std_logic;
+        monitor_overflow     : out std_logic;
+        monitor_misalignment : out std_logic;
          
         signal_in_tdata  : in  std_logic_vector(INPUT_WORDS*WORD_WIDTH-1 downto 0);
         signal_in_tvalid : in  std_logic;
@@ -77,14 +80,15 @@ architecture rtl of acadia_adc_fifo is
     ATTRIBUTE X_INTERFACE_INFO of signal_in_tlast      : SIGNAL is "xilinx.com:interface:axis:1.0 SIGNAL_IN TLAST";
     ATTRIBUTE X_INTERFACE_PARAMETER of signal_in_tdata : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(WORD_WIDTH*INPUT_WORDS/8);
 
-
-        
     -- An internal reset signal
-    signal rst_int           : std_logic;
+    signal monitor_rst_sync    : std_logic;
+    signal rst_int_sync        : std_logic;
+    signal rst_int_output_sync : std_logic;
 
-    -- Latch for overflow condition
-    signal fifo_overflow     : std_logic;
-    signal fifo_misalignment : std_logic;
+    -- Error conditions
+    signal fifo_overflow      : std_logic;
+    signal overflow_latch     : std_logic;
+    signal misalignment_latch : std_logic;
     
     -- Need to realign some signals before interfacing to the FIFO or interface port itself
     signal fifo_din          : std_logic_vector(INPUT_WORDS*(WORD_WIDTH+1)-1 downto 0);
@@ -93,8 +97,110 @@ architecture rtl of acadia_adc_fifo is
     signal fifo_valid        : std_logic;
 
 begin
+    
+    -- Synchronize monitor signals
+    monitor_async_gen: if MONITOR_SYNC = false generate
+
+        -- Synchronize the monitor_rst signal to the signal_in clock domain
+        xpm_cdc_monitor_rst : xpm_cdc_single
+            generic map (
+                DEST_SYNC_FF   => 2,
+                INIT_SYNC_FF   => 0,
+                SIM_ASSERT_CHK => 0,
+                SRC_INPUT_REG  => 1
+            )
+            port map (
+                dest_out => monitor_rst_sync, 
+                dest_clk => signal_in_clk,
+                src_clk  => monitor_clk,
+                src_in   => monitor_rst
+            );
+
+        -- Synchronize the overflow signal from the signal_in_clk domain into the monitor domain
+        xpm_cdc_monitor_overflow : xpm_cdc_single
+            generic map (
+                DEST_SYNC_FF   => 2,
+                INIT_SYNC_FF   => 0,
+                SIM_ASSERT_CHK => 0,
+                SRC_INPUT_REG  => 1
+            )
+            port map (
+                dest_out => monitor_overflow, 
+                dest_clk => monitor_clk,
+                src_clk  => signal_in_clk,
+                src_in   => overflow_latch
+            );
+
+        -- Synchronize the misalignment signal from the m_axis_aclk domain into the monitor domain
+        -- It's worth noting that we'll create this synchronizer if the monitor port and 
+        -- output AXIS port are synchronous with each other but not with the signal input,
+        -- but this is likely rare and not a big deal
+        xpm_cdc_monitor_misalignment : xpm_cdc_single
+            generic map (
+                DEST_SYNC_FF   => 2,
+                INIT_SYNC_FF   => 0,
+                SIM_ASSERT_CHK => 0,
+                SRC_INPUT_REG  => 1
+            )
+            port map (
+                dest_out => monitor_misalignment, 
+                dest_clk => monitor_clk,
+                src_clk  => m_axis_aclk,
+                src_in   => misalignment_latch
+            );
+    end generate monitor_async_gen;
+
+    monitor_sync_gen: if MONITOR_SYNC = true generate
+        monitor_rst_sync <= monitor_rst;
+        monitor_overflow <= overflow_latch;
+        
+        -- Synchronize the misalignment latch into the monitor domain 
+        monitor_sync_fifo_async_gen: if ASYNCHRONOUS = true generate
+            xpm_cdc_monitor_misalignment : xpm_cdc_single
+                generic map (
+                    DEST_SYNC_FF   => 2,
+                    INIT_SYNC_FF   => 0,
+                    SIM_ASSERT_CHK => 0,
+                    SRC_INPUT_REG  => 1
+                )
+                port map (
+                    dest_out => monitor_misalignment, 
+                    dest_clk => monitor_clk,
+                    src_clk  => m_axis_aclk,
+                    src_in   => misalignment_latch
+                );
+        end generate monitor_sync_fifo_async_gen;
+
+        -- Everything is synchronous, no synchronizers necessary
+        monitor_sync_fifo_sync_gen: if ASYNCHRONOUS = false generate
+            monitor_misalignment <= misalignment_latch;
+        end generate monitor_sync_fifo_sync_gen;
+
+    end generate monitor_sync_gen;
+
     -- Reset the whole thing on either of the reset inputs
-    rst_int <= (not nrst) or aux_rst;
+    rst_int_sync <= (not signal_in_nrst) or monitor_rst_sync;
+
+    -- Finally, synchronize the reset into the output domain
+    rst_out_async_gen: if ASYNCHRONOUS = true generate
+        xpm_cdc_rst_out_async_inst : xpm_cdc_single
+            generic map (
+                DEST_SYNC_FF   => 2,
+                INIT_SYNC_FF   => 0,
+                SIM_ASSERT_CHK => 0,
+                SRC_INPUT_REG  => 1
+            )
+            port map (
+                dest_out => rst_int_output_sync, 
+                dest_clk => m_axis_aclk,
+                src_clk  => signal_in_clk,
+                src_in   => rst_int_sync
+            );
+    end generate rst_out_async_gen;
+
+    rst_out_sync_gen: if ASYNCHRONOUS = false generate
+        rst_int_output_sync <= rst_int_sync;
+    end generate rst_out_sync_gen;
 
     -- Directly drive some of the AXIS signals
     m_axis_tkeep  <= (others => '1');
@@ -103,10 +209,10 @@ begin
     -- Latch the overflow signal so that we can know if it happened at any point during the capture
     overflow_proc: process(signal_in_clk) begin
         if rising_edge(signal_in_clk) then
-            if(rst_int = '1') then
-                overflow <= '0';
+            if(rst_int_sync = '1') then
+                overflow_latch <= '0';
             elsif(fifo_overflow = '1') then
-                overflow <= '1';
+                overflow_latch <= '1';
             end if;
         end if;
     end process overflow_proc;
@@ -148,27 +254,13 @@ begin
     -- from the FIFO in an integer number of cycles
     fifo_misalignment_proc: process(m_axis_aclk) begin
         if rising_edge(m_axis_aclk) then
-            if (rst_int = '1') then
-                fifo_misalignment <= '0';
+            if (rst_int_output_sync = '1') then
+                misalignment_latch <= '0';
             elsif (fifo_valid = '1' and or_reduce(fifo_tlast_out(fifo_tlast_out'high-1 downto 0)) = '1') then
-                fifo_misalignment <= '1';
+                misalignment_latch <= '1';
             end if;
         end if;
     end process fifo_misalignment_proc;
-
-    -- Synchronize the misalignment latch into the signal's clock domain
-    misalignment_sync_inst : xpm_cdc_sync_rst
-        generic map (
-            DEST_SYNC_FF   => 4,
-            INIT           => 0,           
-            INIT_SYNC_FF   => 0,
-            SIM_ASSERT_CHK => 0
-        )
-        port map (
-            dest_rst => misalignment,
-            dest_clk => signal_in_clk,
-            src_rst  => fifo_misalignment
-        );
 
     fifo_gen_async: if ASYNCHRONOUS = true generate
         fifo_inst : xpm_fifo_async
@@ -192,7 +284,7 @@ begin
                 WR_DATA_COUNT_WIDTH => 1
             )
             port map (
-                rst           => rst_int,
+                rst           => rst_int_sync,
                 
                 wr_clk        => signal_in_clk,
                 din           => fifo_din,
@@ -246,7 +338,7 @@ begin
                 WR_DATA_COUNT_WIDTH => 1
             )
             port map (
-                rst           => rst_int,
+                rst           => rst_int_sync,
                 
                 wr_clk        => signal_in_clk,
                 din           => fifo_din,

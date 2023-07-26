@@ -371,9 +371,19 @@ class BusDecoder(BusDevice, HDLModule):
         HDLModule.__init__(self, name)
         
     def add(self, obj, pipeline=False):
+        """
+        Add a new device to the bus decoder. 
+
+        :param obj: Device to add
+        :type obj: :class:`BusDevice`
+        :param pipeline: If `True`\, a pipeline stage will be added on this
+            port. 
+        :type pipeline: bool, optional
+        """
         if isinstance(obj, BusDevice):
-            if obj.bus_data_bits != self.bus_data_bits:
-                raise ValueError("Connected BusDevices and BusDecoders must have the same number of bits in a data word.")
+            if obj.bus_data_bits > self.bus_data_bits:
+                raise ValueError(f"Bus device data port width ({obj.bus_data_bits})"
+                                 f" too large for bus decoder ({self.bus_data_bits}).")
             self._bus_objects.append((obj, pipeline))
         else:
             raise TypeError("Can only add BusDevices to a BusDecoder.")
@@ -472,8 +482,8 @@ class BusDecoder(BusDevice, HDLModule):
         
         for i,(obj,pipeline) in enumerate(self._bus_objects):
             hdl += f'        -- {obj.name} interface (local bus address 0x{obj.address().value()-self.address().value():08X}), (global bus address 0x{obj.address().value():08X})\n'
-            hdl += f'        {obj.name}_mosi : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
-            hdl += f'        {obj.name}_miso : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
+            hdl += f'        {obj.name}_mosi : out std_logic_vector({obj.bus_data_bits-1} downto 0);\n'
+            hdl += f'        {obj.name}_miso : in  std_logic_vector({obj.bus_data_bits-1} downto 0);\n'
             hdl += f'        {obj.name}_addr : out std_logic_vector({low_address_bit-1} downto 0);\n'
             if self._byte_write:
                 hdl += f'        {obj.name}_wr   : out std_logic_vector({(self.bus_data_bits // 8)-1} downto 0);\n'
@@ -515,7 +525,11 @@ class BusDecoder(BusDevice, HDLModule):
             hdl += f'        if rising_edge(master_bus_clk) then\n'
             hdl += f'            case master_bus_addr({region_bits}) is\n'
             for i,(obj,pipeline) in enumerate(self._bus_objects):
-                hdl += f'                when "{f"{i:b}".zfill(decoder_inputs)}" => master_bus_miso <= {obj.name}_miso;\n' 
+                if obj.bus_data_bits == self.bus_data_bits:
+                    hdl += f'                when "{f"{i:b}".zfill(decoder_inputs)}" => master_bus_miso <= {obj.name}_miso;\n'
+                else:
+                    hdl += f'                when "{f"{i:b}".zfill(decoder_inputs)}" => master_bus_miso({obj.bus_data_bits-1} downto 0) <= {obj.name}_miso; master_bus_miso({self.bus_data_bits-1} downto {obj.bus_data_bits}) <= (others => \'0\');\n' 
+ 
             hdl += f'                when others => master_bus_miso <= (others => \'0\');\n' 
             hdl += f'            end case;\n'
             hdl += f'        end if;\n'
@@ -523,7 +537,11 @@ class BusDecoder(BusDevice, HDLModule):
         else:
             hdl += f'    master_bus_miso   <= '
             for i,(obj,pipeline) in enumerate(self._bus_objects):
-                hdl += f'                  {obj.name}_miso when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \n'
+                if obj.bus_data_bits == self.bus_data_bits:
+                    hdl += f'                  {obj.name}_miso when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \n'
+                else:
+                    hdl += f'                  "{"0"*(self.bus_data_bits-obj.bus_data_bits)}" & {obj.name}_miso when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \n'
+
 
             hdl += f'                  (others => \'0\');\n\n'
         
@@ -534,7 +552,12 @@ class BusDecoder(BusDevice, HDLModule):
             if pipeline:
                 hdl += f'    {obj.name}_proc: process(master_bus_clk) begin\n'
                 hdl += f'        if rising_edge(master_bus_clk) then\n'
-                hdl += f'            {obj.name}_mosi <= master_bus_mosi;\n'
+                
+                if obj.bus_data_bits == self.bus_data_bits:
+                    hdl += f'            {obj.name}_mosi <= master_bus_mosi;\n'
+                else:
+                    hdl += f'            {obj.name}_mosi <= master_bus_mosi({obj.bus_data_bits-1} downto 0);\n'
+                
                 hdl += f'            {obj.name}_addr <= master_bus_addr({low_address_bit-1} downto 0);\n'
                 hdl += f'            if (master_bus_addr({region_bits}) = "{f"{i:b}".zfill(decoder_inputs)}") then \n'
                 hdl += f'                {obj.name}_en   <= \'1\';\n'
@@ -549,7 +572,11 @@ class BusDecoder(BusDevice, HDLModule):
                 hdl += f'        end if;\n'
                 hdl += f'    end process {obj.name}_proc;\n'
             else:
-                hdl += f'    {obj.name}_mosi <= master_bus_mosi;\n'
+                if obj.bus_data_bits == self.bus_data_bits:
+                    hdl += f'    {obj.name}_mosi <= master_bus_mosi;\n'
+                else:
+                    hdl += f'    {obj.name}_mosi <= master_bus_mosi({obj.bus_data_bits-1} downto 0);\n'
+
                 hdl += f'    {obj.name}_addr <= master_bus_addr({low_address_bit-1} downto 0);\n'
                 hdl += f'    {obj.name}_wr   <= master_bus_wr when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \'0\';\n'
                 hdl += f'    {obj.name}_en   <= master_bus_en when to_integer(unsigned(master_bus_addr({region_bits}))) = {i} else \'0\';\n'
@@ -698,7 +725,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tvalid : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TVALID";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tready : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TREADY";\n\n'
             
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of datamover_cmd_clk: SIGNAL is "xilinx.com:signal:clock:1.0 clk datamover_cmd_clk";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of datamover_cmd_clk: SIGNAL is "xilinx.com:signal:clock:1.0 datamover_cmd_clk CLK";\n'
         bus_names = [s+f"_{d}" for s in self._datamovers for d in ["cmd","sts"]]
         hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER of datamover_cmd_clk: SIGNAL is "ASSOCIATED_BUSIF {":".join(bus_names)}";\n'
             
@@ -816,14 +843,14 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'            DOUT_RESET_VALUE    => "0",\n'
             hdl += f'            ECC_MODE            => "no_ecc",\n'
             hdl += f'            FIFO_MEMORY_TYPE    => "distributed", -- String\n'
-            hdl += f'            FIFO_READ_LATENCY   => 1,\n'
+            hdl += f'            FIFO_READ_LATENCY   => 0,\n'
             hdl += f'            FIFO_WRITE_DEPTH    => 16,\n'
             hdl += f'            FULL_RESET_VALUE    => 0,\n'
             hdl += f'            PROG_EMPTY_THRESH   => 10,\n'
             hdl += f'            PROG_FULL_THRESH    => 10,\n'
             hdl += f'            RD_DATA_COUNT_WIDTH => 4,\n'
             hdl += f'            READ_DATA_WIDTH     => 32,\n'
-            hdl += f'            READ_MODE           => "std",\n'
+            hdl += f'            READ_MODE           => "fwft",\n'
             hdl += f'            SIM_ASSERT_CHK      => 0,\n'
             hdl += f'            USE_ADV_FEATURES    => "0400",\n'
             hdl += f'            WAKEUP_TIME         => 0,\n'
