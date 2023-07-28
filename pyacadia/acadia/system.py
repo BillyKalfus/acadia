@@ -3,7 +3,7 @@ __all__ = ["Acadia", "ChannelSynchronizer"]
 import os
 import mmap
 import time
-import json
+import copy
 from functools import wraps
 
 import numpy as np
@@ -34,6 +34,10 @@ class ChannelSynchronizer(Synchronizer):
     VOP = 5
     DSA = 6
     TDD = 7
+
+    def __init__(self, firmware, allow_standalone=False):
+        self._firmware = firmware
+        super().__init__(allow_standalone)
     
     def __call__(self, *args, **kwargs):
         if not isinstance(Processor.active_processor(), Sequencer):
@@ -157,21 +161,21 @@ class ChannelSynchronizer(Synchronizer):
         self.dma_mask = dma_mask
         
         if isinstance(proc, Sequencer):
-            rts_address = Firmware.rfdc_rts_regs.address().value()
+            rts_address = self._firmware.rfdc_rts_regs.address().value()
 
             # If any DMAs were triggered, add instructions to do so now
             if dma_mask != 0:
                 if self._dma_trigger:
                     # The only parent object that we could have had was an Acadia object,
                     # so we know on which object we should call dma_trigger
-                    dma_trigger_device = Firmware.sequencer_bus_decoder["dma_trigger"]
+                    dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
                     proc.bus_write(address=dma_trigger_device.address().value(),
                                    data=dma_mask,
                                    comment="Trigger DMAs")
 
                 if self._dma_block:
                     # Wait until all the DMAs in the mask have completed
-                    dma_running_device = Firmware.sequencer_bus_decoder["dma_running"]
+                    dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
                     with proc.wait_until(proc.bus_read(dma_running_device.address().value()) & dma_mask == 0):
                         pass
 
@@ -300,7 +304,9 @@ class Acadia:
             
         return _wrapped
     
-    def __init__(self):        
+    def __init__(self, firmware=None):    
+        self._firmware = Firmware(firmware)
+
         # A dictionary for storing assembled code, which maps memoryviews to
         # the bytes that should be loaded into them
         self._assembled = {}
@@ -318,7 +324,7 @@ class Acadia:
         self._active_sequencer = None
 
         # Create a synchronizer for channel actions
-        self.synchronizer = ChannelSynchronizer(allow_standalone=True)
+        self.synchronizer = ChannelSynchronizer(self._firmware, allow_standalone=True)
                 
         # Make DMAs
         DACDMA = type("DACDMA", (DMA,), {"DMA_NUM_OFFSET": 0})
@@ -338,7 +344,7 @@ class Acadia:
                                                               "allocation_limit": 4})
         
         def zdma_postinit(zdma_self):
-            zdma_self.fci_bus_address = Firmware.sequencer_bus_decoder["zdma_controller"].address().value()
+            zdma_self.fci_bus_address = self._firmware.sequencer_bus_decoder["zdma_controller"].address().value()
             zdma_self.channel = zdma_self._resource_id
             super().__post_init__()
         
@@ -389,25 +395,25 @@ class Acadia:
         self._attach_resource(self.CacheArray, mem_cast=np.uint32)
         
         self._sequencer_instruction_memory = self._attach_memory(
-            address=Firmware.INSTRUCTION_MEMORY_ADDRESS,
-            size=Firmware.INSTRUCTION_MEMORY_SIZE_BITS // 8)  
+            address=self._firmware["SEQUENCER_INSTRUCTION_MEMORY"]["ADDRESS"],
+            size=self._firmware["SEQUENCER_INSTRUCTION_MEMORY"]["SIZE_BITS"] // 8)  
         
         self._dac_dma_descriptor_memory = [self._attach_memory(
-            address=(Firmware.DAC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
-                    + i*(Firmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
-            size=Firmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
+            address=(self._firmware["DAC_DMA_DESCRIPTOR_MEMORY"]["ADDRESS"] 
+                    + i*(self._firmware["DAC_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8)),
+            size=self._firmware["DAC_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8,
             mem_cast=np.uint64) for i in range(16)]
                 
         self._adc_dma_descriptor_memory = [self._attach_memory(
-            address=(Firmware.ADC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
-                    + i*(Firmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
-            size=Firmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
+            address=(self._firmware["ADC_DMA_DESCRIPTOR_MEMORY"]["ADDRESS"] 
+                    + i*(self._firmware["ADC_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8)),
+            size=self._firmware["ADC_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8,
             mem_cast=np.uint64) for i in range(4)]
         
         self._cmacc_dma_descriptor_memory = [self._attach_memory(
-            address=(Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS 
-                    + i*(Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8)),
-            size=Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS // 8,
+            address=(self._firmware["CMACC_DMA_DESCRIPTOR_MEMORY"]["ADDRESS"] 
+                    + i*(self._firmware["CMACC_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8)),
+            size=self._firmware["CMACC_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8,
             mem_cast=np.uint64) for i in range(4)]
             
         for dac_mem in self.DACArray:
@@ -423,12 +429,12 @@ class Acadia:
         # Connect to the RFDC driver and initialize
         Channel.RFDC_init()
         
-        RFClk.init(338 + 3*26 + Firmware.GPIO_CLK104_SPI0)
+        RFClk.init(self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["CLK104_SPI0"])
         
         # Connect to the ADC AXIS switch
         self._ADC_AXIS_switch.attach(self._attach_memory(
-            address=Firmware.ADC_AXIS_SWITCH_ADDRESS, 
-            size=0x1000))
+            address=self._firmware["ADC_AXIS_SWITCH"]["AXI_ADDRESS"], 
+            size=self._firmware["ADC_AXIS_SWITCH"]["AXI_SIZE_BITS"] // 8))
         
         # Connect to the PS GDMA
         for instance in self._ZDMA.instances:
@@ -440,34 +446,39 @@ class Acadia:
         self._psgpio_mem = self._attach_memory(0xFF0A0000, 0x400, mem_cast=np.uint32)
 
         # Connect to the clock wizard
-        self.clk_wiz = self._attach_memory(address=Firmware.CLK_WIZ_ADDRESS, size=2**18)  
+        # self.clk_wiz = self._attach_memory(address=self._firmware["CLK_WIZ"]["AXI_ADDRESS"], 
+        #                                    size=self._firmware["ADC_AXIS_SWITCH"]["AXI_SIZE_BITS"] // 8)  
             
         # Configure and connect to the sysfs interface for various GPIO        
-        self._sequencer_gpio = 338 + 3*26 + Firmware.GPIO_SEQUENCER_RUN
+        self._sequencer_gpio = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["SEQUENCER_RUN"]
         PSGPIO.sysfs_export(self._sequencer_gpio)
         PSGPIO.sysfs_set_direction(self._sequencer_gpio, "out")
         PSGPIO.sysfs_write(self._sequencer_gpio, 0)
         
-        self._sequencer_nrst = 338 + 3*26 + Firmware.GPIO_SEQUENCER_NRST
+        self._sequencer_nrst = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["SEQUENCER_NRST"]
         PSGPIO.sysfs_export(self._sequencer_nrst)
         PSGPIO.sysfs_set_direction(self._sequencer_nrst, "out")
         PSGPIO.sysfs_write(self._sequencer_nrst, 0)
 
-        self._ddr4_c0_sys_rst_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C0_SYS_RST            
+        self._ddr4_c0_sys_rst_gpio = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["DDR4_C0_SYS_RST"]           
         PSGPIO.sysfs_export(self._ddr4_c0_sys_rst_gpio)
         PSGPIO.sysfs_set_direction(self._ddr4_c0_sys_rst_gpio, "out")
         PSGPIO.sysfs_write(self._ddr4_c0_sys_rst_gpio, 0)
 
-        self._ddr4_c1_sys_rst_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C1_SYS_RST            
+        self._ddr4_c1_sys_rst_gpio = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["DDR4_C1_SYS_RST"]            
         PSGPIO.sysfs_export(self._ddr4_c1_sys_rst_gpio)
         PSGPIO.sysfs_set_direction(self._ddr4_c1_sys_rst_gpio, "out")
         PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 0)
 
-        self._ddr4_c0_cal_cplt_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C0_CAL_CPLT           
+        self._ddr4_c0_cal_cplt_gpio = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["DDR4_C0_CAL_CPLT"]           
         PSGPIO.sysfs_export(self._ddr4_c0_cal_cplt_gpio)
         PSGPIO.sysfs_set_direction(self._ddr4_c0_cal_cplt_gpio, "in")
 
-        self._ddr4_c1_cal_cplt_gpio = 338 + 3*26 + Firmware.GPIO_DDR4_C1_CAL_CPLT           
+        self._ddr4_c1_cal_cplt_gpio = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["DDR4_C1_CAL_CPLT"]           
+        PSGPIO.sysfs_export(self._ddr4_c1_cal_cplt_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_cplt_gpio, "in")
+
+        self._clk_wiz_locked = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["CLK_WIZ_LOCKED"]           
         PSGPIO.sysfs_export(self._ddr4_c1_cal_cplt_gpio)
         PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_cplt_gpio, "in")
         
@@ -608,25 +619,25 @@ class Acadia:
                 for idx_instr,instr in enumerate(s._compiled_program):
                     assembled = instr.assemble()
                     address = (s._resource_id + idx_instr)*16
-                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{address + Firmware.INSTRUCTION_MEMORY_ADDRESS : X}, 16, 128'h{assembled:032X}, resp);\n"
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{address + self._firmware['SEQUENCER_INSTRUCTION_MEMORY']['ADDRESS']: X}, 16, 128'h{assembled:032X}, resp);\n"
         
         if dac_dmas:
             for i,dma in enumerate(self._dac_dmas):
                 for idx_instr,instr in enumerate(dma._compiled_program):
                     assembled = instr.assemble()
-                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{Firmware.DAC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + i*(Firmware.DAC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['DAC_DMA_DESCRIPTOR_MEMORY']['ADDRESS'] + i*(self._firmware['DAC_DMA_DESCRIPTOR_MEMORY']['SIZE_BITS']//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
                 
         if adc_dmas:
             for dma in self._ADCDMA.instances:
                 for idx_instr,instr in enumerate(dma._compiled_program):
                     assembled = instr.assemble()
-                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{Firmware.ADC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + dma._resource_id*(Firmware.ADC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['ADC_DMA_DESCRIPTOR_MEMORY']['ADDRESS'] + dma._resource_id*(self._firmware['ADC_DMA_DESCRIPTOR_MEMORY']['SIZE_BITS']//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
         
         if cmacc_dmas:
             for i,dma in self._CMACCDMA.instances:
                 for idx_instr,instr in enumerate(dma._compiled_program):
                     assembled = instr.assemble()
-                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_BASE_ADDRESS + dma._resource_id*(Firmware.CMACC_DMA_DESCRIPTOR_MEMORY_SIZE_BITS//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
+                    sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['CMACC_DMA_DESCRIPTOR_MEMORY']['ADDRESS'] + dma._resource_id*(self._firmware['CMACC_DMA_DESCRIPTOR_MEMORY']['ADDRESS']//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
                     
         return sim_string
 
@@ -695,7 +706,7 @@ class Acadia:
             channel.update_nco_frequency_registers(frequency_word)
                 
         elif isinstance(proc, Sequencer):    
-            frequency_base_reg = Firmware.rfdc_rts_regs.address().value() + channel.num*2
+            frequency_base_reg = self._firmware.rfdc_rts_regs.address().value() + channel.num*2
             
             if not channel.is_dac:
                 frequency_base_reg += 16*2 
@@ -727,7 +738,7 @@ class Acadia:
             channel.update_phase_registers(phase_word)
                 
         elif isinstance(proc, Sequencer):
-            phase_reg = Firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
+            phase_reg = self._firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
             
             if not channel.is_dac:
                 phase_reg += 16
@@ -944,11 +955,11 @@ class Acadia:
             d[f"{name}_sdclk_analog_delay"] = RFClk.LMK.get_sdclk_analog_delay(channel+1)
             d[f"{name}_sdclk_digital_delay"] = RFClk.LMK.get_sdclk_digital_delay(channel+1)
             
-        d["clk_wiz_locked"] = self.clk_wiz[4] == 1
-        d["clk_wiz_divclk_divide"] = self.clk_wiz[0x200]
-        d["clk_wiz_fbout_mult"] = self.clk_wiz[0x201]
-        d["clk_wiz_fbout_frac"] = int.from_bytes(self.clk_wiz[0x203:0x202], 'little') & (2**10 - 1)
-        d["clk_wiz_vco_frequency_over_input_frequency"] = (d["clk_wiz_fbout_mult"] + 1e-3*d["clk_wiz_fbout_frac"]) / d["clk_wiz_divclk_divide"]
+        d["clk_wiz_locked"] = PSGPIO.sysfs_read(self._clk_wiz_locked)
+        # d["clk_wiz_divclk_divide"] = self.clk_wiz[0x200]
+        # d["clk_wiz_fbout_mult"] = self.clk_wiz[0x201]
+        # d["clk_wiz_fbout_frac"] = int.from_bytes(self.clk_wiz[0x203:0x202], 'little') & (2**10 - 1)
+        # d["clk_wiz_vco_frequency_over_input_frequency"] = (d["clk_wiz_fbout_mult"] + 1e-3*d["clk_wiz_fbout_frac"]) / d["clk_wiz_divclk_divide"]
         
         for output in range(7):
             base = 0x208 + output*12
@@ -1090,7 +1101,7 @@ class Acadia:
                 
                 if block:
                     # Wait until we get a status from the S2MM
-                    with proc.wait_until(proc.bus_read(Firmware.sequencer_bus_decoder["datamover_controller"]["cfg_dm_s2mm"]+1) != 0):
+                    with proc.wait_until(proc.bus_read(self._firmware.sequencer_bus_decoder["datamover_controller"]["cfg_dm_s2mm"]+1) != 0):
                         pass
                 return transfer_tag
             else:
@@ -1257,7 +1268,7 @@ class Acadia:
         
         # Add the descriptor address to the FIFO for the DMA
         descriptor = dma.request_descriptor(dma_address, capture_length_cycles)
-        fifo_bus_address = Firmware.sequencer_bus_decoder[fifo_name].address().value()
+        fifo_bus_address = self._firmware.sequencer_bus_decoder[fifo_name].address().value()
         self._active_sequencer.bus_write(address=fifo_bus_address,
                                          data=descriptor,
                                          comment=f"Add descriptor with parameters"
@@ -1305,7 +1316,7 @@ class Acadia:
                                             array.byte_length() // 16,
                                             decimate=decimate, blank=blank)
         
-        fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
+        fifo_device = self._firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
                                          data=descriptor, 
                                          comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
@@ -1355,7 +1366,7 @@ class Acadia:
                              f" `float`, `complex`, or a `Symbol` with a value"
                              f" type of one of these (received {value}).")
         
-        fifo_device = Firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
+        fifo_device = self._firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
                                          data=descriptor, 
                                          comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
@@ -1377,7 +1388,7 @@ class Acadia:
             dma = channel.dma
             bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
             mask |= 1 << bit_position
-        bus_address = Firmware.dma_fifo_almost_empty.address().value()
+        bus_address = self._firmware.dma_fifo_almost_empty.address().value()
         return self._active_sequencer.bus_read(bus_address) & mask != 0
     
     @requires_sequencer
@@ -1395,7 +1406,7 @@ class Acadia:
             dma = channel.dma
             bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
             mask |= 1 << bit_position
-        bus_address = Firmware.dma_fifo_empty.address().value()
+        bus_address = self._firmware.dma_fifo_empty.address().value()
         return self._active_sequencer.bus_read(bus_address) & mask != 0
     
     @requires_sequencer
@@ -1413,7 +1424,7 @@ class Acadia:
             dma = channel.dma
             mask |= 1 << (type(dma).DMA_NUM_OFFSET + dma._resource_id)
         
-        bus_address = Firmware.dma_running.address().value()
+        bus_address = self._firmware.dma_running.address().value()
         return self._active_sequencer.bus_read(bus_address) & mask != 0
 
     @requires_sequencer
@@ -1433,7 +1444,7 @@ class Acadia:
         else:
             raise TypeError(f"Invalid type of DMA {channel.dma}")
 
-        address = Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name] + 1
+        address = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name] + 1
         self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
                                                 f" retrieve status count for {datamover_name}")
@@ -1460,7 +1471,7 @@ class Acadia:
         else:
             raise TypeError(f"Invalid type of DMA {channel.dma}")
 
-        address = Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
+        address = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
         self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
                                                 f" retrieve status for {datamover_name}")
@@ -1476,7 +1487,7 @@ class Acadia:
         ADC FIFOs.
         """
 
-        address = Firmware.sequencer_bus_decoder["adc_fifo_control"].address().value()
+        address = self._firmware.sequencer_bus_decoder["adc_fifo_control"].address().value()
         return self._active_sequencer.bus_read(address=address)
 
     @requires_sequencer
@@ -1495,7 +1506,7 @@ class Acadia:
                 mask |= 1 << (type(dma).DMA_NUM_OFFSET + dma._resource_id)
 
         
-        self._active_sequencer.bus_write(address=Firmware.sequencer_bus_decoder["adc_fifo_control"].address().value(), 
+        self._active_sequencer.bus_write(address=self._firmware.sequencer_bus_decoder["adc_fifo_control"].address().value(), 
                         data=mask,
                         comment="FIFO reset")
 
@@ -1518,7 +1529,7 @@ class Acadia:
         with self.sequencer() as seq:
             # We can reset whichever datamovers we want with the reset register
             # for the first channel
-            seq.bus_write(address=Firmware.sequencer_bus_decoder["datamover_controller"].address().value() + 3, 
+            seq.bus_write(address=self._firmware.sequencer_bus_decoder["datamover_controller"].address().value() + 3, 
                           data=mask)
             
     @requires_sequencer
@@ -1527,7 +1538,7 @@ class Acadia:
         Triggers the DMAs according to a provided bitmask.
         """
 
-        dma_trigger_device = Firmware.sequencer_bus_decoder["dma_trigger"]
+        dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
         self._active_sequencer.bus_write(address=dma_trigger_device.address().value(),
                                  data=mask,
                                  comment="DMA trigger")
@@ -1538,7 +1549,7 @@ class Acadia:
         Wait until the DMAs specified in the mask are not running.
         """
 
-        dma_running_device = Firmware.sequencer_bus_decoder["dma_running"]
+        dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
         dma_running = self._active_sequencer.bus_read(dma_running_device.address().value())
         with self._active_sequencer.wait_until(dma_running & mask == 0):
             pass
@@ -1653,7 +1664,7 @@ class Acadia:
         if proc is None:
             return self._psgpio_mem[(PSGPIO.PSGPIO3_IN_PSREG >> 2) + port - 3]
         elif isinstance(proc, Sequencer):
-            addr = Firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
+            addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
             return proc.bus_read(addr)
         else:
             raise TypeError(f"Unable to access GPIO on processor {proc}.")
@@ -1674,7 +1685,7 @@ class Acadia:
         if proc is None:
             self._psgpio_mem[(PSGPIO.PSGPIO3_OUT_PSREG >> 2) + port - 3] = data
         elif isinstance(proc, Sequencer):
-            addr = Firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
+            addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
             return proc.bus_write(address=addr, 
                                   data=data,
                                   comment=f"Write to GPIO port {port}")
@@ -1706,19 +1717,19 @@ class Acadia:
             {"OPERATORS": [], 
              "__getitem__": _cache_getitem, 
              "__setitem__": _cache_setitem},
-            base_word_address=Firmware.sequencer_bus_decoder["cache"].address().value(),
-            base_byte_address=Firmware.CACHE_MEMORY_ADDRESS,
+            base_word_address=self._firmware.sequencer_bus_decoder["cache"].address().value(),
+            base_byte_address=self._firmware["SEQUENCER_CACHE_MEMORY"]["ADDRESS"],
             word_width=32,
-            memory_size=Firmware.CACHE_MEMORY_SIZE_BITS // 8,
+            memory_size=self._firmware["SEQUENCER_CACHE_MEMORY"]["SIZE_BITS"] // 8,
             default_getitem=False)
         
     def _create_dac_arrays(self):
         self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {"channel": self.DAC(i)},
             base_word_address=0,
-            base_byte_address=(Firmware.DAC_TILE_MEMORY_BASE_ADDRESS[i // 4] 
-                               + (i % 4)*(Firmware.DAC_TILE_MEMORY_SIZE_BITS[i // 4] // 8)),
+            base_byte_address=(self._firmware[f"DAC_TILE{i // 4}_SAMPLE_MEMORY"]["ADDRESS"] 
+                               + (i % 4)*(self._firmware[f"DAC_TILE{i // 4}_SAMPLE_MEMORY"]["SIZE_BITS"] // 8)),
             word_width=128,
-            memory_size=Firmware.DAC_TILE_MEMORY_SIZE_BITS[i // 4] // 8) for i in range(16)]
+            memory_size=self._firmware[f"DAC_TILE{i // 4}_SAMPLE_MEMORY"]["SIZE_BITS"] // 8) for i in range(16)]
         
         # In addition to the arrays themselves, store an internal reference
         # to constants that will be loaded into memory when the program is configured
@@ -1727,23 +1738,23 @@ class Acadia:
     def _create_cmacc_kernel_arrays(self):
         self.CMACCKernelArray = [ManagedMemory(f"CMACCKernel{i}Array", (), {},
             base_word_address=0,
-            base_byte_address=(Firmware.CMACC_KERNEL_MEMORY_BASE_ADDRESS 
-                               + i*(Firmware.CMACC_KERNEL_MEMORY_SIZE_BITS // 8)),
+            base_byte_address=(self._firmware["CMACC_KERNEL_MEMORY"]["ADDRESS"] 
+                               + i*(self._firmware["CMACC_KERNEL_MEMORY"]["SIZE_BITS"] // 8)),
             word_width=32,
-            memory_size=Firmware.CMACC_KERNEL_MEMORY_SIZE_BITS // 8) for i in range(4)]
+            memory_size=self._firmware["CMACC_KERNEL_MEMORY"]["SIZE_BITS"] // 8) for i in range(4)]
         
     def _create_pl_ddr_arrays(self):
         self.PLDDR0Array = ManagedMemory(f"PLDDR0Array", (), {},
-            base_word_address=Firmware.DDR4_C0_ADDRESS,
-            base_byte_address=Firmware.DDR4_C0_ADDRESS,
+            base_word_address=self._firmware["DDR4_MEMORY"]["DDR4_C0"]["ADDRESS"],
+            base_byte_address=self._firmware["DDR4_MEMORY"]["DDR4_C0"]["ADDRESS"],
             word_width=8,
-            memory_size=2**32)
+            memory_size=self._firmware["DDR4_MEMORY"]["DDR4_C0"]["SIZE_BITS"] // 8)
         
         self.PLDDR1Array = ManagedMemory(f"PLDDR1Array", (), {},
-            base_word_address=Firmware.DDR4_C1_ADDRESS,
-            base_byte_address=Firmware.DDR4_C1_ADDRESS,
+            base_word_address=self._firmware["DDR4_MEMORY"]["DDR4_C1"]["ADDRESS"],
+            base_byte_address=self._firmware["DDR4_MEMORY"]["DDR4_C1"]["ADDRESS"],
             word_width=8,
-            memory_size=2**32)
+            memory_size=self._firmware["DDR4_MEMORY"]["DDR4_C1"]["SIZE_BITS"])
         
     def _create_ps_ddr_arrays(self):
         # PS DDR
@@ -1865,7 +1876,7 @@ class Acadia:
 
         # Configure the DataMover controller (the last bus write will 
         # push the complete command into the command FIFO)
-        bus_address_base = Firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
+        bus_address_base = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
         self._active_sequencer.bus_write(address=bus_address_base+2, 
                                          data=misc_reg,
                                          comment=f"Configuration for {size}-byte transfer"

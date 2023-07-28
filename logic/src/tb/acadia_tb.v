@@ -55,7 +55,7 @@ module acadia_tb();
     end
     
     always begin
-        #1.66666666667 clk_p = ~clk_p;
+        #2 clk_p = ~clk_p;
     end
 
     // -------------------------- Instantiate the block design ----------------------------
@@ -122,28 +122,12 @@ module acadia_tb();
 
         repeat(30) @(posedge clk_p);
         
-        debug_gpio = {1'b1, 90'd0};
+        debug_gpio = {2'b11, 89'd0};
         
         repeat(3000) @(posedge clk_p);
         
-        debug_gpio = {1'b0, 90'd0};
+        debug_gpio = {2'b00, 89'd0};
         
-        repeat(5) @(posedge clk_p);
-        
-        debug_gpio = {1'b1, 90'd0};
-        
-        repeat(3000) @(posedge clk_p);
-        
-        debug_gpio = {1'b0, 90'd0};
-        
-        // Wait until the sequencer sets the PS gpio at the end of the test
-        @(posedge acadia_tb.uut.hedgehog.PS_GPIO_IN[0]);
-        
-        repeat(5) @(posedge clk_p);
-        
-        // Read any data produced by the simulated logic and stored somewhere on the AXI network
-        
-        repeat(5) @(posedge clk_p);
         
         $finish;
     end

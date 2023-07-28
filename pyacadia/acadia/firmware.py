@@ -46,6 +46,9 @@ class Firmware:
 
         self._populate()
 
+    def __getitem__(self, key):
+        return self.config.__getitem__(key)
+
     def write(self, directory):
         """
         Create the HDL and TCL scripts from the internal configuration.
@@ -94,9 +97,9 @@ class Firmware:
         self._hdl_modules = []
         
         # Create a primary decoder for the sequencer bus
-        sequencer_bus_decoder = BusDecoder("sequencer_bus_decoder", 
+        self.sequencer_bus_decoder = BusDecoder("sequencer_bus_decoder", 
                                            pipeline_miso=self.config["SEQUENCER_BUS"]["DECODER_PIPELINE_MISO"])
-        self._hdl_modules.append(sequencer_bus_decoder)
+        self._hdl_modules.append(self.sequencer_bus_decoder)
 
         # Create split dataport for triggering and monitoring the DMA and for setting continue signals
         _bit = 0
@@ -187,29 +190,29 @@ class Firmware:
                 fifo_port = BusDevice(name=f"{label}_dma{idx}_fifo", 
                                       size=1, 
                                       bus_data_bits=next_highest_power_of_2(self.config[f"{label.upper()}_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 64, log=True))
-                sequencer_bus_decoder.add(fifo_port, pipeline=self.config["SEQUENCER_BUS"]["DMA_FIFO_DATAPORT_PIPELINE"][_bit])
+                self.sequencer_bus_decoder.add(fifo_port, pipeline=self.config["SEQUENCER_BUS"]["DMA_FIFO_DATAPORT_PIPELINE"][_bit])
 
                 _bit += 1
 
-        dma_trigger = BusDataport(name="dma_trigger", ports=_dma_trigger_ports)
-        sequencer_bus_decoder.add(dma_trigger, pipeline=self.config["SEQUENCER_BUS"]["DMA_TRIGGER_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(dma_trigger)
+        self.dma_trigger = BusDataport(name="dma_trigger", ports=_dma_trigger_ports)
+        self.sequencer_bus_decoder.add(self.dma_trigger, pipeline=self.config["SEQUENCER_BUS"]["DMA_TRIGGER_DATAPORT"]["BUS_PIPELINE"])
+        self._hdl_modules.append(self.dma_trigger)
         
-        dma_fifo_empty = BusDataport(name="dma_fifo_empty", ports=_dma_fifo_empty_ports)
-        sequencer_bus_decoder.add(dma_fifo_empty, pipeline=self.config["SEQUENCER_BUS"]["DMA_FIFO_EMPTY_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(dma_fifo_empty)
+        self.dma_fifo_empty = BusDataport(name="dma_fifo_empty", ports=_dma_fifo_empty_ports)
+        self.sequencer_bus_decoder.add(self.dma_fifo_empty, pipeline=self.config["SEQUENCER_BUS"]["DMA_FIFO_EMPTY_DATAPORT"]["BUS_PIPELINE"])
+        self._hdl_modules.append(self.dma_fifo_empty)
 
-        dma_fifo_almost_empty = BusDataport(name="dma_fifo_almost_empty", ports=_dma_fifo_almost_empty_ports)
-        sequencer_bus_decoder.add(dma_fifo_almost_empty, pipeline=self.config["SEQUENCER_BUS"]["DMA_FIFO_ALMOST_EMPTY_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(dma_fifo_almost_empty) 
+        self.dma_fifo_almost_empty = BusDataport(name="dma_fifo_almost_empty", ports=_dma_fifo_almost_empty_ports)
+        self.sequencer_bus_decoder.add(self.dma_fifo_almost_empty, pipeline=self.config["SEQUENCER_BUS"]["DMA_FIFO_ALMOST_EMPTY_DATAPORT"]["BUS_PIPELINE"])
+        self._hdl_modules.append(self.dma_fifo_almost_empty) 
 
-        dma_running = BusDataport(name="dma_running", ports=_dma_running_ports)
-        sequencer_bus_decoder.add(dma_running, pipeline=self.config["SEQUENCER_BUS"]["DMA_RUNNING_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(dma_running)
+        self.dma_running = BusDataport(name="dma_running", ports=_dma_running_ports)
+        self.sequencer_bus_decoder.add(self.dma_running, pipeline=self.config["SEQUENCER_BUS"]["DMA_RUNNING_DATAPORT"]["BUS_PIPELINE"])
+        self._hdl_modules.append(self.dma_running)
         
-        adc_fifo_control = BusDataport(name="adc_fifo_control", ports=_adc_fifo_control_ports)
-        sequencer_bus_decoder.add(adc_fifo_control, pipeline=self.config["SEQUENCER_BUS"]["ADC_FIFO_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(adc_fifo_control)
+        self.adc_fifo_control = BusDataport(name="adc_fifo_control", ports=_adc_fifo_control_ports)
+        self.sequencer_bus_decoder.add(self.adc_fifo_control, pipeline=self.config["SEQUENCER_BUS"]["ADC_FIFO_DATAPORT"]["BUS_PIPELINE"])
+        self._hdl_modules.append(self.adc_fifo_control)
 
         # Create dataports for controlling accumulator offsets and output values
         for i in range(self._num_cmaccs):
@@ -232,7 +235,7 @@ class Firmware:
 
                 _cmacc_port = BusDataport(name=f"cmacc{i}_{quad}", 
                                           ports=_cmacc_dataports)
-                sequencer_bus_decoder.add(_cmacc_port, 
+                self.sequencer_bus_decoder.add(_cmacc_port, 
                                           pipeline=self.config["SEQUENCER_BUS"]["CMACC_DATAPORTS"][f"DATAPORT_{quad.upper()}_BUS_PIPELINE"][i])
                 self._hdl_modules.append(_cmacc_port)
 
@@ -248,11 +251,11 @@ class Firmware:
                 "gate": BusDataport.GATE_RESET,
                 "pipeline": self.config["SEQUENCER_BUS"]["CMACC_RESET_DATAPORT"]["PIPELINE"][i]}]
 
-        cmacc_reset_port = BusDataport(name=f"cmacc_reset", 
+        self.cmacc_reset_port = BusDataport(name=f"cmacc_reset", 
                                        ports=_cmacc_reset_ports)
-        sequencer_bus_decoder.add(cmacc_reset_port, 
+        self.sequencer_bus_decoder.add(self.cmacc_reset_port, 
                                   pipeline=self.config["SEQUENCER_BUS"]["CMACC_RESET_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(cmacc_reset_port)
+        self._hdl_modules.append(self.cmacc_reset_port)
 
         # Create dataports for monitoring the CMACCs for completion
         _cmacc_status_dataports = []
@@ -282,11 +285,11 @@ class Firmware:
                 "width": 1,
                 "pipeline": self.config["SEQUENCER_BUS"]["CMACC_STATUS_DATAPORT"]["IM_MSB_PIPELINE"][i]}]
 
-        cmacc_status = BusDataport(name="cmacc_status", 
+        self.cmacc_status = BusDataport(name="cmacc_status", 
                                    ports=_cmacc_status_dataports)
-        sequencer_bus_decoder.add(cmacc_status, 
+        self.sequencer_bus_decoder.add(self.cmacc_status, 
                                   pipeline=self.config["SEQUENCER_BUS"]["CMACC_STATUS_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(cmacc_status)
+        self._hdl_modules.append(self.cmacc_status)
 
         # Create dataports for interacting with the PS GPIO
         for gpio_num in [3,4,5]:
@@ -305,7 +308,7 @@ class Firmware:
                                     "pipeline": self.config[f"PS_GPIO{gpio_num}"]["PIPELINE"]}]
 
             _ps_gpio = BusDataport(name=f"ps_gpio{gpio_num}", ports=_ps_gpio_dataports)
-            sequencer_bus_decoder.add(_ps_gpio, pipeline=self.config[f"PS_GPIO{gpio_num}"]["BUS_PIPELINE"])
+            self.sequencer_bus_decoder.add(_ps_gpio, pipeline=self.config[f"PS_GPIO{gpio_num}"]["BUS_PIPELINE"])
             self._hdl_modules.append(_ps_gpio)
 
         _ps_irq_dataports = []
@@ -324,17 +327,17 @@ class Firmware:
             "width": 8,
             "pipeline": self.config["PS_IRQ"]["GDMA_PIPELINE"]}]
 
-        ps_irq = BusDataport(name="ps_irq", ports=_ps_irq_dataports)
-        sequencer_bus_decoder.add(ps_irq, pipeline=self.config["PS_IRQ"]["BUS_PIPELINE"])
-        self._hdl_modules.append(ps_irq)
+        self.ps_irq = BusDataport(name="ps_irq", ports=_ps_irq_dataports)
+        self.sequencer_bus_decoder.add(self.ps_irq, pipeline=self.config["PS_IRQ"]["BUS_PIPELINE"])
+        self._hdl_modules.append(self.ps_irq)
 
         # Create a register file for RFDC real-time updates and connect it to the sequencer bus
-        rfdc_rts_regs = BusDevice("rfdc_rts_regs", size=256)
-        sequencer_bus_decoder.add(rfdc_rts_regs, pipeline=self.config["SEQUENCER_BUS"]["RFDC_RTS"]["BUS_PIPELINE"])
+        self.rfdc_rts_regs = BusDevice("rfdc_rts_regs", size=256)
+        self.sequencer_bus_decoder.add(self.rfdc_rts_regs, pipeline=self.config["SEQUENCER_BUS"]["RFDC_RTS"]["BUS_PIPELINE"])
 
         # Create a register file for interacting with the PS GDMA
-        zdma_controller = BusDevice("zdma_controller", size=64)
-        sequencer_bus_decoder.add(zdma_controller, 
+        self.zdma_controller = BusDevice("zdma_controller", size=64)
+        self.sequencer_bus_decoder.add(self.zdma_controller, 
                                   pipeline=self.config["SEQUENCER_BUS"]["ZDMA_CONTROLLER"]["BUS_PIPELINE"])
 
         _clk104_sync_in_dataports = [
@@ -345,26 +348,26 @@ class Firmware:
             "gate": BusDataport.GATE_REGCE,
             "pipeline": self.config["SEQUENCER_BUS"]["CLK104_SYNC_DATAPORT"]["PIPELINE"]}]
 
-        clk104_sync_in = BusDataport(name="clk104_sync_in", ports=_clk104_sync_in_dataports)
-        sequencer_bus_decoder.add(clk104_sync_in, 
+        self.clk104_sync_in = BusDataport(name="clk104_sync_in", ports=_clk104_sync_in_dataports)
+        self.sequencer_bus_decoder.add(self.clk104_sync_in, 
                                   pipeline=self.config["SEQUENCER_BUS"]["CLK104_SYNC_DATAPORT"]["BUS_PIPELINE"])
-        self._hdl_modules.append(clk104_sync_in)
+        self._hdl_modules.append(self.clk104_sync_in)
 
         # Create cache and connect it to the sequencer bus
-        cache = BusDevice("cache", size=self.config["SEQUENCER_CACHE_MEMORY"]["SIZE_BITS"] // 32)
-        sequencer_bus_decoder.add(cache, 
+        self.cache = BusDevice("cache", size=self.config["SEQUENCER_CACHE_MEMORY"]["SIZE_BITS"] // 32)
+        self.sequencer_bus_decoder.add(self.cache, 
                                   pipeline=self.config["SEQUENCER_CACHE_MEMORY"]["BUS_PIPELINE"])
 
         datamover_controller = BusDataMoverController("datamover_controller", 
             [f"adc_dm{i}" for i in range(4)] + 
             [f"cmacc_dm{i}" for i in range(4)] + 
             self._datamover_controller_extra_ports, addr_bits=40)
-        sequencer_bus_decoder.add(datamover_controller, 
+        self.sequencer_bus_decoder.add(datamover_controller, 
                                   pipeline=self.config["SEQUENCER_BUS"]["DATAMOVER_CONTROLLER"]["BUS_PIPELINE"])
         self._hdl_modules.append(datamover_controller)
         
         # Assign decoder addresses
-        sequencer_bus_decoder.assign_address(0)
+        self.sequencer_bus_decoder.assign_address(0)
 
         # Create AXI-controlled memories
 
@@ -395,10 +398,10 @@ class Firmware:
             primitive=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["PRIMITIVE"], 
             controller_width=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["CONTROLLER_WIDTH"], 
             synchronous=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["SYNCHRONOUS"],
-            controller_port_input_pipeline=self.config["SEQUENCER_CACHE_MEMORY"]["CONTROLLER_PORT_INPUT_PIPELINE"],
-            controller_port_output_pipeline=self.config["SEQUENCER_CACHE_MEMORY"]["CONTROLLER_PORT_OUTPUT_PIPELINE"],
-            user_port_input_pipeline=self.config["SEQUENCER_CACHE_MEMORY"]["BUS_PORT_INPUT_PIPELINE"],
-            user_port_output_pipeline=self.config["SEQUENCER_CACHE_MEMORY"]["BUS_PORT_OUTPUT_PIPELINE"])
+            controller_port_input_pipeline=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["CONTROLLER_PORT_INPUT_PIPELINE"],
+            controller_port_output_pipeline=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["CONTROLLER_PORT_OUTPUT_PIPELINE"],
+            user_port_input_pipeline=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["BUS_PORT_INPUT_PIPELINE"],
+            user_port_output_pipeline=self.config["SEQUENCER_INSTRUCTION_MEMORY"]["BUS_PORT_OUTPUT_PIPELINE"])
         self._hdl_modules.append(self.instruction_memory_controller)
 
         self.dac_tile_memory_controllers = []
@@ -1528,20 +1531,22 @@ class Firmware:
                     assign_bd_address(f, 
                         target_address_space=target_address_space, 
                         offset=self.config[f"DAC_TILE{i}_SAMPLE_MEMORY"]["ADDRESS"], 
-                        range=self.config[f"DAC_TILE{i}_SAMPLE_MEMORY"]["SIZE_BITS"] // 8, 
+                        range=4*self.config[f"DAC_TILE{i}_SAMPLE_MEMORY"]["SIZE_BITS"] // 8, 
                         addr_seg=f"hedgehog/dac_tile{i}_memory/" + self.config[f"DAC_TILE{i}_SAMPLE_MEMORY"]["SEGMENT"])
 
                 assign_bd_address(f, 
                     target_address_space=target_address_space, 
                     offset=self.config[f"CMACC_KERNEL_MEMORY"]["ADDRESS"], 
-                    range=self.config[f"CMACC_KERNEL_MEMORY"]["SIZE_BITS"] // 8, 
+                    range=self._num_cmaccs*self.config[f"CMACC_KERNEL_MEMORY"]["SIZE_BITS"] // 8, 
                     addr_seg=f"hedgehog/cmacc_kernel_memory/" + self.config[f"CMACC_KERNEL_MEMORY"]["SEGMENT"])
                 
-                for t in ["DAC", "ADC", "CMACC"]:
+                for t,count in [("DAC", self._num_dacs), 
+                          ("ADC", self._num_adcs), 
+                          ("CMACC", self._num_cmaccs)]:
                     assign_bd_address(f, 
                         target_address_space=target_address_space, 
                         offset=self.config[f"{t}_DMA_DESCRIPTOR_MEMORY"]["ADDRESS"], 
-                        range=self.config[f"{t}_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8, 
+                        range=count*self.config[f"{t}_DMA_DESCRIPTOR_MEMORY"]["SIZE_BITS"] // 8, 
                         addr_seg=f"hedgehog/{t}_dma_descriptor_memory/" + self.config[f"{t}_DMA_DESCRIPTOR_MEMORY"]["SEGMENT"])
                 
                 assign_bd_address(f, 
@@ -1719,7 +1724,7 @@ DEFAULT_CONFIG = {
         "PRIMITIVE": "ultra",
         "INTERFACE_WIDTH": 128,
         "CONTROLLER_WIDTH": 128,
-        "ADDRESS": 0x00_8802_0000,
+        "ADDRESS": 0x00_8808_0000,
         "SIZE_BITS": 2**20,
         "SEGMENT": "s_axi/reg0",
         "SYNCHRONOUS": True,
@@ -1733,7 +1738,7 @@ DEFAULT_CONFIG = {
         "PRIMITIVE": "ultra",
         "INTERFACE_WIDTH": 128,
         "CONTROLLER_WIDTH": 128,
-        "ADDRESS": 0x00_8804_0000,
+        "ADDRESS": 0x00_8810_0000,
         "SIZE_BITS": 2**20,
         "SEGMENT": "s_axi/reg0",
         "SYNCHRONOUS": True,
@@ -1747,7 +1752,7 @@ DEFAULT_CONFIG = {
         "PRIMITIVE": "ultra",
         "INTERFACE_WIDTH": 128,
         "CONTROLLER_WIDTH": 128,
-        "ADDRESS": 0x00_8806_0000,
+        "ADDRESS": 0x00_8818_0000,
         "SIZE_BITS": 2**20,
         "SEGMENT": "s_axi/reg0",
         "SYNCHRONOUS": True,
@@ -1930,6 +1935,7 @@ DEFAULT_CONFIG = {
     },
 
     "PS_GPIO": {
+        "SYSFS_OFFSET": 338 + 3*26,
         "SEQUENCER_RUN": 90,
         "SEQUENCER_NRST": 89, # The GPIO bit connected to the sequencer run synchronizer
         "CLK104_SYNC": 88,
