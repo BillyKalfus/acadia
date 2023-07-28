@@ -8,37 +8,45 @@ Yale University, 2023
 
 The Acadia Quantum Control ecosystem is intended to provide a modern, simple, and unified framework for integrating real-time signal synthesis and processing with hardware compute resources. The framework was developed to target the ZCU216 RFSoC evaluation board but straightforwardly extends to other hardware. 
 
-## Python installation
 
-### Requirements
+## Installation
 
-This software requires Python >= 3.7.
+### ZCU216 firmware
 
-### Installation
-
-This package may be installed on any processor platform if the RF data converter drivers are not required by executing
+For ZCU216 hardware connected to the internet, the firmware can be updated with the following procedure:
 
 ```
-pip3 install -e acadia/pyacadia
+cd /mnt/sd-mmcblk0p1
+wget https://git.yale.edu/RSL/acadia/releases/latest/image.zip
+unzip -fo image.zip
 ```
 
-On the ZCU216 you should execute
+The new firmware will then be loaded the next time the board is rebooted.
+
+### ZCU216 software installation
+
+First the first install, you must clone the Xilinx embeddedsw library onto the board's SD card so that the RF drivers can be built against it. Log into the board and execute
+
+```
+cd /mnt/sd-mmcblk0p1
+git clone https://github.com/Xilinx/embeddedsw.git
+cd embeddedsw
+git checkout release-2020.2
+```
+
+Then, after cloning this repository on the board, execute
 
 ```
 pip3 install -e acadia/pyacadia --global-option=install_drivers
 ```
 
-## Building the FPGA logic for the ZCU216
-
-### Requirements
-1. Vivado 2020.2 with a valid license for the RFSoC Gen 3 devices (included with ZCU216 purchase).
-
 ## Building a Linux image with integrated FPGA bitstream
 
 ### Requirements
-1. Vivado 2020.2 and PetaLinux Tools are installed and properly licensed
-2. The PetaLinux Tools directory is available at the environment variable `PETALINUX`
-3. The Xilinx DTG source repository is downloaded locally and checked out to the 2020.2 branch
+1. Vivado 2020.2 with a valid license for the RFSoC Gen 3 devices (included with ZCU216 purchase).
+1. Xilinx PetaLinux Tools
+1. The PetaLinux Tools directory is available at the environment variable `PETALINUX`
+1. The Xilinx DTG source repository is downloaded locally and checked out to the 2020.2 branch
 
 ```
 git clone https://github.com/Xilinx/device-tree-xlnx
@@ -54,6 +62,7 @@ cd ..
 1. Export a hardware description file from Vivado
    1. File -> Export -> Export Hardware
    1. Follow the steps, check the box "include bitstream"
+1. Modify `petalinux/configure_petalinux.sh` so that the directories are correct for your system
 1. Create the Petalinux project by running `petalinux/configure_petalinux.sh` 
 1. Change directories into the Petalinux project
 1. Configure the rootfs

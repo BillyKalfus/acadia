@@ -1285,7 +1285,7 @@ class Acadia:
     
     @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
     @requires_sequencer
-    def generate(self, channel, array, decimate=0, blank=False):
+    def generate(self, channel, array, decimate=0):
         """
         Generate a pulse on a DAC channel.
 
@@ -1313,8 +1313,44 @@ class Acadia:
         # When we request the descriptor, we need to get the address aligned to
         # 128 bits. We need the word address
         descriptor = dma.request_descriptor(array.word_address(), 
-                                            array.byte_length() // 16,
-                                            decimate=decimate, blank=blank)
+                                            array.byte_length() // channel.interface_width_bytes,
+                                            decimate=decimate)
+        
+        fifo_device = self._firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
+        return self._active_sequencer.bus_write(address=fifo_device.address().value(),
+                                         data=descriptor, 
+                                         comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
+
+    @Synchronizer.synchronized(ChannelSynchronizer.STREAM, "synchronizer")
+    @requires_sequencer
+    def generate_blank(self, channel, length):
+        """
+        Generate a blank pulse on a DAC channel.
+
+        :param channel: Physical channel to capture from.
+        :type channel: :class:`Channel` or int
+        :param length: Length of the blank pulse in seconds
+        :type length: float
+        """
+
+        if not isinstance(channel, Channel):
+            raise TypeError(f"Channel must be of type `Channel`;"
+                            f" received {channel}.")
+            
+        if not channel.is_dac:
+            raise TypeError(f"Channel must be a DAC;"
+                            f" received {channel}.")
+            
+        dma = self._dac_dmas[channel.num]
+        
+        # Store a reference to the DMA chosen in the Channel object
+        channel.dma = dma
+            
+        # When we request the descriptor, we need to get the address aligned to
+        # 128 bits. We need the word address
+        descriptor = dma.request_descriptor(0, 
+                                            channel.seconds_to_bytes(length) // channel.interface_width_bytes,
+                                            blank=True)
         
         fifo_device = self._firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
@@ -1332,8 +1368,8 @@ class Acadia:
         :param value: The constant value to generate
         :type value: int, float, complex, or a Symbol with value type of int,
             float, or complex
-        :param length: The length of the signal in units of cycles. 
-        :type length: int or Symbol
+        :param length: The length of the signal in seconds. 
+        :type length: float
         """
 
         if not isinstance(channel, Channel):
@@ -1352,7 +1388,10 @@ class Acadia:
         # Based on the value, determine how we need to allocate
         if (isinstance(value, int) or isinstance(value, float) or isinstance(value, complex)):
             if value == 0:
-                descriptor = dma.request_descriptor(0, length, fixed=True, blank=True)
+                descriptor = dma.request_descriptor(0, 
+                                                    channel.seconds_to_bytes(length) // channel.interface_width_bytes, 
+                                                    fixed=True, 
+                                                    blank=True)
             else:
                 mem = self.DACArray[channel.num](size=channel.interface_width_bytes)
                 self._dac_constants.append((mem,value))
@@ -1369,7 +1408,9 @@ class Acadia:
         fifo_device = self._firmware.sequencer_bus_decoder[f"dac_dma{channel.num}_fifo"]
         return self._active_sequencer.bus_write(address=fifo_device.address().value(),
                                          data=descriptor, 
-                                         comment=f"Add descriptor with parameters {descriptor.kwargs} to FIFO for DAC{channel.num}")
+                                         comment=(f"Add descriptor with parameters"
+                                                  f" {descriptor.kwargs} to FIFO"
+                                                  f" for DAC{channel.num}"))
 
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
 
@@ -1865,8 +1906,6 @@ class Acadia:
                     | (transfer_eof << 1) 
                     | (transfer_type << 0))
 
-        
-
         if address_base is not None:
             misc_reg |= (address_base >> 32) << 14
             addr_reg = address
@@ -1879,8 +1918,9 @@ class Acadia:
         bus_address_base = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
         self._active_sequencer.bus_write(address=bus_address_base+2, 
                                          data=misc_reg,
-                                         comment=f"Configuration for {size}-byte transfer"
-                                                 f" to {address} using DataMover"
+                                         comment=f"Configuration for {size}-byte transfer to address"
+                                                 f" {address_base + '+' if address_base is not None else ''}"
+                                                 f"{address} using DataMover"
                                                  f" {datamover_name}")
         self._active_sequencer.bus_write(address=bus_address_base+1, 
                             data=size)
