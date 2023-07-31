@@ -434,7 +434,8 @@ class Acadia:
         # Connect to the ADC AXIS switch
         self._ADC_AXIS_switch.attach(self._attach_memory(
             address=self._firmware["ADC_AXIS_SWITCH"]["AXI_ADDRESS"], 
-            size=self._firmware["ADC_AXIS_SWITCH"]["AXI_SIZE_BITS"] // 8))
+            size=self._firmware["ADC_AXIS_SWITCH"]["AXI_SIZE_BITS"] // 8,
+            mem_cast=np.uint32))
         
         # Connect to the PS GDMA
         for instance in self._ZDMA.instances:
@@ -1861,7 +1862,7 @@ class Acadia:
             address)
         self._mem_maps.append(m)
         
-        return np.frombuffer(m, dtype=np.uint8).view(mem_cast)
+        return np.frombuffer(m, dtype=mem_cast)
 
     def _sequencer_command_dm(self, datamover_name, address, size, tag=0xA, incr=True, address_base=None):
         """
@@ -1919,7 +1920,7 @@ class Acadia:
         self._active_sequencer.bus_write(address=bus_address_base+2, 
                                          data=misc_reg,
                                          comment=f"Configuration for {size}-byte transfer to address"
-                                                 f" {address_base + '+' if address_base is not None else ''}"
+                                                 f" {str(address_base) + '+' if address_base is not None else ''}"
                                                  f"{address} using DataMover"
                                                  f" {datamover_name}")
         self._active_sequencer.bus_write(address=bus_address_base+1, 
