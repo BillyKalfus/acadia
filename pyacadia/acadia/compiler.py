@@ -313,7 +313,7 @@ class ManagedResource(type):
         instance._resource_id = type_self._allocation_index
         instance.size = size
             
-        if hasattr(type_self, "_next_instance_symbol") and not type_self.next_instance_assigned():
+        if hasattr(type_self, "_next_instance_symbol") and not type_self._next_instance_symbol.assigned():
             type_self._next_instance_symbol.assign(instance)            
         type_self.instances.append(instance)
         type_self._allocation_index += instance.size
@@ -334,21 +334,10 @@ class ManagedResource(type):
             the resource once generated. 
         """
 
-        if (not hasattr(type_self, "_next_instance_symbol")) or type_self.next_instance_assigned():
+        if (not hasattr(type_self, "_next_instance_symbol")) or type_self._next_instance_symbol.assigned():
             type_self._next_instance_symbol = Symbol(value_type=type_self)
 
         return type_self._next_instance_symbol
-
-    def next_instance_assigned(type_self):
-        """
-        :return: A :class:`Symbol` that will be populated with the next instance of
-            the resource once generated.
-        """
-
-        if not hasattr(type_self, "_next_instance_symbol"):
-            return False
-
-        return type_self._next_instance_symbol.assigned()
         
     def __new__(type_self, 
                  type_name, 

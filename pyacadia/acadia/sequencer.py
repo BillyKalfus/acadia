@@ -709,13 +709,26 @@ class Sequencer(Processor):
                 raise ValueError(f"Invalid key {key}; must be"
                                  f" \"AB\", \"C\", or \"P\".")
                 
-        def dsp_start_count(dsp_self, inc=1):
+        def dsp_start_count(dsp_self, clear=False, inc=1):
+            """
+            Command a DSP slice to begin incrementing every clock cycle without
+            intervention from the sequencer.
+
+            :param inc: Increment amount, defaults to 1
+            :type inc: int, optional
+            :param clear: If `True`\, sets the counter value to zero before 
+                incrementing
+            """
             if isinstance(inc, int) and inc == 1:
-                self.store(src=DSPConfiguration(mode="P+1", dsp_cep="set"), 
+                self.store(src=DSPConfiguration(mode="P+1", 
+                                                dsp_cep="set", 
+                                                rst_p=clear), 
                            dest=Destination(major=Destination.Major.DSP_CFG,
                                             minor=dsp_self._resource_id))
             elif is_numeric(inc):
-                self.STP(src1=DSPConfiguration(mode="P+AB", dsp_cep="set"), 
+                self.STP(src1=DSPConfiguration(mode="P+AB", 
+                                               dsp_cep="set",
+                                               rst_p=clear), 
                          dest1=Destination(major=Destination.Major.DSP_CFG,
                                            minor=dsp_self._resource_id), 
                          src2=inc, 
@@ -760,23 +773,23 @@ class Sequencer(Processor):
                                     dsp_dct, 
                                     allocation_limit=Sequencer.NUM_DSP)
      
-    def bus_read(self, address=None, write_address=True, **kwargs):
+    def bus_read(self, address=None, latency=0, **kwargs):
         """
-        Reads a value from the bus. If multiple reads are performed back-to-back, 
-        the additional wait time needed to overcome the bus latency may be 
-        unnecessary and may be excluded by setting ``wait`` to ``False``\. Additionally,
-        if the address was already written to the bus address register, it may be
-        unnecessary to write it again, and setting ``write_address`` to ``False`` will
-        skip this. 
+        Reads a value from the bus. If no address is provided, the value from
+        the input port at the time of invocation is returned.
+
+        :param address: Bus address to read
+        :type address: int, optional
+        :param latency: Additional latency cycles to add after addressing the 
+        bus
         """
 
-        if write_address:
-            if address is None:
-                raise ValueError("Address must be provided when"
-                                 " `write_address=True`.")
+        if address is not None:
             self.STP(src1=address, 
                      dest1=Destination(Destination.Major.BUS_ADDR),
                      **kwargs)
+            for i in range(latency):
+                self.nop(comment="Manual bus latency")
         
         return Source(Source.Major.BUS_DATA)
     
@@ -1341,9 +1354,7 @@ class Sequencer(Processor):
         # DSP slice, if the counter for that slice is non-zero, that many NOPs
         # are added.
         dsp_count_init = 2
-        bus_count_init = 2
         counts = {f"DSP{i}": 0 for i in range(8)}
-        counts["BUS"] = 0
         
         for idx_instr,instr in enumerate(self._compiled_program):  
             # Decrement all counts to indicate that a cycle has passed
@@ -1393,25 +1404,12 @@ class Sequencer(Processor):
                                 self.insert_compiled_instructions(idx_instr, nops)
                                 return True
 
-                    # If we're writing to the bus address register, we need to
-                    # make sure to give the bus enough time to respond
-                    elif dest.major is Destination.Major.BUS_ADDR:
-                        counts["BUS"] = bus_count_init
-
                 # Now check the sources. If we are depending on the value 
                 # of a DSP slice, we need to make sure that we've given it 
                 # enough time to complete the computation
                 if src.major is Source.Major.DSP_P:
                     if counts[f"DSP{src.minor}"] > 0:
                         nops = [STP(comment=f"Pipeline latency for DSP{src.minor}")]*counts[f"DSP{src.minor}"]
-                        self.insert_compiled_instructions(idx_instr, nops)
-                        return True
-
-                # If we're getting data from the bus, we need to make sure 
-                # that we've given the bus enough time to shuttle the data
-                elif src.major is Source.Major.BUS_DATA:
-                    if counts[f"BUS"] > 0:
-                        nops = [STP(comment=f"Pipeline latency for bus")]*counts[f"BUS"]
                         self.insert_compiled_instructions(idx_instr, nops)
                         return True
                 
@@ -1495,8 +1493,8 @@ class Sequencer(Processor):
 
         return_instruction = self.Instruction.next_instance()
         yield
-        
-        if not self.Instruction.next_instance_assigned():
+
+        if not return_instruction.assigned():
             # No instructions have been added in the block and we can infer 
             # which argument should be stored in the mask. Therefore, we can
             # use the hold destination                
@@ -1582,7 +1580,7 @@ class Sequencer(Processor):
             
         yield dsp
             
-        block_empty = not self.Instruction.next_instance_assigned()
+        block_empty = not loop_block_start.assigned()
         if not block_empty and len(args) > 0:
             loop_block_start.value().kwargs["dsp_cep"] = dsp.source()
             

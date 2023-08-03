@@ -1387,11 +1387,6 @@ class AXIMemoryArray(HDLModule):
                 hdl += f'            controller_addr_{"d"*(i+1)}          <= controller_addr{delay};\n' 
 
             hdl += "\n"
-                
-            # for i in range(self._controller_port_output_pipeline):
-            #     delay = "_" + "d"*i if i != 0 else ""
-            #     for element in range(self._elements):
-            #         hdl += f'            controller_mem{element}_rddata_{"d"*(i+1)}   <= controller_mem{element}_rddata{delay};\n'
 
             hdl += f'        end if;\n'
             hdl += f'    end process controller_pipeline_proc;\n\n'
@@ -1399,21 +1394,19 @@ class AXIMemoryArray(HDLModule):
         hdl += f'    controller_rddata <= '
         
         if self._elements == 1:
-            # hdl += f'controller_mem0_rddata{"_" + "d"*self._controller_port_output_pipeline if self._controller_port_output_pipeline != 0 else ""};\n\n'
             hdl += f'controller_mem0_rddata;\n\n'
         else:
             for element in range(self._elements):
-                # hdl += f'        controller_mem{element}_rddata{"_" + "d"*self._controller_port_output_pipeline if self._controller_port_output_pipeline != 0 else ""} when controller_addr{"_" + "d"*input_to_output_delay if input_to_output_delay != 0 else ""}({controller_address_bits-1} downto {controller_address_bits-log2_elements}) = "{f"{element:b}".zfill(log2_elements)}" else\n'
                 hdl += f'        controller_mem{element}_rddata when controller_addr{"_" + "d"*controller_input_to_output_delay if controller_input_to_output_delay != 0 else ""}({controller_address_bits-1} downto {controller_address_bits-log2_elements}) = "{f"{element:b}".zfill(log2_elements)}" else\n'
             hdl += f'    (others => \'0\');\n\n'
 
         
             
-        if self._user_port_input_pipeline > 0 or self._user_port_output_pipeline > 0 or self._use_rst:
+        if self._user_port_input_pipeline > 0:
             for element in range(self._elements):
                 # Create the user interface
                 user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
-                hdl += f'    mem{element}_user_pipeline_proc: process({user_clk}) begin\n'
+                hdl += f'    mem{element}_user_port_input_pipeline_proc: process({user_clk}) begin\n'
                 hdl += f'        if rising_edge({user_clk}) then\n'
 
                 for i in range(self._user_port_input_pipeline):
@@ -1422,27 +1415,29 @@ class AXIMemoryArray(HDLModule):
                     if not self._read_only:
                         hdl += f'            mem{element}_din_{"d"*(i+1)}      <= mem{element}_wrdata{delay};\n' 
                         hdl += f'            mem{element}_we_{"d"*(i+1)}       <= mem{element}_we{delay};\n' 
+                
+                hdl += f'        end if;\n'
+                hdl += f'    end process mem{element}_user_port_input_pipeline_proc;\n\n'
 
-                if self._use_rst:
-                    hdl += f'            if(mem{element}_rst_{"d"*(user_input_to_output_delay+1)} = \'1\') then\n'   
-                    hdl += f'                mem{element}_dout <= (others => \'0\');\n' 
-                    hdl += f'            else\n'
-                    hdl += f'                mem{element}_dout <= mem{element}_dout_int;\n'
-                    hdl += f'            end if;\n'    
+        for element in range(self._elements):
+            user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
+            if self._use_rst:
+                hdl += f'    mem{element}_user_port_rst_proc: process({user_clk}) begin\n'
+                hdl += f'        if rising_edge({user_clk}) then\n'
 
-                    for i in range(user_input_to_output_delay+1):
-                        delay = "_" + "d"*i if i != 0 else ""
-                        hdl += f'            mem{element}_rst_{"d"*(i+1)}      <= mem{element}_rst{delay};\n' 
-                else:
-                    hdl += f'            mem{element}_dout <= mem{element}_dout_int;\n'
-
+                for i in range(user_input_to_output_delay+1):
+                    delay = "_" + "d"*i if i != 0 else ""
+                    hdl += f'            mem{element}_rst_{"d"*(i+1)}      <= mem{element}_rst{delay};\n'
                 hdl += "\n"
 
+                hdl += f'            if(mem{element}_rst_{"d"*(user_input_to_output_delay+1)} = \'1\') then\n'   
+                hdl += f'                mem{element}_dout <= (others => \'0\');\n' 
+                hdl += f'            else\n'
+                hdl += f'                mem{element}_dout <= mem{element}_dout_int;\n'
+                hdl += f'            end if;\n'
                 hdl += f'        end if;\n'
-                hdl += f'    end process mem{element}_user_pipeline_proc;\n\n'
-        else:
-            for element in range(self._elements):
-                # No pipelining at all
+                hdl += f'    end process mem{element}_user_port_rst_proc;\n\n'
+            else:
                 hdl += f'    mem{element}_dout <= mem{element}_dout_int;\n\n'
             
         delayed_controller_input_suffix = "_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""

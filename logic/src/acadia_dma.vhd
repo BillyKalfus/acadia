@@ -156,7 +156,7 @@ begin
         
     -- Because the FIFO is FWFT, we can pulse the FIFO read enable
     -- once we've already started the descriptor
-    fifo_rd_en_int <= trigger or descriptor_done;
+    fifo_rd_en_int <= (trigger and not running_int) or descriptor_done;
     descriptor_address_fifo_empty <= fifo_empty_int;
 
     -- Establish some progress flags

@@ -35,8 +35,9 @@ class ChannelSynchronizer(Synchronizer):
     DSA = 6
     TDD = 7
 
-    def __init__(self, firmware, allow_standalone=False):
+    def __init__(self, firmware, dma_block_latency, allow_standalone=False):
         self._firmware = firmware
+        self._dma_block_latency = dma_block_latency
         super().__init__(allow_standalone)
     
     def __call__(self, *args, **kwargs):
@@ -176,7 +177,9 @@ class ChannelSynchronizer(Synchronizer):
                 if self._dma_block:
                     # Wait until all the DMAs in the mask have completed
                     dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
-                    with proc.wait_until(proc.bus_read(dma_running_device.address().value()) & dma_mask == 0):
+                    proc.bus_read(dma_running_device.address().value(),
+                                latency=self._dma_block_latency)
+                    with proc.wait_until(proc.bus_read() & dma_mask == 0):
                         pass
 
             # Generate register writes for all the NCO updates that need to happen
@@ -324,7 +327,9 @@ class Acadia:
         self._active_sequencer = None
 
         # Create a synchronizer for channel actions
-        self.synchronizer = ChannelSynchronizer(self._firmware, allow_standalone=True)
+        self.synchronizer = ChannelSynchronizer(self._firmware, 
+                                                self.get_bus_latency("DMA_RUNNING_DATAPORT"),
+                                                allow_standalone=True)
                 
         # Make DMAs
         DACDMA = type("DACDMA", (DMA,), {"DMA_NUM_OFFSET": 0})
@@ -1102,7 +1107,12 @@ class Acadia:
                 
                 if block:
                     # Wait until we get a status from the S2MM
-                    with proc.wait_until(proc.bus_read(self._firmware.sequencer_bus_decoder["datamover_controller"]["cfg_dm_s2mm"]+1) != 0):
+                    # Base latency, +1 because inherent pipelined reads in the datamover controller,
+                    # plus any additional decoder port pipelining
+                    latency = self._base_bus_latency + 1 + (1 if self._firmware["SEQUENCER_BUS"]["DATAMOVER_CONTROLLER"]["BUS_PIPELINE"] else 0)
+                    proc.bus_read(self._firmware.sequencer_bus_decoder["datamover_controller"]["cfg_dm_s2mm"]+1,
+                                  latency=latency)
+                    with proc.wait_until(proc.bus_read() != 0):
                         pass
                 return transfer_tag
             else:
@@ -1235,12 +1245,12 @@ class Acadia:
             fifo_name = f"cmacc_dma{dma._resource_id}_fifo"
             datamover_name = f"cmacc_dm{dma._resource_id}"
             dma_address = integration_kernel.word_address()
-            capture_length_cycles = capture_length // 4
+            capture_length_cycles = capture_length // channel.interface_width_bytes
         else:
             if isinstance(capture_length, int):
-                if capture_length % 32 != 0:
+                if capture_length % 16 != 0:
                     raise ValueError(f"An array for ADC capture without integration"
-                                    " must have a size that is a multiple of 32"
+                                    " must have a size that is a multiple of 16"
                                     f" bytes; found {capture_length} bytes.")
             else:
                 print("WARNING: Unable to determine length of capture at compile time."
@@ -1415,6 +1425,41 @@ class Acadia:
 
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
 
+    def get_bus_latency(self, port):
+        """
+        Get the latency for a port on the sequencer's bus, taking into account
+        any pipeling configured in the firmware.
+
+        :param port: Bus port name. Must either be a key in the 
+            ``SEQUENCER_BUS``  section of the firmware configuration, or
+            ``cache``\.
+        :type port: str
+        """
+        # One cycle to load the bus registers in the sequencer
+        latency = 1 
+
+        if self._firmware["SEQUENCER_BUS"]["DECODER_PIPELINE_MISO"]:
+            latency += 1
+
+        # The datamover controller has a read latency of 1 because its MISO is driven
+        # in a synchronous process
+        if port == "DATAMOVER_CONTROLLER":
+            latency += 1
+
+        if port == "cache":
+            # One additional cycle minimum because the memory has a read latency of 1
+            # even before any pipelining because it's a synchronous memory
+            latency += 1 
+            latency += self._firmware["SEQUENCER_CACHE_MEMORY"]["BUS_PORT_INPUT_PIPELINE"]
+            latency += self._firmware["SEQUENCER_CACHE_MEMORY"]["BUS_PORT_OUTPUT_PIPELINE"]
+        elif "PS_GPIO" in port:
+            latency += self._firmware[port]["BUS_PIPELINE"]
+        elif self._firmware["SEQUENCER_BUS"][port]["BUS_PIPELINE"]:
+            latency += 1
+
+        return latency
+        
+
     @requires_sequencer
     def channel_fifos_almost_empty(self, *channels):
         """
@@ -1431,7 +1476,9 @@ class Acadia:
             bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
             mask |= 1 << bit_position
         bus_address = self._firmware.dma_fifo_almost_empty.address().value()
-        return self._active_sequencer.bus_read(bus_address) & mask != 0
+
+        self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("DMA_FIFO_ALMOST_EMPTY_DATAPORT"))
+        return self._active_sequencer.bus_read() & mask != 0
     
     @requires_sequencer
     def channel_fifos_empty(self, *channels):
@@ -1449,7 +1496,9 @@ class Acadia:
             bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
             mask |= 1 << bit_position
         bus_address = self._firmware.dma_fifo_empty.address().value()
-        return self._active_sequencer.bus_read(bus_address) & mask != 0
+
+        self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("DMA_FIFO_EMPTY_DATAPORT"))
+        return self._active_sequencer.bus_read() & mask != 0
     
     @requires_sequencer
     def channels_running(self, *channels):
@@ -1467,7 +1516,9 @@ class Acadia:
             mask |= 1 << (type(dma).DMA_NUM_OFFSET + dma._resource_id)
         
         bus_address = self._firmware.dma_running.address().value()
-        return self._active_sequencer.bus_read(bus_address) & mask != 0
+
+        self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("DMA_RUNNING_DATAPORT"))
+        return self._active_sequencer.bus_read() & mask != 0
 
     @requires_sequencer
     def capture_count(self, channel):
@@ -1489,11 +1540,9 @@ class Acadia:
         address = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name] + 1
         self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
-                                                f" retrieve status count for {datamover_name}")
-        self._active_sequencer.nop(comment="Pipeline latency for DataMover status count")
-        self._active_sequencer.nop(comment="Pipeline latency for DataMover status count")
-        self._active_sequencer.nop(comment="Pipeline latency for DataMover status count")
-        return self._active_sequencer.bus_read(write_address=False)
+                                                f" retrieve status count for {datamover_name}",
+                                        latency=self.get_bus_latency("DATAMOVER_CONTROLLER"))
+        return self._active_sequencer.bus_read()
     
     @requires_sequencer
     def capture_status(self, channel):
@@ -1516,11 +1565,9 @@ class Acadia:
         address = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
         self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
-                                                f" retrieve status for {datamover_name}")
-        self._active_sequencer.nop(comment="Pipeline latency for DataMover status")
-        self._active_sequencer.nop(comment="Pipeline latency for DataMover status")
-        self._active_sequencer.nop(comment="Pipeline latency for DataMover status")
-        return self._active_sequencer.bus_read(write_address=False)
+                                                f" retrieve status for {datamover_name}",
+                                        latency=self.get_bus_latency("DATAMOVER_CONTROLLER"))
+        return self._active_sequencer.bus_read()
     
     @requires_sequencer
     def fifo_error_status(self):
@@ -1529,8 +1576,9 @@ class Acadia:
         ADC FIFOs.
         """
 
-        address = self._firmware.sequencer_bus_decoder["adc_fifo_control"].address().value()
-        return self._active_sequencer.bus_read(address=address)
+        self._active_sequencer.bus_read(address=self._firmware.sequencer_bus_decoder["adc_fifo_control"].address().value(),
+                                        latency=self.get_bus_latency("ADC_FIFO_DATAPORT"))
+        return self._active_sequencer.bus_read()
 
     @requires_sequencer
     def reset_fifos(self, *args):
@@ -1575,10 +1623,17 @@ class Acadia:
                           data=mask)
             
     @requires_sequencer
-    def dma_trigger(self, mask):
+    def dma_trigger(self, *channels):
         """
-        Triggers the DMAs according to a provided bitmask.
+        Trigger the DMAs associated with the provided channels.
+
+        :param channels: List of channels
         """
+        mask = 0
+        for channel in channels:
+            dma = channel.dma
+            bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
+            mask |= 1 << bit_position
 
         dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
         self._active_sequencer.bus_write(address=dma_trigger_device.address().value(),
@@ -1586,13 +1641,19 @@ class Acadia:
                                  comment="DMA trigger")
         
     @requires_sequencer
-    def dma_block(self, mask):
+    def dma_block(self, *channels):
         """
-        Wait until the DMAs specified in the mask are not running.
+        Wait until the DMAs for the specified channels are not running.
         """
+        mask = 0
+        for channel in channels:
+            dma = channel.dma
+            bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
+            mask |= 1 << bit_position
 
         dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
-        dma_running = self._active_sequencer.bus_read(dma_running_device.address().value())
+        dma_running = self._active_sequencer.bus_read(address=dma_running_device.address().value(),
+                                                      latency=self.get_bus_latency("DMA_RUNNING_DATAPORT"))
         with self._active_sequencer.wait_until(dma_running & mask == 0):
             pass
 
@@ -1707,7 +1768,7 @@ class Acadia:
             return self._psgpio_mem[(PSGPIO.PSGPIO3_IN_PSREG >> 2) + port - 3]
         elif isinstance(proc, Sequencer):
             addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
-            return proc.bus_read(addr)
+            return proc.bus_read(addr, latency=self.get_bus_latency(f"PS_GPIO{port}"))
         else:
             raise TypeError(f"Unable to access GPIO on processor {proc}.")
         
@@ -1740,7 +1801,8 @@ class Acadia:
         def _cache_getitem(cache_self, key):
             proc = Processor.active_processor()
             if isinstance(proc, Sequencer):
-                return proc.bus_read(cache_self.word_address() + key)
+                return proc.bus_read(cache_self.word_address() + key, 
+                                     latency=self.get_bus_latency("cache"))
             return Operation("getitem", cache_self, key)
             
         def _cache_setitem(cache_self, key, value):
