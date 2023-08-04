@@ -1117,68 +1117,63 @@ class AXISSwitch:
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
             
-# class ZCU216Sensors:
-#     """
-#     Wrappers for the various on-chip and onboard voltage, current, and 
-#     temperature sensors of the ZCU216.
-#     """
+class ZCU216Sensors:
+    """
+    Wrappers for the various on-chip and onboard voltage, current, and 
+    temperature sensors of the ZCU216.
+    """
 
-#     @staticmethod
-#     def keys(): 
-#         keys_list = []
-#         for d in os.listdir("/sys/devices/platform"):
-#             if d.startswith("ina226-"):
-#                 keys_list.append(d[len("ina226-"):])
+    @staticmethod
+    def sensors(): 
+        keys_list = []
+        for d in os.listdir("/sys/devices/platform"):
+            if d.startswith("ina226-"):
+                keys_list.append(d)
         
-#         for d in os.listdir("/sys/bus/iio/devices/iio:device0"):
-#             if d.startswith("in_"):
-#                 end = d.rindex("")
-#                 name = d[len("in_"):end]
-#                 keys_list.append(name)
+        for d in os.listdir("/sys/bus/iio/devices/iio:device0"):
+            if d.startswith("in_"):
+                end = d.rindex("_")
+                name = d[len("in_"):end]
+                keys_list.append(name)
             
-#         return keys_list
+        return keys_list
 
 
-#             # 
-#             "PS_TEMP":
-#             "REMOTE_TEMP":
-#             "PL_TEMP":
+            
+    @staticmethod
+    def measure(*sensors):
+        """
+        Measure system voltage, current, or temperature as reported by 
+        on-chip and on-board sensors. Valid measurement keys are returned by
+        :meth:`keys`\.
 
-#             "VCC_PSPLL0":
-#             "VCCPSDDR":
-#             "VCCPSIO3":
-#             "VCCPSIO0":
-#             "VCCPSIO1":
-#             "VCCPSIO2":
-#             "PSMGTRAVCC":
-#             "PSMGTRAVTT":
-#             "VCCAMS":
-#             "VCCINT":
-#             "VCCAUX":
-#             "VCC_PSBATT":
-#             "VCCVREFP":
-#             "VCCVREFN":
-#             "VCCBRAM":
-#             "VCCPLINTLP":
-#             "VCCPLINTFP":
-#             "VCCPLAUX":
-#             "VCCAMS"]
-#     """
-#         Measure system voltage, current, or temperature as reported by 
-#         on-chip and on-board sensors. Valid measurement keys are:
+        :return: The measurement result
+        :rtype: float
+        """
+        if len(sensors) == 0:
+            sensors = ZCU216Sensors.sensors()
 
-        
-#         *. 
+        measurements = {}
+        for s in sensors:
+            if s.startswith("ina226"):
+                filedir = f"/sys/devices/platform/{s}/hwmon"
+                hwmon_dir = os.listdir(filedir)[0]
+                for hwmon_file in os.listdir(os.path.join(filedir, hwmon_dir)):
+                    if hwmon_file.endswith("_input"):
+                        with open(os.path.join(filedir, hwmon_dir, hwmon_file)) as f:
+                            measurements[f"{s}-{hwmon_file}"] = f.read()
+            else:
+                if "temp" in s:
+                    with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_offset", "r") as f:
+                        offset = float(f.read())
+                else:
+                    offset = 0
 
+                with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_scale", "r") as f:
+                    scale = float(f.read())
+                with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_raw", "r") as f:
+                    raw = float(f.read())
 
-#         :return: The measurement result
-#         :rtype: float
-#         """
-#         with open("/sys/bus/iio/devices/iio:device0/in_temp0_ps_temp_offset", "r") as f:
-#             offset = f.readline()[:-1]
-#         with open("/sys/bus/iio/devices/iio:device0/in_temp0_ps_temp_scale", "r") as f:
-#             scale = f.readline()[:-1]
-#         with open("/sys/bus/iio/devices/iio:device0/in_temp0_ps_temp_raw", "r") as f:
-#             raw = f.readline()[:-1]
+                measurements[s] = (raw + offset)*scale
 
-#         return (raw + offset)*scale*1e-3
+        return measurements
