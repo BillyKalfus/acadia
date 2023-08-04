@@ -784,14 +784,9 @@ class Sequencer(Processor):
         bus
         """
 
-        if address is not None:
-            self.STP(src1=address, 
-                     dest1=Destination(Destination.Major.BUS_ADDR),
-                     **kwargs)
-            for i in range(latency):
-                self.nop(comment="Manual bus latency")
-        
-        return Source(Source.Major.BUS_DATA)
+        # Note: the behavior described above is carried out by the compiler
+        # when compiling an Operation with "bus_read"
+        return Operation("bus_read", address=address, latency=latency, **kwargs)
     
     def bus_write(self, address, data, **kwargs):
         """
@@ -939,7 +934,7 @@ class Sequencer(Processor):
             instructions += condition_instructions
         
         if isinstance(src, Operation):    
-            # If the destination is a DSP, we may+ be able to do the calculation in-place
+            # If the destination is a DSP, we may be able to do the calculation in-place
             if isinstance(dest, self.DSP):    
                 compiled_src,src_instructions,src_resources = self.compile_source(src, dsp=dest)
                 instructions += src_instructions
@@ -1025,6 +1020,14 @@ class Sequencer(Processor):
         if isinstance(obj, Operation):
             # First check to see if we've received the special "bus_read" operation
             if obj._op == "bus_read":
+                if "address" in obj._kwargs and obj._kwargs["address"] is not None:
+                    addr,addr_instructions,addr_resources = self.compile_source(obj._kwargs["address"])
+                    address_instr = STP(src1=addr, dest1=Destination(Destination.Major.BUS_ADDR))
+                    latency_instrs = [STP(comment=f"Latency for bus read from address {addr}") for i in range(obj._kwargs["latency"])]
+
+                    return Source(Source.Major.BUS_DATA), addr_instructions + [address_instr] + latency_instrs, addr_resources
+                
+                # If we haven't given it any address, just return the source associated with the bus
                 return Source(Source.Major.BUS_DATA), [], []
             # Check that we have the right argument structure. invert will take
             # exactly one argument, otherwise we need exactly two. In both 
@@ -1217,6 +1220,7 @@ class Sequencer(Processor):
             stc_kwargs["op"] = 0b11
             return stc_kwargs,[],[]
         elif isinstance(condition, Operation):
+            # This Operation must be the comparison
             # Some operators can be recursively simplified
             if condition._op == "invert":
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
@@ -1281,7 +1285,14 @@ class Sequencer(Processor):
                 stc_kwargs["op"] = 0b00
             elif condition._op == "xor" or condition._op == "rxor":
                 stc_kwargs["op"] = 0b01
-            
+            else:
+                # The Operation is computing something that is not a comparison,
+                # compile it as a source and test whether the result is nonzero
+                src,src_instructions,src_resources = self.compile_source(condition)
+                stc_kwargs["src_tval"] = src
+                stc_kwargs["op"] = 0b11
+                return stc_kwargs,src_instructions,src_resources
+                
             
         # Next, let's look at the arguments and compile as necessary
         # If one of them is a numeric or a register, we'll prefer to 
@@ -1482,7 +1493,7 @@ class Sequencer(Processor):
         jump.kwargs["src"] = jump_target
         
     @contextmanager
-    def wait_until(self, condition, mask=None):
+    def repeat_until(self, condition, mask=None):
         """
         Waits until a particular condition is satisfied. If possible, the value
         to be written to the branch mask register is inferred. If this is not 

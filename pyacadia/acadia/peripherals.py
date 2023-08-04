@@ -1117,3 +1117,68 @@ class AXISSwitch:
         if commit:
             self._mem[AXISSwitch.CONTROL_REG] = AXISSwitch.COMMIT_VALUE
             
+# class ZCU216Sensors:
+#     """
+#     Wrappers for the various on-chip and onboard voltage, current, and 
+#     temperature sensors of the ZCU216.
+#     """
+
+#     @staticmethod
+#     def keys(): 
+#         keys_list = []
+#         for d in os.listdir("/sys/devices/platform"):
+#             if d.startswith("ina226-"):
+#                 keys_list.append(d[len("ina226-"):])
+        
+#         for d in os.listdir("/sys/bus/iio/devices/iio:device0"):
+#             if d.startswith("in_"):
+#                 end = d.rindex("")
+#                 name = d[len("in_"):end]
+#                 keys_list.append(name)
+            
+#         return keys_list
+
+
+#             # 
+#             "PS_TEMP":
+#             "REMOTE_TEMP":
+#             "PL_TEMP":
+
+#             "VCC_PSPLL0":
+#             "VCCPSDDR":
+#             "VCCPSIO3":
+#             "VCCPSIO0":
+#             "VCCPSIO1":
+#             "VCCPSIO2":
+#             "PSMGTRAVCC":
+#             "PSMGTRAVTT":
+#             "VCCAMS":
+#             "VCCINT":
+#             "VCCAUX":
+#             "VCC_PSBATT":
+#             "VCCVREFP":
+#             "VCCVREFN":
+#             "VCCBRAM":
+#             "VCCPLINTLP":
+#             "VCCPLINTFP":
+#             "VCCPLAUX":
+#             "VCCAMS"]
+#     """
+#         Measure system voltage, current, or temperature as reported by 
+#         on-chip and on-board sensors. Valid measurement keys are:
+
+        
+#         *. 
+
+
+#         :return: The measurement result
+#         :rtype: float
+#         """
+#         with open("/sys/bus/iio/devices/iio:device0/in_temp0_ps_temp_offset", "r") as f:
+#             offset = f.readline()[:-1]
+#         with open("/sys/bus/iio/devices/iio:device0/in_temp0_ps_temp_scale", "r") as f:
+#             scale = f.readline()[:-1]
+#         with open("/sys/bus/iio/devices/iio:device0/in_temp0_ps_temp_raw", "r") as f:
+#             raw = f.readline()[:-1]
+
+#         return (raw + offset)*scale*1e-3
