@@ -267,7 +267,13 @@ class Channel:
                     "clock_source_tile": Channel._clk_dst_tile_to_str(clock_settings.SourceTile),
                     "PLL_enabled": clock_settings.PLLEnable,
                     "clock_divider_if_PLL_bypassed": clock_settings.DivisionFactor,
-                    "clock_delay_to_source_tile": clock_settings.Delay 
+                    "clock_delay_to_source_tile": clock_settings.Delay,
+                    "PLL_Settings_Enabled": clock_settings.PLLSettings.Enabled,
+                    "PLL_Settings_ref_clk_freq": clock_settings.PLLSettings.RefClkFreq,
+                    "PLL_Settings_sample_rate": clock_settings.PLLSettings.SampleRate,
+                    "PLL_Settings_ref_clk_divider": clock_settings.PLLSettings.RefClkDivider,
+                    "PLL_Settings_feedback_divider": clock_settings.PLLSettings.FeedbackDivider,
+                    "PLL_Settings_output_divider": clock_settings.PLLSettings.OutputDivider
                 }
                 
                 if clock_settings.DistributedClock == cls.RFDC_def(f"XRFDC_DIST_OUT_NONE"):

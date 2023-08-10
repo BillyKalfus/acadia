@@ -179,7 +179,7 @@ class ChannelSynchronizer(Synchronizer):
                     dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
                     bus_op = proc.bus_read(dma_running_device.address().value(),
                                 latency=self._dma_block_latency)
-                    with proc.wait_until(bus_op & dma_mask == 0):
+                    with proc.repeat_until(bus_op & dma_mask == 0):
                         pass
 
             # Generate register writes for all the NCO updates that need to happen
@@ -209,7 +209,7 @@ class ChannelSynchronizer(Synchronizer):
 
                 # 2. Wait until dac0_nco_update_busy[1] goes high, indicating that
                 #    SYSREF has been properly gated
-                with proc.wait_until(proc.bus_read(rts_address) & (1 << 1) != 0):
+                with proc.repeat_until(proc.bus_read(rts_address) & (1 << 1) != 0):
                     pass
 
                 # 3. Pulse the rest of the nco_update_req signals if necessary
@@ -226,7 +226,7 @@ class ChannelSynchronizer(Synchronizer):
                 # 4. Wait until all the busy outputs (except for dac0_nco_update_busy[1])
                 #    are low
                 m = 0xFFFF & ~(1 << 1)
-                with proc.wait_until(proc.bus_read(rts_address) & m == 0):
+                with proc.repeat_until(proc.bus_read(rts_address) & m == 0):
                     pass
 
                 # 5. Re-enable SYSREF by pulsing dac0_sysref_int_reenable
@@ -239,7 +239,7 @@ class ChannelSynchronizer(Synchronizer):
                                comment="Clear dac0_sysref_int_reenable")
 
                 # 6. Wait until dac0_nco_update_busy[1] goes low
-                with proc.wait_until(proc.bus_read(rts_address) & 0xFFFF == 0):
+                with proc.repeat_until(proc.bus_read(rts_address) & 0xFFFF == 0):
                     pass
 
                 # Do we ever need to set dac0_nco_sysref_int_gating low? If so, do it here
@@ -486,8 +486,8 @@ class Acadia:
         PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_cplt_gpio, "in")
 
         self._clk_wiz_locked = self._firmware["PS_GPIO"]["SYSFS_OFFSET"] + self._firmware["PS_GPIO"]["CLK_WIZ_LOCKED"]           
-        PSGPIO.sysfs_export(self._ddr4_c1_cal_cplt_gpio)
-        PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_cplt_gpio, "in")
+        PSGPIO.sysfs_export(self._clk_wiz_locked)
+        PSGPIO.sysfs_set_direction(self._clk_wiz_locked, "in")
         
     def detach(self):
         """
@@ -968,12 +968,12 @@ class Acadia:
         # d["clk_wiz_fbout_frac"] = int.from_bytes(self.clk_wiz[0x203:0x202], 'little') & (2**10 - 1)
         # d["clk_wiz_vco_frequency_over_input_frequency"] = (d["clk_wiz_fbout_mult"] + 1e-3*d["clk_wiz_fbout_frac"]) / d["clk_wiz_divclk_divide"]
         
-        for output in range(7):
-            base = 0x208 + output*12
-            d[f"clk_wiz_clkout{output}_div"] = self.clk_wiz[base]
-            if output == 0:
-                d[f"clk_wiz_clkout{output}_frac"] = int.from_bytes(self.clk_wiz[base+2:base+1], 'little') & (2**10 - 1)
-            d[f"clk_wiz_clkout{output}_phase"] = int.from_bytes(self.clk_wiz[base+8:base+4], 'little')
+        # for output in range(7):
+        #     base = 0x208 + output*12
+        #     d[f"clk_wiz_clkout{output}_div"] = self.clk_wiz[base]
+        #     if output == 0:
+        #         d[f"clk_wiz_clkout{output}_frac"] = int.from_bytes(self.clk_wiz[base+2:base+1], 'little') & (2**10 - 1)
+        #     d[f"clk_wiz_clkout{output}_phase"] = int.from_bytes(self.clk_wiz[base+8:base+4], 'little')
         
         rfdc_status = Channel.RFDC_status()
         for tile,status in rfdc_status.items():
@@ -1086,7 +1086,7 @@ class Acadia:
                         while not dma.is_complete():
                             pass
                     else:
-                        proc.wait_until(dma.is_complete())
+                        proc.repeat_until(dma.is_complete())
                 
                 return dma
             elif isinstance(proc, Sequencer):
@@ -1113,7 +1113,7 @@ class Acadia:
                     latency = self._base_bus_latency + 1 + (1 if self._firmware["SEQUENCER_BUS"]["DATAMOVER_CONTROLLER"]["BUS_PIPELINE"] else 0)
                     bus_op = proc.bus_read(self._firmware.sequencer_bus_decoder["datamover_controller"]["cfg_dm_s2mm"]+1,
                                   latency=latency)
-                    with proc.wait_until(bus_op != 0):
+                    with proc.repeat_until(bus_op != 0):
                         pass
                 return transfer_tag
             else:
@@ -1445,7 +1445,7 @@ class Acadia:
         # The datamover controller has a read latency of 1 because its MISO is driven
         # in a synchronous process
         if port == "DATAMOVER_CONTROLLER":
-            latency += 5
+            latency += 1
 
         if port == "cache":
             # One additional cycle minimum because the memory has a read latency of 1
@@ -1650,7 +1650,7 @@ class Acadia:
         dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
         dma_running = self._active_sequencer.bus_read(address=dma_running_device.address().value(),
                                                       latency=self.get_bus_latency("DMA_RUNNING_DATAPORT"))
-        with self._active_sequencer.wait_until(dma_running & mask == 0):
+        with self._active_sequencer.repeat_until(dma_running & mask == 0):
             pass
 
     # -------------- RUNTIME UTILITIES ----------- #

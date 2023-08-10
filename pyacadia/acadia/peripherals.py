@@ -1127,19 +1127,18 @@ class ZCU216Sensors:
     def sensors(): 
         keys_list = []
         for d in os.listdir("/sys/devices/platform"):
-            if d.startswith("ina226-"):
+            if d.startswith("ina226-") and d not in keys_list:
                 keys_list.append(d)
         
         for d in os.listdir("/sys/bus/iio/devices/iio:device0"):
             if d.startswith("in_"):
                 end = d.rindex("_")
                 name = d[len("in_"):end]
-                keys_list.append(name)
+                if name not in keys_list:
+                    keys_list.append(name)
             
         return keys_list
 
-
-            
     @staticmethod
     def measure(*sensors):
         """
@@ -1161,7 +1160,20 @@ class ZCU216Sensors:
                 for hwmon_file in os.listdir(os.path.join(filedir, hwmon_dir)):
                     if hwmon_file.endswith("_input"):
                         with open(os.path.join(filedir, hwmon_dir, hwmon_file)) as f:
-                            measurements[f"{s}-{hwmon_file}"] = f.read()
+                            key = f"{s}-{hwmon_file}"
+                            if hwmon_file.startswith("in"):
+                                key += "-V"
+                                scale = 1e-3
+                            elif hwmon_file.startswith("curr"):
+                                key += "-A"
+                                scale = 1e-3
+                            elif hwmon_file.startswith("power"):
+                                key += "-W"
+                                scale = 1e-6
+                            else:
+                                raise ValueError(f"Unrecognized INA226 file {hwmon_file}")
+                            
+                            measurements[key] = scale*int(f.read())
             else:
                 if "temp" in s:
                     with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_offset", "r") as f:
@@ -1170,10 +1182,11 @@ class ZCU216Sensors:
                     offset = 0
 
                 with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_scale", "r") as f:
-                    scale = float(f.read())
+                    scale = float(f.read()) * (1e-3 if "temp" in s else 1)
                 with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_raw", "r") as f:
                     raw = float(f.read())
 
-                measurements[s] = (raw + offset)*scale
+                key = s + ("-C" if "temp" in s else "-V")
+                measurements[key] = 1e-3*(raw + offset)*scale
 
         return measurements

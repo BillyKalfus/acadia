@@ -1,7 +1,7 @@
 #!/bin/bash
 
 REPO_DIR="/home/billy/device-tree-xlnx"
-VIVADO_PROJ_DIR="/home/billy/acadia-build"
+VIVADO_PROJ_DIR="/home/billy/acadia-build-slow"
 BSP="/home/billy/xilinx-zcu216-v2020.2-final.bsp"
 BSP_NAME="xilinx-zcu216-2020.2"
 SRC_DIR="/home/billy/acadia/petalinux"

@@ -810,8 +810,8 @@ class Firmware:
                 block = channel % 4
                 create_module(f, f"hedgehog/adc{channel}_pipeline", "acadia_axis_pipeline")
                 set_property(f, f"hedgehog/adc{channel}_pipeline", 
-                             properties=f"WIDTH {{{self.config['RFDC']['ADC']['CHANNEL_INTERFACE_WIDTH'][channel]}}} "
-                                        f"STAGES {{{self.config['RFDC']['ADC']['CHANNEL_PIPELINE_STAGES'][channel]}}}")
+                             properties={"WIDTH": self.config['RFDC']['ADC']['CHANNEL_INTERFACE_WIDTH'][channel],
+                                         "STAGES": self.config['RFDC']['ADC']['CHANNEL_PIPELINE_STAGES'][channel]})
                 connect_bd_net(f, f"hedgehog/adc{channel}_pipeline/clk", "hedgehog/clk_wiz/" + self.config['RFDC']['ADC']['TILE_AXIS_CLOCKS'][tile])
 
                 connect_bd_intf_net(f, f"hedgehog/rfdc/m{tile}{block}_axis", 
@@ -1197,8 +1197,8 @@ class Firmware:
                 # Create an AXIS pipeline stage and connect it to the switch
                 create_module(f, f"hedgehog/adc_dma{d}_pipeline", "acadia_axis_pipeline")
                 set_property(f, f"hedgehog/adc_dma{d}_pipeline", 
-                             properties=f"WIDTH {{{self.config['ADC_CAPTURE_PATH']['FIFO_OUTPUT_WIDTH'][d]}}} "
-                                        f"STAGES {{{self.config['ADC_CAPTURE_PATH']['FIFO_INPUT_PIPELINE'][d]}}}")
+                             properties={"WIDTH": self.config['ADC_CAPTURE_PATH']['FIFO_OUTPUT_WIDTH'][d],
+                                         "STAGES": self.config['ADC_CAPTURE_PATH']['FIFO_INPUT_PIPELINE'][d]})
                 connect_bd_net(f, 
                                f"hedgehog/adc_dma{d}_pipeline/clk", 
                                f"hedgehog/clk_wiz/" + self.config["ADC_CAPTURE_PATH"]["FIFO_INPUT_CLOCK"][d])
@@ -1279,8 +1279,8 @@ class Firmware:
                 # Create an AXIS pipeline stage and connect it to the switch
                 create_module(f, f"hedgehog/cmacc{d}_pipeline", "acadia_axis_pipeline")
                 set_property(f, f"hedgehog/cmacc{d}_pipeline", 
-                             properties=f"WIDTH {{{self.config['ADC_AXIS_SWITCH']['WIDTH']}}} "
-                                        f"STAGES {{{self.config['CMACC_CAPTURE_PATH']['CMACC_INPUT_PIPELINE'][d]}}}")
+                             properties={"WIDTH": self.config['ADC_AXIS_SWITCH']['WIDTH'],
+                                         "STAGES": self.config['CMACC_CAPTURE_PATH']['CMACC_INPUT_PIPELINE'][d]})
                 connect_bd_net(f, f"hedgehog/cmacc{d}_pipeline/clk", f"hedgehog/clk_wiz/seq_clk")
                 connect_bd_intf_net(f, 
                                     f"hedgehog/axis_switch_adc/M{d+self._num_adcs:02d}_AXIS", 
@@ -1462,8 +1462,8 @@ class Firmware:
                 # Connect the DAC memory output to the RFDAC interface through a pipeline
                 create_module(f, f"hedgehog/dac{channel}_pipeline", "acadia_axis_pipeline")
                 set_property(f, f"hedgehog/dac{channel}_pipeline", 
-                             properties=f"WIDTH {{{self.config['RFDC']['DAC']['CHANNEL_INTERFACE_WIDTH'][channel]}}} "
-                                        f"STAGES {{{self.config['RFDC']['DAC']['CHANNEL_PIPELINE_STAGES'][channel]}}}")
+                             properties={"WIDTH": self.config['RFDC']['DAC']['CHANNEL_INTERFACE_WIDTH'][channel], 
+                                         "STAGES": self.config['RFDC']['DAC']['CHANNEL_PIPELINE_STAGES'][channel]})
                 
                 connect_bd_net(f, f"hedgehog/dac{channel}_pipeline/clk", f"hedgehog/clk_wiz/" + self.config['RFDC']['DAC']['TILE_AXIS_CLOCKS'][tile])
                 connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/mem{block}_dout", f"hedgehog/dac{channel}_pipeline/s_axis_tdata")
