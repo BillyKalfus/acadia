@@ -592,9 +592,9 @@ class Channel:
         :rtype: int
         """
 
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetOutputCurr", self.tile, self.block, n)
-        return n
+        return n[0]
     
     def set_dsa(self, dsa):
         """
@@ -666,9 +666,9 @@ class Channel:
         :rtype: int
         """
 
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetNyquistZone", self.tile, self.block, n)
-        return n
+        return n[0]
 
     def set_decoder_mode(self, mode):
         """
@@ -699,11 +699,11 @@ class Channel:
         if not self.is_dac:
             raise TypeError("Decoder mode may only be set for DACs.")
             
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetDecoderMode", self.tile, self.block, n)
-        if n == self.RFDC_def(f"XRFDC_DECODER_MAX_SNR_MODE"):
+        if n[0] == self.RFDC_def(f"XRFDC_DECODER_MAX_SNR_MODE"):
             return "low noise"
-        elif n == self.RFDC_def(f"XRFDC_DECODER_MAX_LINEARITY_MODE"):
+        elif n[0] == self.RFDC_def(f"XRFDC_DECODER_MAX_LINEARITY_MODE"):
             return "high linearity"
         
         raise ValueError(f"Unexpected decoder response {n}")
@@ -735,9 +735,9 @@ class Channel:
         if not self.is_dac:
             raise TypeError("InvSincFIR may only be set for DACs.")
             
-        n = xrfdc.ffi.new("short*")
+        n = xrfdc.ffi.new("unsigned short*")
         self.RFDC_call_checked("GetInvSincFIR", self.tile, self.block, n)
-        return n
+        return n[0]
 
     def set_dither(self, mode):
         """
@@ -761,9 +761,9 @@ class Channel:
         if self.is_dac:
             raise TypeError("Dithering may only be set for ADCs.")
             
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetDither", self.tile, self.block, n)
-        return bool(n)
+        return bool(n[0])
     
     def get_clk_source(self):
         """
@@ -771,10 +771,10 @@ class Channel:
         :rtype: str
         """
 
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetClockSource", self.converter_type(), self.tile, n)
         sources = [f"DAC{i}" for i in range(4)] + [f"ADC{i}" for i in range(4)]
-        return sources[n]
+        return sources[n[0]]
         
     def configure_PLL(self, source, ref_clk_frequency, sample_rate):
         """
@@ -788,8 +788,8 @@ class Channel:
         :param sample_rate: Sample rate in MHz
         """ 
 
-        if self.block is not None:
-            raise ValueError("Clocking can only be configured for tiles; block must be None.")
+        # if self.block is not None:
+        #     raise ValueError("Clocking can only be configured for tiles; block must be None.")
             
         if source == "internal":
             source_value = self.RFDC_def("XRFDC_INTERNAL_PLL_CLK")
@@ -850,9 +850,9 @@ class Channel:
         :rtype: bool
         """
 
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetPLLLockStatus", self.tile, self.block, n)
-        return n
+        return n[0]
 
     def set_imr_passband(self, mode):
         """
@@ -881,12 +881,12 @@ class Channel:
         if not self.is_dac:
             raise TypeError("IMR passband can only be set on DAC channels.")
             
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetIMRPassMode", self.tile, self.block, n)
             
-        if n == self.RFDC_def(f"XRFDC_DAC_IMR_MODE_LOWPASS"):
+        if n[0] == self.RFDC_def(f"XRFDC_DAC_IMR_MODE_LOWPASS"):
             return "lowpass"
-        elif n == self.RFDC_def(f"XRFDC_DAC_IMR_MODE_HIGHPASS"):
+        elif n[0] == self.RFDC_def(f"XRFDC_DAC_IMR_MODE_HIGHPASS"):
             return "highpass"
         
         raise ValueError(f"Received unexpected IMR setting {n}")
@@ -927,19 +927,19 @@ class Channel:
         if not self.is_dac:
             raise TypeError("Datapath mode can only be set on DAC channels.")
             
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetDataPathMode", self.tile, self.block, n)
             
-        if n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVTWO"):
+        if n[0] == self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVTWO"):
             return "Full-bandwidth NCO"
-        elif n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVFOUR"):
+        elif n[0] == self.RFDC_def(f"XRFDC_DATAPATH_MODE_DUC_0_FSDIVFOUR"):
             return "Half-bandwidth NCO (lowpass)"
-        elif n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_FSDIVFOUR_FSDIVTWO"):
+        elif n[0] == self.RFDC_def(f"XRFDC_DATAPATH_MODE_FSDIVFOUR_FSDIVTWO"):
             return "Half-bandwidth NCO (highpass)"
-        elif n == self.RFDC_def(f"XRFDC_DATAPATH_MODE_NODUC_0_FSDIVTWO"):
+        elif n[0] == self.RFDC_def(f"XRFDC_DATAPATH_MODE_NODUC_0_FSDIVTWO"):
             return "Bypass NCO"
         else:
-            raise ValueError(f"Got unexpected datapath mode \"{n}\"")
+            raise ValueError(f"Got unexpected datapath mode \"{n[0]}\"")
                 
     def setup_fifo(self, enable):
         """
@@ -980,7 +980,7 @@ class Channel:
 
         n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetInterpolationFactor", self.tile, self.block, n)
-        return n
+        return n[0]
         
     def set_decimation(self, factor):
         """
@@ -1009,9 +1009,9 @@ class Channel:
         :rtype: int
         """
 
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked("GetDecimationFactor", self.tile, self.block, n)
-        return n
+        return n[0]
     
     def get_interface_width(self):
         """
@@ -1019,12 +1019,13 @@ class Channel:
         :rtype: int
         """
 
-        n = xrfdc.ffi.new("int*")
+        n = xrfdc.ffi.new("unsigned int*")
         self.RFDC_call_checked(f"GetFab{'Wr' if self.is_dac else 'Rd'}VldWords", 
-                       self.tile, 
-                       self.block, 
-                       n)
-        return n*16
+                                self.converter_type(),
+                                self.tile, 
+                                self.block, 
+                                n)
+        return n[0]*16
     
     def is_data_complex(self):
         return self.RFDC_call("GetDataType",
@@ -1212,9 +1213,7 @@ class Channel:
         """
 
         # Check input type
-        if isinstance(array, memoryview):
-            array = np.frombuffer(array, dtype=np.complex128)
-        elif isinstance(array, np.ndarray):
+        if isinstance(array, np.ndarray):
             if array.ndim != 1:
                 raise ValueError("Arrays must be 1D.")
             if array.dtype != np.complex128 and array.dtype != np.complex64:
@@ -1228,12 +1227,10 @@ class Channel:
         # Check output type if provided
         if out is None:
             out = np.empty(len(array)*2, dtype=np.int16)
-        elif isinstance(out, memoryview):
-            out = np.frombuffer(out, dtype=np.int16)
 
         # TODO: do this better
         float_type = np.float64 if array.dtype == np.complex128 else np.float32
-        out[:] = (array*(2**13 - 1)).round().view(float_type).astype(np.int16) << 2
+        out[:] = (array*(2**13)).round().view(float_type).astype(np.int16) << 2
         return out
     
     @staticmethod

@@ -647,6 +647,12 @@ class Sequencer(Processor):
         def register_source(reg_self):
             return Source(Source.Major.REG, reg_self._resource_id)
         
+        def register_source_lo(reg_self):
+            return Source(Source.Major.REG_LO, reg_self._resource_id)
+        
+        def register_source_hi(reg_self):
+            return Source(Source.Major.REG_HI, reg_self._resource_id)
+        
         def register_destination(reg_self):
             return Destination(Destination.Major.REG, reg_self._resource_id)
                         
@@ -655,6 +661,8 @@ class Sequencer(Processor):
                      "__repr__": register_str,
                      "load": resource_load,
                      "source": register_source,
+                     "lo": register_source_lo,
+                     "hi": register_source_hi,
                      "destination": register_destination}
         
         reg_dct.update(Operable.make_operator_functions(["eq", "ne", "gt", "lt", "ge", "le", 
@@ -1546,13 +1554,12 @@ class Sequencer(Processor):
         inherently contain the iteration variable)
         """
 
-        dsp = None
+        dsp = self.DSP()
         if len(args) == 0:
             # Do nothing
             pass
 
         elif len(args) == 1:
-            dsp = self.DSP()
             start = 0
             stop = args[0]
             step = 1
@@ -1560,7 +1567,6 @@ class Sequencer(Processor):
                        src=DSPConfiguration("P+1", rst_p=True), 
                        comment="Configure DSP for loop")
         elif len(args) == 2:
-            dsp = self.DSP()
             start = args[0]
             stop = args[1]
             step = 1
@@ -1572,7 +1578,6 @@ class Sequencer(Processor):
                        src=DSPConfiguration("P+1"),
                        comment="Configure DSP for loop")
         elif len(args) == 3:
-            dsp = self.DSP()
             start = args[0]
             stop = args[1]
             step = args[2]
@@ -1591,17 +1596,13 @@ class Sequencer(Processor):
             
         yield dsp
             
-        block_empty = not loop_block_start.assigned()
-        if not block_empty and len(args) > 0:
-            loop_block_start.value().kwargs["dsp_cep"] = dsp.source()
-            
         # Branch back to the start of the loop block if we haven't reached the end
         jump_condition = (dsp != stop) if len(args) > 0 else None
 
-        jump = self.store(src=loop_block_start.value(), 
-                         dest=Destination(Destination.Major.PC, 
-                                          Destination.PC_ABSOLUTE_BRANCH), 
-                         when=jump_condition,
-                         comment="Branch back to loop start")
-        if block_empty and len(args) > 0:
-            jump.kwargs["dsp_cep"] = dsp.source()
+        self.store(src=loop_block_start.value(), 
+                    dest=Destination(Destination.Major.PC, 
+                                    Destination.PC_ABSOLUTE_BRANCH), 
+                    when=jump_condition,
+                    dsp_cep=dsp.source(),
+                    comment="Branch back to loop start")
+

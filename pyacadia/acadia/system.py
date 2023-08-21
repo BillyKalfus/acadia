@@ -372,6 +372,7 @@ class Acadia:
                 dac_channel.analog_sample_frequency = 6e9
                 dac_channel.interface_sample_frequency = 1e9
                 dac_channel.interface_width_bytes = 16
+                dac_channel.dma = self._dac_dmas[dac_channel.num]
                 
                 self._DAC_channels.append(dac_channel)
                 
@@ -1317,14 +1318,9 @@ class Acadia:
             raise TypeError(f"Channel must be a DAC;"
                             f" received {channel}.")
             
-        dma = self._dac_dmas[channel.num]
-        
-        # Store a reference to the DMA chosen in the Channel object
-        channel.dma = dma
-            
         # When we request the descriptor, we need to get the address aligned to
         # 128 bits. We need the word address
-        descriptor = dma.request_descriptor(array.word_address(), 
+        descriptor = channel.dma.request_descriptor(array.word_address(), 
                                             array.byte_length() // channel.interface_width_bytes,
                                             decimate=decimate)
         
@@ -1482,10 +1478,10 @@ class Acadia:
         return bus_op & mask != 0
     
     @requires_sequencer
-    def channel_fifos_empty(self, *channels):
+    def any_channel_fifos_empty(self, *channels):
         """
         Create a condition that will determine whether the FIFOs of the DMAs
-        driving the given :class:`Channel`\s are empty.
+        driving any of the given :class:`Channel`\s are empty.
 
         :param channels: Channel(s) to check
         :type channels: list of :class:`Channel`
@@ -1500,6 +1496,26 @@ class Acadia:
 
         bus_op = self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("DMA_FIFO_EMPTY_DATAPORT"))
         return bus_op & mask != 0
+    
+    @requires_sequencer
+    def all_channel_fifos_empty(self, *channels):
+        """
+        Create a condition that will determine whether the FIFOs of the DMAs
+        driving all of the given :class:`Channel`\s are empty.
+
+        :param channels: Channel(s) to check
+        :type channels: list of :class:`Channel`
+        """
+
+        mask = 0
+        for channel in channels:
+            dma = channel.dma
+            bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
+            mask |= 1 << bit_position
+        bus_address = self._firmware.dma_fifo_empty.address().value()
+
+        bus_op = self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("DMA_FIFO_EMPTY_DATAPORT"))
+        return (~bus_op) & mask == 0
     
     @requires_sequencer
     def channels_running(self, *channels):
@@ -1746,6 +1762,7 @@ class Acadia:
         proc = Processor.active_processor()
         if proc is None:
             self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3] = directions
+            self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3 + 1] = directions
         else:
             raise TypeError(f"Unable to configure GPIO on processor {proc}.")
         
