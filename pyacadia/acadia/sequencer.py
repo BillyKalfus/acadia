@@ -865,17 +865,62 @@ class Sequencer(Processor):
         # Make sure that we didn't mess anything up
         if len(srcs) != len(dests):
             raise ValueError(f"Found {len(srcs)} sources and {len(dests)} destinations.")
-        
-        # Determine whether the operation was determined to be trivial
-        if len(srcs) > 0:
-            new_kwargs = {k:v for k,v in kwargs.items() if "src" not in k and "dest" not in k}
-            for i in range(len(srcs)):
-                new_kwargs[f"src{i+1}"] = srcs[i]
-                new_kwargs[f"dest{i+1}"] = dests[i]
 
-            instructions.append(STP(**new_kwargs))
-        elif len(instructions) != 0:
-            raise ValueError("Trivial STP generated with nonzero instruction buffer.")
+        instructions.append(
+            STP(src1=srcs[0],
+                dest1=dests[0],
+                src2=(srcs[1] if len(srcs) > 1 else Source(Source.Major.REG)),
+                dest2=(dests[1] if len(dests) > 1 else Source(Source.Major.REG)),
+                dsp_cep=(kwargs["dsp_cep"].source() if "dsp_cep" in kwargs else None),
+                comment=(kwargs["comment"] if "comment" in kwargs else None),
+                push_return=(kwargs["push_return"] if "push_return" in kwargs else False))
+        )
+        
+
+        # Propagate any provided comment to the compiled instructions
+        if "comment" in kwargs:
+            for instr in instructions:
+                instr.comment = kwargs["comment"]
+
+        instruction_resource.compiled = instructions
+
+        for res in resources:
+            res._released = True
+            
+    @Processor.instruction()
+    def STC(self, instruction_resource):
+        """
+        A direct abstraction of the STC instruction with additional source
+        compilation.
+        """
+
+        kwargs = instruction_resource.kwargs
+        instructions = []
+        resources = []
+
+        # Compile the sources       
+        src_stval,extra_instrs,extra_resources = self.compile_source(kwargs[f"src_stval"])
+        instructions += extra_instrs
+        resources += extra_resources
+        
+        src_tval,extra_instrs,extra_resources = self.compile_source(kwargs[f"src_tval"])
+        instructions += extra_instrs
+        resources += extra_resources
+
+        # Compile the destination
+        dest_stval = kwargs["dest_stval"]
+        if isinstance(dest_stval, self.Register) or isinstance(dest_stval, self.DSP):
+            dest_stval = dest_stval.destination()
+
+        # Create the instruction itself
+        instructions.append(
+            STC(src_stval=src_stval,
+                dest_stval=dest_stval,
+                src_tval=src_stval,
+                op=kwargs["op"],
+                dsp_cep=(kwargs["dsp_cep"].source() if "dsp_cep" in kwargs else None),
+                comment=(kwargs["comment"] if "comment" in kwargs else None))
+        )
 
         # Propagate any provided comment to the compiled instructions
         if "comment" in kwargs:
@@ -1296,57 +1341,59 @@ class Sequencer(Processor):
             else:
                 # The Operation is computing something that is not a comparison,
                 # compile it as a source and test whether the result is nonzero
-                src,src_instructions,src_resources = self.compile_source(condition)
-                stc_kwargs["src_tval"] = src
-                stc_kwargs["op"] = 0b11
-                return stc_kwargs,src_instructions,src_resources
+                return self.compile_condition(condition != 0, mask)
                 
             
         # Next, let's look at the arguments and compile as necessary
         # If one of them is a numeric or a register, we'll prefer to 
-        # put that in the mask since those don't need to be monitored as closely 
-        instructions = []
-        
+        # put that in the mask since those don't need to be monitored 
+        # as closely        
         if mask is not None:
             if mask == "left":
-                compiled_mask,mask_instructions,mask_resources = self.compile_source(condition._args[0])
-                instructions += mask_instructions
-                instructions.append(STP(src1=compiled_mask, 
-                                        dest1=Destination(Destination.Major.MASK)))
-                for res in mask_resources:
-                    res._released = True
-                compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
+                mask_obj = condition._args[0]
+                test_obj = condition._args[1]
             elif mask == "right":
-                compiled_mask,mask_instructions,mask_resources = self.compile_source(condition._args[1])
-                instructions += mask_instructions
-                instructions.append(STP(src1=compiled_mask, 
-                                        dest1=Destination(Destination.Major.MASK)))
-                for res in mask_resources:
-                    res._released = True
-                compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
+                mask_obj = condition._args[1]
+                test_obj = condition._args[0]
             else:
                 raise ValueError(f"Mask directive must be one of \"left\" or \"right\"; received {mask}.")
         elif is_numeric(condition._args[0]):
-            instructions.append(STP(src1=condition._args[0], 
-                                    dest1=Destination(Destination.Major.MASK)))
-            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
+            mask_obj = condition._args[0]
+            test_obj = condition._args[1]
         elif is_numeric(condition._args[1]):
-            instructions.append(STP(src1=condition._args[1], 
-                                    dest1=Destination(Destination.Major.MASK)))
-            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
-        elif isinstance(condition._args[0], self.Register) or isinstance(condition._args[0], self.DSP):
-            instructions.append(STP(src1=condition._args[0].source(), 
-                                    dest1=Destination(Destination.Major.MASK)))
-            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[1])
-        elif isinstance(condition._args[1], self.Register) or isinstance(condition._args[1], self.DSP):
-            instructions.append(STP(src1=condition._args[1].source(), 
-                                    dest1=Destination(Destination.Major.MASK)))
-            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
+            mask_obj = condition._args[1]
+            test_obj = condition._args[0]
+            
+        # We can't combine these conditions with those above because we want 
+        # to check for any numerics first
+        elif isinstance(condition._args[0], self.Register):
+            mask_obj = condition._args[0]
+            test_obj = condition._args[1]
+        elif isinstance(condition._args[1], self.Register):
+            mask_obj = condition._args[1]
+            test_obj = condition._args[0]
         else:
-            instructions.append(STP(src1=condition._args[1], 
-                                    dest1=Destination(Destination.Major.MASK)))
-            compiled_src,src_instructions,src_resources = self.compile_source(condition._args[0])
+            raise TypeError(f"Unable to determine test and mask roles for"
+                            f" condition {condition}")
+            
+        instructions = []
+            
+        compiled_mask,mask_instructions,mask_resources = self.compile_source(mask_obj)
+        instructions += mask_instructions
+        instructions.append(STP(src1=compiled_mask, 
+                                dest1=Destination(Destination.Major.MASK)))
+        for res in mask_resources:
+            res._released = True
+            
+        # Check to see if we should use the special operation mode that inverts
+        # the test value
+        if (isinstance(test_obj, Operation) 
+                and test_obj._op == "invert" 
+                and stc_kwargs["op"] & 0b11 == 0b00):
+            stc_kwargs["op"] = 0b10
+            test_obj = test_obj._args[0]
         
+        compiled_src, src_instructions, src_resources = self.compile_source(test_obj)
         stc_kwargs["src_tval"] = compiled_src
         instructions += src_instructions
         return stc_kwargs,instructions,src_resources

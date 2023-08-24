@@ -9,7 +9,7 @@ from functools import wraps
 import numpy as np
 
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Symbol, Operation
-from .sequencer import Sequencer
+from .sequencer import Sequencer, Source, Destination
 from .dma import DMA
 from .channel import Channel
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
@@ -1514,7 +1514,8 @@ class Acadia:
             mask |= 1 << bit_position
         bus_address = self._firmware.dma_fifo_empty.address().value()
 
-        bus_op = self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("DMA_FIFO_EMPTY_DATAPORT"))
+        bus_op = self._active_sequencer.bus_read(bus_address, 
+                                                 latency=self.get_bus_latency("DMA_FIFO_EMPTY_DATAPORT"))
         return (~bus_op) & mask == 0
     
     @requires_sequencer
