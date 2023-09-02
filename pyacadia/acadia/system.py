@@ -1116,7 +1116,6 @@ class Acadia:
                                   latency=latency)
                     with proc.repeat_until(bus_op != 0):
                         pass
-                return transfer_tag
             else:
                 raise TypeError(f"Unable to copy memory using processor {proc}.")
         else:

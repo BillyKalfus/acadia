@@ -21,6 +21,8 @@ These benefits (among others) motivate the implementation of a control system on
  RF Data Converters
 ====================
 
+The RF Data Converter subsystem of the RFSoC comprises a variety of digital signal processing hardware in addition to the actual data conversion cores themselves. The existence and performance of these modules is a critical benefit of using ther RFSoC, and we now describe a subset of these features employed in Acadia.
+
  Digital-to-Analog Converters (DAC)
 ------------------------------------
 
@@ -91,11 +93,145 @@ In an architecture centered around moving data from one place to another at high
  Conditionality Engine
 ^^^^^^^^^^^^^^^^^^^^^^^
 
+\begin{longtable} {@{}||c|>{\raggedright}p{2.5cm}|p{10cm}||@{}}
+  \hline
+  OP & Operation & Description \\ 
+  \hline\hline
+  \endfirsthead
+  
+  \hline
+  OP & Operation & Description \\ 
+  \hline\hline
+  \endhead
+  
+  \hline
+  \endfoot
+  
+  \hline
+  \endlastfoot
+  
+  0 & or(SRC AND mask) & A bitwise AND is computed between the source value and the mask, and the result is reduced with a bitwise OR. This will evaluate to 1 when any bits that are set in the mask are also set in SRC, ignoring any additional bits in SRC which may be set. \\ \hline
+  1 & or(SRC XOR mask) & This will evaluate to 1 when SRC does not equal MASK. \\ \hline
+  2 & or((not SRC) AND mask) &  \\ \hline
+  3 & or(SRC) & A reduced bitwise OR across all bits in SRC. This will evaluate to 1 when any bits in the source value are set.\\ \hline
+  4 & not or(SRC AND mask) & \\ \hline
+  5 & not or(SRC XOR mask) & A bitwise XOR is computed between the source value and the mask, the result is reduced with a bitwise OR, and the result is inverted. This will evaluate to 1 when SRC exactly matches the mask. \\ \hline
+  6 & not or((not SRC) AND mask) & The source value is inverted, a bitwise AND is computed between the inverted source value and the mask, the result is reduced with a bitwise OR, and this value is inverted. This will evaluate to 1 when all bits that are set in the mask are also set in SRC, ignoring any additional bits in SRC which may be set.  \\ \hline
+  7 & not or(SRC) & A reduced bitwise OR across all bits in SRC. \\ \hline
+  8-31 & Reserved & These values are reserved and behavior is undefined. \\ \hline
+\end{longtable}
+
  Stack
 ^^^^^^^
 
  Bus
 ^^^^^
+
+ Sources
+^^^^^^^^^
+
+\begin{longtable} {@{}||c|>{\raggedright}p{2.5cm}|p{10cm}||@{}}
+  \hline
+  SRC & Source & Description\\ 
+  \hline\hline
+  \endfirsthead
+  
+  \hline
+  SRC & Source & Description \\ 
+  \hline\hline
+  \endhead
+  
+  \hline
+  \endfoot
+  
+  \hline
+  \endlastfoot
+  
+  0-7 & R0-7 & The value of a particular general-purpose register. \\ \hline
+  8 & Program Counter &  \\ \hline
+  16 & IMM & The value of the IMM bitfield in the current instruction. \\ \hline
+  24 & Test Value Register & \\ \hline
+  32 & HEDGEHOG Flags & Input latching flags from the HEDGEHOG logic.\\ \hline
+  40 & Stack Pop & \\ \hline
+  48 & Bus Data Read & Reads the output of the bus and drives the read enable signal. \\ \hline
+  56 & DSP Pattern Detect & The lower 16 bits are connected to the DSP slice PATTERNDETECT signals. The upper 16 bits are connected to the PATTERNDETECTPAST signals. \\ \hline
+  64-71 & DSP P & The lower 32 bits of the DSP slice P registers. \\ \hline
+  
+\end{longtable}
+
+ Destinations
+^^^^^^^^^^^^^^
+
+\begin{longtable}{@{}||c|>{\raggedright}p{2.5cm}|p{10cm}||@{}}
+  \hline
+  DEST & Destination & Description \\ 
+  \hline\hline
+  \endfirsthead
+  
+  \hline
+  DEST & Destination & Description \\ 
+  \hline\hline
+  \endhead
+  
+  \hline
+  \endfoot
+  
+  \hline
+  \endlastfoot
+
+  0-7 & R0-7 & General purpose registers R0-R7. \\ \hline
+  8 & Program Counter & \\ \hline
+  16 & Instruction Hold & Writing to this location will cause the instruction memory output to hold its current value. When the instruction is complete, the Program Counter will be loaded with the value written to this destination. \\ \hline
+  24 & Branch Mask Register & The register containing the mask value used in branching instructions. \\ \hline
+  40 & Stack Push & \\ \hline
+  48 & Bus Address Register & The register which indexes the bus.\\ \hline
+  56 & Bus Data Write & \\ \hline
+  64-71 & DSP0-7 Configuration & Configures a DSP slice by writing to the OPMODE, ALUMODE, and CIN registers, as well as a register controlling CEP. Bits 3-0 are connected to the ALUMODE input. Bits 12-4 are connected to the OPMODE input. Bit 13 is connected to CIN. Bit 14 is connected to RSTP. Bits 16-15 control a register whose output is connected to the CEP input; if 0, it is unchanged. If 1, it is set until manually cleared. If 2, the register is cleared.  If 3, it is pulsed for one cycle. \\ \hline
+  72-79 & DSP AB & Loads DSP0-7 AB inputs with data. \\ \hline
+  80-87 & DSP C & Loads DSP0-7 C inputs with data. \\ \hline
+
+\end{longtable}
+
+ Instructions
+^^^^^^^^^^^^^^
+
+STP \newline \newline Store Data Parallel & 
+    \begin{tabular}{@{}c|p{3.2cm}|p{6.8cm}@{}}
+      127-113: & Reserved & \\ \hline
+      112: & 0 & \\ \hline
+      111-105: & Reserved & \\ \hline
+      104: & PUSH\_RETURN & When this bit is set, the value of the Program Counter minus 1 (to account for memory latency) is pushed to the stack if the PC is written. Note that if a particular destination is specifying the stack, then that transfer will override this bit. \\ \hline
+      103-96: & SRC1 & \\ \hline
+      95-88: & SRC2 & \\ \hline
+      87-80: & DEST1 & \\ \hline
+      79-72: & DEST2 & \\ \hline
+      71-69: & Reserved & \\ \hline
+      68: & DSP\_CEP\_EN & \\ \hline
+      67: & Reserved & \\ \hline
+      66-64: & DSP\_CEP & \\ \hline
+      63-32: & IMM1 & \\ \hline
+      31-0: & IMM2 & \\ \hline
+    \end{tabular} \\ \hline
+  
+  STC \newline \newline Store Data Conditional & 
+    \begin{tabular}{@{}c|p{3.2cm}|p{6.8cm}@{}}
+      127-113: & Reserved & \\ \hline
+      112: & 1 & \\ \hline
+      111-105: & Reserved & \\ \hline
+      105: & PUSH\_RETURN & Identical to PUSH\_RETURN in the STP instruction. \\ \hline
+      103-96: & SRC\_STVAL & The source to store data from, should the condition be satisfied.\\ \hline
+      95-88: & SRC\_TVAL & The source providing data to test a particular logical condition.\\ \hline
+      87-80: & DEST\_STVAL & The destination at which the data from SRC\_STVAL will be stored if the condition is satisfied.\\ \hline
+      79-77: & Reserved & \\ \hline
+      76-72: & OP & The operation executed between the test value and the mask register to determine whether a jump will occur. See Section \ref{sec_condition_table} for a description of values of this field. \\ \hline
+      71-69: & Reserved & \\ \hline
+      68: & DSP\_CEP\_EN & \\ \hline
+      67: & Reserved & \\ \hline
+      66-64: & DSP\_CEP & \\ \hline
+      63-32: & IMM\_STVAL & \\ \hline
+      31-0: & IMM\_TVAL & \\ \hline
+    \end{tabular} \\ \hline
+\end{longtable}
 
  Memory and Communication Infrastructure
 -----------------------------------------
@@ -123,6 +259,34 @@ In an architecture centered around moving data from one place to another at high
 
  Real-Time Direct Memory Access (DMA) Modules
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+\begin{longtable} {@{}||c|>{\raggedright}p{2.5cm}|p{10cm}||@{}}
+  \hline
+  Bits & Field Name & Description \\ 
+  \hline\hline
+  \endfirsthead
+  
+  \hline
+  Bits & Field Name & Description \\ 
+  \hline\hline
+  \endhead
+  
+  \hline
+  \endfoot
+  
+  \hline
+  \endlastfoot
+  
+  31-0 & LM1 & One less than the length of the trace to be played. \\ \hline
+  47-32 & ADDR & The address exposed to the HEDGEHOG logic for this descriptor. \\ \hline
+  55-48 & DECIMATE & A factor by which to decimate the stream. \\ \hline
+  56 & BLANK & When 1, the memory reset signal will be asserted during the descriptor.\\ \hline
+  57 & FIXED & When 1, the address output will not increment during the descriptor.\\ \hline
+  63-58 & Reserved & These bits are reserved and will be ignored. \\ \hline
+  % 47-44 & DEST & The value exposed on the TDEST port of the AXI-Stream address interface. \\ \hline
+  % 63-48 & USER & The value exposed on the TUSER port of the AXI-Stream address interface. \\ \hline
+  
+\end{longtable}
 
  ADC Sample FIFOs
 ^^^^^^^^^^^^^^^^^^

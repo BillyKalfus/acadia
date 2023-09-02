@@ -1,9 +1,7 @@
-from setuptools import setup, find_packages, Command
-from setuptools.command import install
+from setuptools import setup, find_packages, Command, Extension
+import platform
 import os
-import re
 import shutil
-import sys
 import pathlib
 from cffi import FFI
 
@@ -73,10 +71,15 @@ class RFDCCommand(Command):
             if f.endswith(".so"):
                 shutil.copy2(os.path.join(current_path, f), RFDCCommand.PACKAGE_DIR)
                 
+ps_functions_module = Extension("acadia.ps_functions",
+                                sources=["drivers/ps_functions.c", "drivers/ps_functions_py.c"],
+                                libraries=["pthread"])
+                
 setup (name = 'pyacadia',
        version = '1.0',
        description = 'Assembler, hardware interface, and firmware management for the Acadia quantum control system.',
        author = 'William Kalfus',
        author_email = 'william.kalfus@yale.edu',
-       cmdclass = {"install_drivers": RFDCCommand},
-       packages=find_packages())
+    #    cmdclass = {"install_drivers": RFDCCommand},
+       packages=find_packages(),
+       ext_modules=([ps_functions_module] if platform.processor() == "aarch64" else []))
