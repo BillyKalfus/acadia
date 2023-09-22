@@ -4,7 +4,7 @@
 -- 
 -- Create Date: 03/06/2023 04:58:59 PM
 -- Design Name: acadia
--- Module Name: acadia_adc_fifo - rtl
+-- Module Name: acadia_backpressure_fifo - rtl
 -- Project Name: acadia
 -- Target Devices: ZCU216
 -- Tool Versions: 2020.2
@@ -27,7 +27,7 @@ use IEEE.NUMERIC_STD.ALL;
 library xpm;
 use xpm.vcomponents.all;
 
-entity acadia_adc_fifo is
+entity acadia_backpressure_fifo is
     generic (
         WORD_WIDTH    : positive := 32;
         INPUT_WORDS   : positive := 4;
@@ -39,7 +39,7 @@ entity acadia_adc_fifo is
     );
     port (
         signal_in_clk    : in  std_logic;
-        signal_in_nrst   : in  std_logic;
+        signal_in_rst    : in  std_logic;
 
         -- A port for monitoring the status of the FIFO and resetting it
         monitor_clk          : in  std_logic;
@@ -58,9 +58,9 @@ entity acadia_adc_fifo is
         m_axis_tlast     : out std_logic;
         m_axis_tkeep     : out std_logic_vector((OUTPUT_WORDS*WORD_WIDTH/8)-1 downto 0)
     );
-end acadia_adc_fifo;
+end acadia_backpressure_fifo;
 
-architecture rtl of acadia_adc_fifo is
+architecture rtl of acadia_backpressure_fifo is
     ATTRIBUTE X_INTERFACE_INFO      : STRING;
     ATTRIBUTE X_INTERFACE_MODE      : STRING;
     ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
@@ -179,7 +179,7 @@ begin
     end generate monitor_sync_gen;
 
     -- Reset the whole thing on either of the reset inputs
-    rst_int_sync <= (not signal_in_nrst) or monitor_rst_sync;
+    rst_int_sync <= signal_in_rst or monitor_rst_sync;
 
     -- Finally, synchronize the reset into the output domain
     rst_out_async_gen: if ASYNCHRONOUS = true generate
@@ -256,7 +256,7 @@ begin
         if rising_edge(m_axis_aclk) then
             if (rst_int_output_sync = '1') then
                 misalignment_latch <= '0';
-            elsif (fifo_valid = '1' and or_reduce(fifo_tlast_out(fifo_tlast_out'high-1 downto 0)) = '1') then
+            elsif (fifo_valid = '1' and or_reduce(fifo_tlast_out(fifo_tlast_out'high downto 0)) = '1') then
                 misalignment_latch <= '1';
             end if;
         end if;

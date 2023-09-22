@@ -44,22 +44,19 @@ entity acadia_dma is
         descriptor_mem_addr : out std_logic_vector(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0);
         descriptor_mem_clk  : out std_logic;
         
-        -- AXI-Stream data interface
-        din                 : in  std_logic_vector(DATA_WIDTH-1 downto 0);
-        data_tdata          : out std_logic_vector(DATA_WIDTH-1 downto 0);
-        data_tvalid         : out std_logic;
-        data_tlast          : out std_logic;
+        -- data input stream
+        data_in             : in  std_logic_vector(DATA_WIDTH-1 downto 0);
 
-        -- AXI-Stream address interface
-        address_tdata       : out std_logic_vector(ADDRESS_WIDTH-1 downto 0);
-        address_tvalid      : out std_logic;
-        address_tlast       : out std_logic;
-        
-        -- Memory control interface
-        mem_control_addr    : out std_logic_vector(ADDRESS_WIDTH-1 downto 0);
-        mem_control_rst     : out std_logic;
-        mem_control_en      : out std_logic;
-        mem_control_clk     : out std_logic;
+        -- outputs with sideband signals
+        data_out_tdata  : out std_logic_vector(DATA_WIDTH-1 downto 0);
+        data_out_tvalid : out std_logic;
+        data_out_tlast  : out std_logic;
+
+        address_out_tdata  : out std_logic_vector(ADDRESS_WIDTH-1 downto 0);
+        address_out_tvalid : out std_logic;
+        address_out_tlast  : out std_logic;
+
+        data_address_invalid : out std_logic;
         
         -- Descriptor FIFO interface
         descriptor_address_fifo_in           : in  std_logic_vector(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0);
@@ -82,31 +79,25 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_MODE : STRING;
     ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
     
-    ATTRIBUTE X_INTERFACE_INFO of clk : SIGNAL is "xilinx.com:signal:clock:1.0 clk clk";
-    ATTRIBUTE X_INTERFACE_PARAMETER of clk : SIGNAL is "ASSOCIATED_BUSIF ADDRESS:DATA";
-    
-    ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_dout : SIGNAL is "xilinx.com:interface:bram:1.0 DESCRIPTOR_MEM DOUT";
-    ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_addr : SIGNAL is "xilinx.com:interface:bram:1.0 DESCRIPTOR_MEM ADDR";
-    ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_clk  : SIGNAL is "xilinx.com:interface:bram:1.0 DESCRIPTOR_MEM CLK";
-    ATTRIBUTE X_INTERFACE_MODE of descriptor_mem_dout : SIGNAL is "Master";
-    
-    ATTRIBUTE X_INTERFACE_INFO of address_tdata       : SIGNAL is "xilinx.com:interface:axis:1.0 ADDRESS TDATA";
-    ATTRIBUTE X_INTERFACE_INFO of address_tlast       : SIGNAL is "xilinx.com:interface:axis:1.0 ADDRESS TLAST";
-    ATTRIBUTE X_INTERFACE_INFO of address_tvalid      : SIGNAL is "xilinx.com:interface:axis:1.0 ADDRESS TVALID";
-    ATTRIBUTE X_INTERFACE_MODE of address_tdata       : SIGNAL is "Master";
-    ATTRIBUTE X_INTERFACE_PARAMETER of address_tdata  : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(ADDRESS_WIDTH/8);
+    ATTRIBUTE X_INTERFACE_INFO of clk      : SIGNAL is "xilinx.com:signal:clock:1.0 clk clk";
+    ATTRIBUTE X_INTERFACE_PARAMETER of clk : SIGNAL is "ASSOCIATED_BUSIF data_out:address_out:descriptor_mem";
 
-    ATTRIBUTE X_INTERFACE_INFO of data_tdata          : SIGNAL is "xilinx.com:interface:axis:1.0 DATA TDATA";
-    ATTRIBUTE X_INTERFACE_INFO of data_tlast          : SIGNAL is "xilinx.com:interface:axis:1.0 DATA TLAST";
-    ATTRIBUTE X_INTERFACE_INFO of data_tvalid         : SIGNAL is "xilinx.com:interface:axis:1.0 DATA TVALID";
-    ATTRIBUTE X_INTERFACE_MODE of data_tdata          : SIGNAL is "Master";
-    ATTRIBUTE X_INTERFACE_PARAMETER of data_tdata     : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(DATA_WIDTH/8);
-    
-    ATTRIBUTE X_INTERFACE_INFO of mem_control_addr    : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL ADDR";
-    ATTRIBUTE X_INTERFACE_INFO of mem_control_rst     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL RST";
-    ATTRIBUTE X_INTERFACE_INFO of mem_control_en      : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL EN";
-    ATTRIBUTE X_INTERFACE_INFO of mem_control_clk     : SIGNAL is "xilinx.com:interface:bram:1.0 MEM_CONTROL CLK";
-    ATTRIBUTE X_INTERFACE_MODE of mem_control_addr    : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_dout : SIGNAL is "xilinx.com:interface:bram:1.0 descriptor_mem DOUT";
+    ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_addr : SIGNAL is "xilinx.com:interface:bram:1.0 descriptor_mem ADDR";
+    ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_clk  : SIGNAL is "xilinx.com:interface:bram:1.0 descriptor_mem CLK";
+    ATTRIBUTE X_INTERFACE_MODE of descriptor_mem_dout : SIGNAL is "Master";
+
+    ATTRIBUTE X_INTERFACE_INFO of data_out_tdata      : SIGNAL is "xilinx.com:interface:axis:1.0 data_out TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of data_out_tvalid     : SIGNAL is "xilinx.com:interface:axis:1.0 data_out TVALID";
+    ATTRIBUTE X_INTERFACE_INFO of data_out_tlast      : SIGNAL is "xilinx.com:interface:axis:1.0 data_out TLAST";
+    ATTRIBUTE X_INTERFACE_MODE of data_out_tdata      : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of data_out_tdata : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(DATA_WIDTH/8);
+
+    ATTRIBUTE X_INTERFACE_INFO of address_out_tdata      : SIGNAL is "xilinx.com:interface:axis:1.0 address_out TDATA";
+    ATTRIBUTE X_INTERFACE_INFO of address_out_tvalid     : SIGNAL is "xilinx.com:interface:axis:1.0 address_out TVALID";
+    ATTRIBUTE X_INTERFACE_INFO of address_out_tlast      : SIGNAL is "xilinx.com:interface:axis:1.0 address_out TLAST";
+    ATTRIBUTE X_INTERFACE_MODE of address_out_tdata      : SIGNAL is "Master";
+    ATTRIBUTE X_INTERFACE_PARAMETER of address_out_tdata : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(ADDRESS_WIDTH/8);
 
     -- Inverted reset
     signal rst              : std_logic;
@@ -131,6 +122,10 @@ architecture rtl of acadia_dma is
     -- Combinational progress flags
     signal decimation_valid : std_logic;
     signal descriptor_done  : std_logic;
+
+    -- Internal drivers for sideband signals
+    signal valid_int : std_logic;
+    signal last_int  : std_logic;
     
 begin    
     
@@ -205,9 +200,6 @@ begin
             end if;
         end if;
     end process descriptor_point_proc;
-        
-    -- Drive the output interfaces
-    mem_control_clk <= clk;
 
     -- We'll choose to make the last sample in the decimation the 
     -- valid one solely because then we can condition the "last"
@@ -220,39 +212,35 @@ begin
       
     output_proc: process(clk) begin
         if rising_edge(clk) then
-            
+            -- Data output gets pipelined so that it's aligned with the handshake signals
+            data_out_tdata <= data_in;
+
             -- Update the address outputs depending on whether the descriptor is fixed or not
             if(descriptor_fixed = '1') then                
-                address_tdata    <= std_logic_vector(descriptor_addr);
-                mem_control_addr <= std_logic_vector(descriptor_addr);
+                address_out_tdata <= std_logic_vector(descriptor_addr);
             elsif(descriptor_dec = "01") then
-                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr);
-                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr);
+                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr);
             elsif(descriptor_dec = "10") then
-                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr);
-                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr);
+                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr);
             elsif(descriptor_dec = "11") then
-                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr);
-                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr);
+                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr);
             else
-                address_tdata    <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
-                mem_control_addr <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
+                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
             end if;
 
             -- Set the valid outputs depending on run state and decimation mode
-            address_tvalid <= running_int and decimation_valid;
-            data_tvalid    <= running_int and decimation_valid;
+            valid_int <= running_int and decimation_valid;
             
             -- Set the last outputs depending on run state, decimation mode, and descriptor done
-            address_tlast  <= descriptor_done and running_int and decimation_valid;
-            data_tlast     <= descriptor_done and running_int and decimation_valid;
-            
-            -- Control the emaining ancillary signals
-            mem_control_rst <= (not running_int) or descriptor_blank;
-            mem_control_en  <= '1'; -- we'll keep the memory always enabled and use reset to mute the output
-            data_tdata      <= din;
-            
+            last_int  <= descriptor_done and running_int and decimation_valid;
         end if;
     end process output_proc;
+
+    data_out_tvalid    <= valid_int;
+    data_out_tlast     <= last_int;
+    address_out_tvalid <= valid_int;
+    address_out_tlast  <= last_int;
+
+    data_address_invalid <= not valid_int;
     
 end rtl;

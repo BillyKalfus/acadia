@@ -588,7 +588,7 @@ class BusDecoder(BusDevice, HDLModule):
     
 class BusDataMoverController(BusDevice, HDLModule):
         
-    def __init__(self, name, datamovers, addr_bits, bus_data_bits=32, bus_addr_bits=32):
+    def __init__(self, name, datamovers, addr_bits, bus_data_bits=32, bus_addr_bits=32, status_count_width=16):
         """
         A bus interface for access to the command and status ports of an array
         of AXI DataMovers. A small number of registers are also provided for 
@@ -598,19 +598,20 @@ class BusDataMoverController(BusDevice, HDLModule):
         
         The registers are:
 
-        - 0: CMD_ADDR/STS
+        - 0: CMD_ADDR/TRANSFER_STATUS
             Writing to this register issues a command to the DataMover 
             command FIFO whose address field is populated with the data
             written to this register. The values of the other fields are 
             derived from prior writes to other registers (see below).
             Reading this register pops a word from the status FIFO.
 
-        - 1: CMD_BTT/STS_CNT
+        - 1: CMD_BTT/TRANSFER_STATUS_COUNT
             This register stores the number of bytes for the DataMover to
             transfer when its next command is issued. Reading this register 
-            returns the number of status words currently in the FIFO.
+            returns the number of status words received by the controller
+            since its last reset.
 
-        - 2: CMD_MISC/CMD_ACK
+        - 2: CMD_MISC/TOTAL_BYTES_TRANSFERRED
             This register stores additional miscellaneous bits needed for a
             DataMover command:
                 0     : TYPE
@@ -619,24 +620,27 @@ class BusDataMoverController(BusDevice, HDLModule):
                 9-6   : xCACHE
                 13-10 : xUSER
                 ADDR_BITS+14 - 14 : ADDR high bits
-            Reading this register returns a value with one bit per DataMover.
-            This bit is set once the DataMover command interface sets TREADY
-            after this module sets TVALID, indicating that it accepted the 
-            command driven by the module (this includes when TREADY is already
-            set when the command is issued).
+                
+            Reading this register returns the total number of bytes transferred
+            by the DataMover since the controller was last reset.
 
-        - 3: RST/DM_ERR
-            Writing a value to this register with a given bit set clears 
-            CMD_ACK and STS_VLD signals for the DataMover corresponding to
-            that bit position. Multiple bits may be set to clear multiple 
-            registers at once. The value returned by this register contains 
-            one bit per DataMover, where each bit is directly connected to 
-            the error signal for the DataMover.
+        - 3: CONTROLLER_RESET/CONTROLLER_STATUS
+            Writing any value to this register clears its lowest bit 
+            (described below) as well as TRANSFER_STATUS_COUNT and 
+            TOTAL_BYTES_TRANSFERRED.
+            Reading this register returns a bitfield with some status signals:
+                0: This bit is set once the DataMover command interface sets 
+                    TREADY after this module sets TVALID, indicating that it 
+                    accepted the command driven by the module (this includes
+                    when TREADY is already set when the command is issued).
+                1: This bit is connected directly to the error signal for the
+                   DataMover.
                 
         :param datamovers: A list of strings containing the names of the DataMovers
         """
         self._datamovers = datamovers
         self._addr_bits = addr_bits
+        self._status_count_width = status_count_width
         
         BusDevice.__init__(self, name, self.size, bus_data_bits, bus_addr_bits)
         HDLModule.__init__(self, name)
@@ -739,7 +743,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'    signal {datamover}_cmd_misc    : std_logic_vector({self._addr_bits-32+14-1} downto 0);\n\n'
             hdl += f'    signal {datamover}_sts         : std_logic_vector(31 downto 0);\n'
             hdl += f'    signal {datamover}_sts_rd      : std_logic;\n'
-            hdl += f'    signal {datamover}_sts_cnt     : std_logic_vector(3 downto 0);\n'
+            hdl += f'    signal {datamover}_sts_cnt     : std_logic_vector({self._status_count_width-1} downto 0);\n'
         hdl += f'begin\n\n'
         
         hdl += f'    reg_wr_proc: process(master_bus_clk) begin\n'
@@ -822,7 +826,7 @@ class BusDataMoverController(BusDevice, HDLModule):
             hdl += f'                when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= {datamover}_sts;\n'
             hdl += f'                when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= "{"0"*(32-4)}" & {datamover}_sts_cnt;\n'
+            hdl += f'                    master_bus_miso <= "{"0"*(32-self._status_count_width)}" & {datamover}_sts_cnt;\n'
             hdl += f'                when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
             hdl += f'                    master_bus_miso <= dm_cmd_ack;\n'
             hdl += f'                when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
@@ -921,6 +925,7 @@ class AXIMemoryArray(HDLModule):
                  axi_id_width=0,
                  read_only=False, 
                  use_rst=True, 
+                 instantiate_memories=True,
                  synth_jobs=16):
         """
         :param module_name: The name of the module
@@ -968,6 +973,9 @@ class AXIMemoryArray(HDLModule):
         :param read_data_pipeline: The number of additional pipeline stages to
             add to the data output of the memory.
         :type read_data_pipeline: int, optional
+        :param instatiate_memories: If ``True``, The memories will be integrated
+            into the module; otherwise, the segmented memory controller will be
+            exposed as the user port.
         :param synth_jobs: Number of processor jobs to use for synthesizing the
             BRAM controller IP
         :type synth_jobs: int, optional
@@ -996,6 +1004,7 @@ class AXIMemoryArray(HDLModule):
         self._read_only = read_only
         self._use_rst = use_rst
         self._synth_jobs = synth_jobs
+        self._instantiate_memories = instantiate_memories
         super().__init__(module_name)
         
     def generate_hdl(self):
@@ -1067,22 +1076,28 @@ class AXIMemoryArray(HDLModule):
         for i in range(self._elements):
             hdl += f'\n'
             if not self._read_only:
-                hdl += f'        mem{i}_din     : in  std_logic_vector({self._width-1} downto 0);\n'
-            hdl += f'        mem{i}_dout    : out std_logic_vector({self._width-1} downto 0);\n'
-            hdl += f'        mem{i}_addr    : in  std_logic_vector({log2_mem_depth-1} downto 0);\n'
+                hdl += f'        mem{i}_din     : {"in " if self._instantiate_memories else "out"} std_logic_vector({self._width-1} downto 0);\n'
+            hdl += f'        mem{i}_dout    : {"out" if self._instantiate_memories else "in "} std_logic_vector({self._width-1} downto 0);\n'
+            hdl += f'        mem{i}_addr    : {"in " if self._instantiate_memories else "out"} std_logic_vector({log2_mem_depth-1} downto 0);\n'
             if not self._synchronous:
-                hdl += f'        mem{i}_clk     : in  std_logic;\n'
+                hdl += f'        mem{i}_clk     : {"in " if self._instantiate_memories else "out"} std_logic;\n'
             if not self._read_only:
-                hdl += f'        mem{i}_we      : in  std_logic;\n'
+                if self._instantiate_memories:
+                    hdl += f'        mem{i}_we      : in  std_logic;\n'
+                else:
+                    hdl += f'        mem{i}_we      : out std_logic_vector({(self._controller_width // 8)-1} downto 0);\n'
+
             if self._use_rst:
-                hdl += f'        mem{i}_rst     : in  std_logic;\n'
-            
+                hdl += f'        mem{i}_rst     : {"in " if self._instantiate_memories else "out"} std_logic;\n'
+            if not self._instantiate_memories:
+                hdl += f'        mem{i}_en      : out std_logic;\n'
         
         hdl = hdl[:-2] + f"\n    );\n"
         hdl += f'end {self._module_name}_axi_memory;\n\n'
 
         hdl += f'architecture rtl of {self._module_name}_axi_memory is\n\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n' 
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO      : STRING;\n' 
+        hdl += f'    ATTRIBUTE X_INTERFACE_MODE      : STRING;\n' 
         hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;\n\n'
         
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO of s_axi_awaddr  : SIGNAL is "xilinx.com:interface:aximm:1.0 S_AXI AWADDR";\n'
@@ -1156,16 +1171,19 @@ class AXIMemoryArray(HDLModule):
                         f'";\n')
 
         for i in range(self._elements):
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} ADDR";\n'
             if not self._read_only:
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_din  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} DIN";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_dout : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} DOUT";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_addr : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} ADDR";\n'
             if not self._synchronous:
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_clk  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} CLK";\n'
             if not self._read_only:
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_we   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} WE";\n'
             if self._use_rst:
                 hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_rst  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} RST";\n'
+            if not self._instantiate_memories:
+                hdl += f'    ATTRIBUTE X_INTERFACE_INFO of mem{i}_en   : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 mem{i} EN";\n'        
+                hdl += f'    ATTRIBUTE X_INTERFACE_MODE of mem{i}_addr : SIGNAL is "Master";\n'
         
         hdl += "\n"
         hdl += f'    component {self._module_name}_ip\n'
@@ -1269,26 +1287,26 @@ class AXIMemoryArray(HDLModule):
         
         hdl += "\n"
 
-        user_input_to_output_delay = self._user_port_input_pipeline + self._user_port_output_pipeline
-        
-        for element in range(self._elements):
-            for i in range(self._user_port_input_pipeline):
-                hdl += f'    signal mem{element}_addr_{"d"*(i+1)} : std_logic_vector({log2_mem_depth-1} downto 0);\n'
+        if self._instantiate_memories:
+            user_input_to_output_delay = self._user_port_input_pipeline + self._user_port_output_pipeline
+            for element in range(self._elements):
+                for i in range(self._user_port_input_pipeline):
+                    hdl += f'    signal mem{element}_addr_{"d"*(i+1)} : std_logic_vector({log2_mem_depth-1} downto 0);\n'
+                    
+                    if not self._read_only:
+                        hdl += f'    signal mem{element}_din_{"d"*(i+1)}  : std_logic_vector({self._width-1} downto 0);\n'
+                        hdl += f'    signal mem{element}_we_{"d"*(i+1)}   : std_logic;\n'
                 
-                if not self._read_only:
-                    hdl += f'    signal mem{element}_din_{"d"*(i+1)}  : std_logic_vector({self._width-1} downto 0);\n'
-                    hdl += f'    signal mem{element}_we_{"d"*(i+1)}   : std_logic;\n'
-            
-            hdl += f'    signal mem{element}_dout_int : std_logic_vector({self._width-1} downto 0);\n'  
-            
-            for i in range(self._user_port_output_pipeline):
-                hdl += f'    signal mem{element}_dout_int_{"d"*(i+1)} : std_logic_vector({self._width-1} downto 0);\n'    
+                hdl += f'    signal mem{element}_dout_int : std_logic_vector({self._width-1} downto 0);\n'  
+                
+                for i in range(self._user_port_output_pipeline):
+                    hdl += f'    signal mem{element}_dout_int_{"d"*(i+1)} : std_logic_vector({self._width-1} downto 0);\n'    
 
-            if self._use_rst:
-                for i in range(user_input_to_output_delay+1):
-                    hdl += f'    signal mem{element}_rst_{"d"*(i+1)}  : std_logic;\n'
-                
-            hdl += "\n"
+                if self._use_rst:
+                    for i in range(user_input_to_output_delay+1):
+                        hdl += f'    signal mem{element}_rst_{"d"*(i+1)}  : std_logic;\n'
+                    
+                hdl += "\n"
         
         hdl += "\n"
         
@@ -1402,7 +1420,7 @@ class AXIMemoryArray(HDLModule):
 
         
             
-        if self._user_port_input_pipeline > 0:
+        if self._instantiate_memories and self._user_port_input_pipeline > 0:
             for element in range(self._elements):
                 # Create the user interface
                 user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
@@ -1419,104 +1437,113 @@ class AXIMemoryArray(HDLModule):
                 hdl += f'        end if;\n'
                 hdl += f'    end process mem{element}_user_port_input_pipeline_proc;\n\n'
 
-        for element in range(self._elements):
-            user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
-            if self._use_rst:
-                hdl += f'    mem{element}_user_port_rst_proc: process({user_clk}) begin\n'
-                hdl += f'        if rising_edge({user_clk}) then\n'
+            for element in range(self._elements):
+                user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
+                if self._use_rst:
+                    hdl += f'    mem{element}_user_port_rst_proc: process({user_clk}) begin\n'
+                    hdl += f'        if rising_edge({user_clk}) then\n'
 
-                for i in range(user_input_to_output_delay+1):
-                    delay = "_" + "d"*i if i != 0 else ""
-                    hdl += f'            mem{element}_rst_{"d"*(i+1)}      <= mem{element}_rst{delay};\n'
-                hdl += "\n"
+                    for i in range(user_input_to_output_delay+1):
+                        delay = "_" + "d"*i if i != 0 else ""
+                        hdl += f'            mem{element}_rst_{"d"*(i+1)}      <= mem{element}_rst{delay};\n'
+                    hdl += "\n"
 
-                hdl += f'            if(mem{element}_rst_{"d"*(user_input_to_output_delay+1)} = \'1\') then\n'   
-                hdl += f'                mem{element}_dout <= (others => \'0\');\n' 
-                hdl += f'            else\n'
-                hdl += f'                mem{element}_dout <= mem{element}_dout_int;\n'
-                hdl += f'            end if;\n'
-                hdl += f'        end if;\n'
-                hdl += f'    end process mem{element}_user_port_rst_proc;\n\n'
-            else:
-                hdl += f'    mem{element}_dout <= mem{element}_dout_int;\n\n'
+                    hdl += f'            if(mem{element}_rst_{"d"*(user_input_to_output_delay+1)} = \'1\') then\n'   
+                    hdl += f'                mem{element}_dout <= (others => \'0\');\n' 
+                    hdl += f'            else\n'
+                    hdl += f'                mem{element}_dout <= mem{element}_dout_int;\n'
+                    hdl += f'            end if;\n'
+                    hdl += f'        end if;\n'
+                    hdl += f'    end process mem{element}_user_port_rst_proc;\n\n'
+                else:
+                    hdl += f'    mem{element}_dout <= mem{element}_dout_int;\n\n'
             
         delayed_controller_input_suffix = "_" + "d"*self._controller_port_input_pipeline if self._controller_port_input_pipeline != 0 else ""
-        delayed_user_input_suffix = "_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""
         for element in range(self._elements):     
-            user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"       
-            hdl += f'    mem{element}_inst : xpm_memory_tdpram\n'
-            hdl += f'        generic map (\n'
-            hdl += f'           ADDR_WIDTH_A            => {controller_address_bits-log2_elements-controller_unused_bits},\n'
-            hdl += f'           ADDR_WIDTH_B            => {log2_mem_depth},\n'
-            hdl += f'           AUTO_SLEEP_TIME         => 0,\n'
-            hdl += f'           BYTE_WRITE_WIDTH_A      => 8,\n'
-            hdl += f'           BYTE_WRITE_WIDTH_B      => 8,\n'
-            hdl += f'           CASCADE_HEIGHT          => 0,\n'
-            hdl += f'           CLOCKING_MODE           => "{"common_clock" if self._synchronous else "independent_clock"}",\n'
-            hdl += f'           ECC_MODE                => "no_ecc",\n'
-            hdl += f'           MEMORY_INIT_FILE        => "none",\n'
-            hdl += f'           MEMORY_INIT_PARAM       => "0",\n'
-            hdl += f'           MEMORY_OPTIMIZATION     => "true",\n'
-            hdl += f'           MEMORY_PRIMITIVE        => "{self._primitive}",\n'
-            hdl += f'           MEMORY_SIZE             => {self._size_bits},\n'
-            hdl += f'           MESSAGE_CONTROL         => 0,\n'
-            hdl += f'           READ_DATA_WIDTH_A       => {self._controller_width},\n'
-            hdl += f'           READ_DATA_WIDTH_B       => {self._width},\n'
-            hdl += f'           READ_LATENCY_A          => {1 + self._controller_port_output_pipeline},\n'
-            hdl += f'           READ_LATENCY_B          => {1 + self._user_port_output_pipeline},\n'
-            hdl += f'           READ_RESET_VALUE_A      => "0",\n'
-            hdl += f'           READ_RESET_VALUE_B      => "0",\n'
-            hdl += f'           RST_MODE_A              => "SYNC",\n'
-            hdl += f'           RST_MODE_B              => "SYNC",\n'
-            hdl += f'           SIM_ASSERT_CHK          => 0,\n'
-            hdl += f'           USE_EMBEDDED_CONSTRAINT => 0,\n'
-            hdl += f'           USE_MEM_INIT            => 1,\n'
-            hdl += f'           USE_MEM_INIT_MMI        => 0,\n'
-            hdl += f'           WAKEUP_TIME             => "disable_sleep",\n'
-            hdl += f'           WRITE_DATA_WIDTH_A      => {self._controller_width},\n'
-            hdl += f'           WRITE_DATA_WIDTH_B      => {self._width},\n'
-            hdl += f'           WRITE_MODE_A            => "no_change",\n'
-            hdl += f'           WRITE_MODE_B            => "no_change",\n'
-            hdl += f'           WRITE_PROTECT           => 1\n'
-            hdl += f'        )\n'
-            hdl += f'        port map (\n'
-            hdl += f'           clka   => s_axi_aclk,\n'
-            hdl += f'           addra  => controller_addr{delayed_controller_input_suffix}({controller_address_bits-log2_elements-1} downto {controller_unused_bits}),\n'
-            hdl += f'           douta  => controller_mem{element}_rddata,\n'
-            hdl += f'           dina   => controller_wrdata{delayed_controller_input_suffix},\n'
-            hdl += f'           ena    => controller_mem{element}_en_gated{delayed_controller_input_suffix},\n'
-            hdl += f'           regcea => \'1\',\n'
-            hdl += f'           rsta   => \'0\',\n'
-            hdl += f'           wea    => controller_we{delayed_controller_input_suffix},\n\n'
-            
-            hdl += f'           clkb   => {user_clk},\n'
-            hdl += f'           addrb  => mem{element}_addr{delayed_user_input_suffix},\n'
-            hdl += f'           doutb  => mem{element}_dout_int,\n'
-            if self._read_only:
-                hdl += f'           dinb   => "{"0"*self._width}",\n'
-            else:
-                hdl += f'           dinb   => mem{element}_din{delayed_user_input_suffix},\n'
-            hdl += f'           enb    => \'1\',\n'
-            hdl += f'           regceb => \'1\',\n'
-            hdl += f'           rstb   => \'0\',\n'
+            if self._instantiate_memories:
+                delayed_user_input_suffix = "_" + "d"*self._user_port_input_pipeline if self._user_port_input_pipeline != 0 else ""
+           
+                hdl += f'    mem{element}_inst : xpm_memory_tdpram\n'
+                hdl += f'        generic map (\n'
+                hdl += f'           ADDR_WIDTH_A            => {controller_address_bits-log2_elements-controller_unused_bits},\n'
+                hdl += f'           ADDR_WIDTH_B            => {log2_mem_depth},\n'
+                hdl += f'           AUTO_SLEEP_TIME         => 0,\n'
+                hdl += f'           BYTE_WRITE_WIDTH_A      => 8,\n'
+                hdl += f'           BYTE_WRITE_WIDTH_B      => 8,\n'
+                hdl += f'           CASCADE_HEIGHT          => 0,\n'
+                hdl += f'           CLOCKING_MODE           => "{"common_clock" if self._synchronous else "independent_clock"}",\n'
+                hdl += f'           ECC_MODE                => "no_ecc",\n'
+                hdl += f'           MEMORY_INIT_FILE        => "none",\n'
+                hdl += f'           MEMORY_INIT_PARAM       => "0",\n'
+                hdl += f'           MEMORY_OPTIMIZATION     => "true",\n'
+                hdl += f'           MEMORY_PRIMITIVE        => "{self._primitive}",\n'
+                hdl += f'           MEMORY_SIZE             => {self._size_bits},\n'
+                hdl += f'           MESSAGE_CONTROL         => 0,\n'
+                hdl += f'           READ_DATA_WIDTH_A       => {self._controller_width},\n'
+                hdl += f'           READ_DATA_WIDTH_B       => {self._width},\n'
+                hdl += f'           READ_LATENCY_A          => {1 + self._controller_port_output_pipeline},\n'
+                hdl += f'           READ_LATENCY_B          => {1 + self._user_port_output_pipeline},\n'
+                hdl += f'           READ_RESET_VALUE_A      => "0",\n'
+                hdl += f'           READ_RESET_VALUE_B      => "0",\n'
+                hdl += f'           RST_MODE_A              => "SYNC",\n'
+                hdl += f'           RST_MODE_B              => "SYNC",\n'
+                hdl += f'           SIM_ASSERT_CHK          => 0,\n'
+                hdl += f'           USE_EMBEDDED_CONSTRAINT => 0,\n'
+                hdl += f'           USE_MEM_INIT            => 1,\n'
+                hdl += f'           USE_MEM_INIT_MMI        => 0,\n'
+                hdl += f'           WAKEUP_TIME             => "disable_sleep",\n'
+                hdl += f'           WRITE_DATA_WIDTH_A      => {self._controller_width},\n'
+                hdl += f'           WRITE_DATA_WIDTH_B      => {self._width},\n'
+                hdl += f'           WRITE_MODE_A            => "no_change",\n'
+                hdl += f'           WRITE_MODE_B            => "no_change",\n'
+                hdl += f'           WRITE_PROTECT           => 1\n'
+                hdl += f'        )\n'
+                hdl += f'        port map (\n'
+                hdl += f'           clka   => s_axi_aclk,\n'
+                hdl += f'           addra  => controller_addr{delayed_controller_input_suffix}({controller_address_bits-log2_elements-1} downto {controller_unused_bits}),\n'
+                hdl += f'           douta  => controller_mem{element}_rddata,\n'
+                hdl += f'           dina   => controller_wrdata{delayed_controller_input_suffix},\n'
+                hdl += f'           ena    => controller_mem{element}_en_gated{delayed_controller_input_suffix},\n'
+                hdl += f'           regcea => \'1\',\n'
+                hdl += f'           rsta   => \'0\',\n'
+                hdl += f'           wea    => controller_we{delayed_controller_input_suffix},\n\n'
                 
-            if self._read_only:
-                hdl += f'           web    => "{"0"*(self._width // 8)}",\n'
-            else:
-                for i in range(self._width // 8):
-                    hdl += f'           web({i}) => mem{element}_we{delayed_user_input_suffix},\n'
+                hdl += f'           clkb   => {"s_axi_aclk" if self._synchronous else f"mem{element}_clk"},\n'
+                hdl += f'           addrb  => mem{element}_addr{delayed_user_input_suffix},\n'
+                hdl += f'           doutb  => mem{element}_dout_int,\n'
+                if self._read_only:
+                    hdl += f'           dinb   => "{"0"*self._width}",\n'
+                else:
+                    hdl += f'           dinb   => mem{element}_din{delayed_user_input_suffix},\n'
+                hdl += f'           enb    => \'1\',\n'
+                hdl += f'           regceb => \'1\',\n'
+                hdl += f'           rstb   => \'0\',\n'
                     
-            hdl += '\n'
-            hdl += f'           dbiterra => open,\n'
-            hdl += f'           dbiterrb => open,\n'
-            hdl += f'           sbiterra => open,\n'
-            hdl += f'           sbiterrb => open,\n'
-            hdl += f'           injectdbiterra => \'0\',\n'
-            hdl += f'           injectdbiterrb => \'0\',\n'
-            hdl += f'           injectsbiterra => \'0\',\n'
-            hdl += f'           injectsbiterrb => \'0\',\n'
-            hdl += f'           sleep => \'0\'\n'
-            hdl += f'        );\n\n'
+                if self._read_only:
+                    hdl += f'           web    => "{"0"*(self._width // 8)}",\n'
+                else:
+                    for i in range(self._width // 8):
+                        hdl += f'           web({i}) => mem{element}_we{delayed_user_input_suffix},\n'
+                        
+                hdl += '\n'
+                hdl += f'           dbiterra => open,\n'
+                hdl += f'           dbiterrb => open,\n'
+                hdl += f'           sbiterra => open,\n'
+                hdl += f'           sbiterrb => open,\n'
+                hdl += f'           injectdbiterra => \'0\',\n'
+                hdl += f'           injectdbiterrb => \'0\',\n'
+                hdl += f'           injectsbiterra => \'0\',\n'
+                hdl += f'           injectsbiterrb => \'0\',\n'
+                hdl += f'           sleep => \'0\'\n'
+                hdl += f'        );\n\n'
+            else:
+                hdl += f'    mem{element}_addr  <= controller_addr{delayed_controller_input_suffix}({controller_address_bits-log2_elements-1} downto {controller_unused_bits});\n'
+                hdl += f'    controller_mem{element}_rddata <= mem{element}_dout;\n'
+                hdl += f'    mem{element}_din   <= controller_wrdata{delayed_controller_input_suffix};\n'
+                hdl += f'    mem{element}_en    <= controller_mem{element}_en_gated{delayed_controller_input_suffix};\n'
+                hdl += f'    mem{element}_we    <= controller_we{delayed_controller_input_suffix};\n'
+                if not self._synchronous:
+                    hdl += f'    mem{element}_clk    <= s_axi_aclk;\n'
             
         hdl += f'end rtl;\n\n'
         
