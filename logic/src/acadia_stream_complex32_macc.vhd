@@ -125,26 +125,26 @@ architecture rtl of acadia_stream_complex32_macc is
     -- Input quadratures
     signal a_re : signed(17 downto 0);
     signal a_im : signed(17 downto 0);
-    signal b_re : signed(17 downto 0);
-    signal b_im : signed(17 downto 0);
+    signal b_re : signed(15 downto 0);
+    signal b_im : signed(15 downto 0);
     
     -- Products
-    signal a_re_b_re : signed(31 downto 0);
-    signal a_im_b_re : signed(31 downto 0);
-    signal a_re_b_im : signed(31 downto 0);
-    signal a_im_b_im : signed(31 downto 0);
+    signal a_re_b_re : signed(33 downto 0);
+    signal a_im_b_re : signed(33 downto 0);
+    signal a_re_b_im : signed(33 downto 0);
+    signal a_im_b_im : signed(33 downto 0);
 
     -- Sign extended products for accumulator
-    signal a_re_b_re_sign : signed(15 downto 0);
-    signal a_im_b_re_sign : signed(15 downto 0);
-    signal a_re_b_im_sign : signed(15 downto 0);
-    signal a_im_b_im_sign : signed(15 downto 0);
+    signal a_re_b_re_sign : signed(12 downto 0);
+    signal a_im_b_re_sign : signed(12 downto 0);
+    signal a_re_b_im_sign : signed(12 downto 0);
+    signal a_im_b_im_sign : signed(12 downto 0);
     
     -- Accumulator components
-    signal accumulator_re : signed(47 downto 0);
-    signal accumulator_im : signed(47 downto 0);
-    signal accumulator_re_d : std_logic_vector(47 downto 0);
-    signal accumulator_im_d : std_logic_vector(47 downto 0);
+    signal accumulator_re : signed(46 downto 0);
+    signal accumulator_im : signed(46 downto 0);
+    signal accumulator_re_d : std_logic_vector(46 downto 0);
+    signal accumulator_im_d : std_logic_vector(46 downto 0);
 
     -- Kernel memory access signals
     signal kernel_memory_pointer : std_logic_vector(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
@@ -180,8 +180,8 @@ begin
             ADDR_WIDTH_A        => LOG2_KERNEL_MEMORY_DEPTH,
             ADDR_WIDTH_B        => KERNEL_MEMORY_EXTERNAL_PORT_ADDRESS_WIDTH,
             AUTO_SLEEP_TIME     => 0,
-            BYTE_WRITE_WIDTH_A  => 32,
-            BYTE_WRITE_WIDTH_B  => KERNEL_MEMORY_EXTERNAL_PORT_DATA_WIDTH,
+            BYTE_WRITE_WIDTH_A  => 8,
+            BYTE_WRITE_WIDTH_B  => 8,
             CASCADE_HEIGHT      => 0, 
             CLOCKING_MODE       => KERNEL_MEMORY_CLOCK_MODE,
             ECC_MODE            => "no_ecc",
@@ -270,8 +270,8 @@ begin
     data_in_tready <= '1';
 
     -- Alias the kernel memory output as quadrature values
-    b_re <= signed(kernel_memory_data(15 downto 0));
-    b_im <= signed(kernel_memory_data(31 downto 16));
+    b_re(15 downto 0)  <= signed(kernel_memory_data(15 downto 0));
+    b_im(15 downto 0)  <= signed(kernel_memory_data(31 downto 16));
 
     -- First pipeline stage: sum the individual components of the input signal
     input_narrowing_proc: process(clk) 
@@ -342,12 +342,12 @@ begin
                 accumulator_im       <= (others => '0');
             elsif(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "00") then
                 accumulator_done_int <= '0';
-                accumulator_re(47 downto 16) <= signed(registers_mosi);
-                accumulator_re(15 downto 0)  <= x"0000";
+                accumulator_re(46 downto 15) <= signed(registers_mosi);
+                accumulator_re(14 downto 0)  <= (others => '0');
             elsif(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "01") then
                 accumulator_done_int <= '0';
-                accumulator_im(47 downto 16) <= signed(registers_mosi);
-                accumulator_im(15 downto 0)  <= x"0000";
+                accumulator_im(46 downto 15) <= signed(registers_mosi);
+                accumulator_im(14 downto 0)  <= (others => '0');
             elsif(product_valid = '1' and accumulator_done_int = '0') then
                 accumulator_done_int <= product_last;
                 accumulator_re       <= accumulator_re + (a_re_b_re_sign & a_re_b_re) - (a_im_b_im_sign & a_im_b_im);
@@ -360,12 +360,13 @@ begin
         if rising_edge(clk) then
             case write_last & write_mode is
                 when "01" =>
-                    output_data  <= std_logic_vector(a_im) & std_logic_vector(a_re);
+                    output_data(15 downto 0)  <= std_logic_vector(a_im(a_im'high downto a_im'high-15));
+                    output_data(31 downto 16) <= std_logic_vector(a_re(a_re'high downto a_re'high-15));
                     output_valid <= (input_valid and not write_last) or (input_valid and input_last and write_last);
                     output_last  <= input_last;
                 when "10" =>
-                    output_data(15 downto 0)  <= std_logic_vector(a_re_b_re(31 downto 15) - a_im_b_im(31 downto 15));
-                    output_data(31 downto 16) <= std_logic_vector(a_re_b_im(31 downto 15) + a_im_b_re(31 downto 15));
+                    output_data(15 downto 0)  <= std_logic_vector(a_re_b_re(a_re_b_re'high downto a_re_b_re'high-15) - a_im_b_im(a_im_b_im'high downto a_im_b_im'high-15));
+                    output_data(31 downto 16) <= std_logic_vector(a_re_b_im(a_re_b_im'high downto a_re_b_im'high-15) + a_im_b_re(a_im_b_re'high downto a_im_b_re'high-15));
                     output_valid              <= (product_valid and not write_last) or (product_valid and product_last and write_last);
                     output_last               <= product_last;
                 when others =>
@@ -413,9 +414,9 @@ begin
     registers_read_proc: process(clk) begin
         if rising_edge(clk) then
             if(registers_addr(1 downto 0) = "00") then
-                registers_miso <= std_logic_vector(accumulator_re_d(47 downto 16));
+                registers_miso <= std_logic_vector(accumulator_re_d(46 downto 15));
             elsif(registers_addr(1 downto 0) = "01") then
-                registers_miso <= std_logic_vector(accumulator_im_d(47 downto 16));
+                registers_miso <= std_logic_vector(accumulator_im_d(46 downto 15));
             elsif(registers_addr(1 downto 0) = "10") then
                 registers_miso(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0) <= kernel_memory_pointer;
                 registers_miso(15 downto LOG2_KERNEL_MEMORY_DEPTH)  <= (others => '0');
