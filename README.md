@@ -65,45 +65,40 @@ cd ..
 1. Modify `petalinux/configure_petalinux.sh` so that the directories are correct for your system
 1. Create the Petalinux project by running `petalinux/configure_petalinux.sh` 
 1. Change directories into the Petalinux project
-1. Configure the rootfs
-   1. Run `petalinux-config -c rootfs`
-   1. Enter `apps` and enable `trd-autostart`
-   1. Go back to the main menu
-   1. Enter `user packages` and enable everything
-   1. Exit and save the configuration
 
 1. Build PetaLinux and create a bootable image
-   1. Build the kernel, bootloader, and PMUFW
+   1. Build the kernel. This will take a while and then fail.
       ```
       petalinux-build
+      ```
+
+   1. Apply a patch to LAPACK by running
+      ```
+      patch -ru -d build/tmp/work/aarch64-xilinx-linux/lapack/3.8.0-r0/recipe-sysroot-native/usr/share/cmake-3.15/Modules/FortranCInterface < project-spec/meta-scipy/recipes-devtools/cmake/cmake-native/0001-FortranCInterface-Fix-broken-search-for-test-exe-whe.patch
+      ```
+
+   1. Run `petalinux-build` again. At the end, it should say that it successfully built the project but failed to copy built images to a TFTP directory; ignore this.
+
+   1. Build the bootloader and PMU firmware.
+      ```
       petalinux-build -c bootloader
       petalinux-build -c fsbl
       petalinux-build -c pmufw
       ```
-      The first one will take some time and all of them will complain that it failed to copy built images to tftpboot, ignore this
 
    1. Package the build into a bootable image with the new FPGA bitstream
       ```
       cd images/linux
       petalinux-package --boot --format BIN --fsbl zynqmp_fsbl.elf --fpga system.bit --u-boot
       ```
-   1. Prepare SD card for boot
-      1. Copy `BOOT.BIN`, `image.ub`, and `boot.scr` to an SD card formatted as FAT32
-      1. Make a file on the root of the SD card called `autostart.sh` with the following contents (and anything else you may want to add which will run when the board boots):
-      ```
-      #!/bin/sh
 
-      hostname <HOSTNAME>
+1. Prepare SD card for boot
 
-      ifconfig -a | grep eth0
-      RESULT=$?
-      if [ $RESULT -eq 0 ]; then
-         ifconfig eth0 down
-         ifconfig eth0 hw ether <MAC ADDRESS>
-         ifconfig eth0 up
-      fi
+   1. Ensure that your SD card is formatted as FAT32.
 
-      screen -dm bash -c "jupyter lab --no-browser --port=8070 --allow-root --ip=\"*\" --LabApp.token='' --LabApp.password=''"
-      ```
+   1. From within the PetaLinux project's `images/linux` directory, copy `BOOT.BIN`, `image.ub`, and `boot.scr` to the card.
+
+   1. From the `petalinux` directory of this repo, copy `autostart.sh` to the card, making any changes necessary for your network. Note that this doesn't need to be done every time, as no part of the build touches this file; if you had a copy on your card already that was working, it's unlikely that this needs to be changed!
+      
 
 1. Insert SD card into the socket on the ZCU216 and turn on the power switch.

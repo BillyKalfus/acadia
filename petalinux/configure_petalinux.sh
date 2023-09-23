@@ -31,3 +31,29 @@ cp $SRC_DIR/system-user.dtsi project-spec/meta-user/recipes-bsp/device-tree/file
 # Add the packages 
 cat $SRC_DIR/packages.txt >> project-spec/meta-user/conf/user-rootfsconfig
 
+# Enable the packages
+# For this we have to add "=y" to every line in packages.txt
+cat $SRC_DIR/packages.txt | while read line
+do
+    echo "$line"=y >> project-spec/configs/rootfs_config
+done
+
+# Download the scipy layer
+cd project-spec
+git clone -b zeus https://github.com/gpanders/meta-scipy 
+cd ..
+
+# Add the layer as a user layer
+echo CONFIG_USER_LAYER_0=\""$VIVADO_PROJ_DIR"/"$BSP_NAME"/project-spec/meta-scipy\" >> project-spec/configs/config
+echo CONFIG_USER_LAYER_1=\"\" >> project-spec/configs/config
+
+# Enable scipy and lapack
+echo CONFIG_python3-scipy >> project-spec/meta-user/conf/user-rootfsconfig
+echo CONFIG_lapack >> project-spec/meta-user/conf/user-rootfsconfig
+echo CONFIG_python3-scipy=y >> project-spec/configs/rootfs_config
+echo CONFIG_lapack=y >> project-spec/configs/rootfs_config
+
+# Add recipes
+echo SIGGEN_UNLOCKED_RECIPES += \"gcc-cross-aarch64 libgcc-initial\" >> project-spec/meta-user/conf/petalinuxbsp.conf
+echo FORTRAN_forcevariable = \",fortran\" >> project-spec/meta-user/conf/petalinuxbsp.conf
+echo RUNTIMETARGET_append_pn-gcc-runtime = \" libquadmath\" >> project-spec/meta-user/conf/petalinuxbsp.conf

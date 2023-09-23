@@ -23,6 +23,9 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
+library xpm;
+use xpm.vcomponents.all;
+
 entity acadia_stream_adder is
     generic (
         WORDS : positive := 8;
@@ -54,6 +57,7 @@ entity acadia_stream_adder is
         sum_tkeep  : out std_logic_vector((WORDS*B_WORD_WIDTH/8)-1 downto 0);
 
         -- Register access
+        registers_clk   : in  std_logic;
         registers_mosi  : in  std_logic_vector(31 downto 0);
         registers_miso  : out std_logic_vector(31 downto 0);
         registers_addr  : in  std_logic_vector(31 downto 0);
@@ -96,6 +100,7 @@ architecture rtl of acadia_stream_adder is
     ATTRIBUTE X_INTERFACE_MODE of sum_tdata  : SIGNAL is "Master";
     ATTRIBUTE X_INTERFACE_PARAMETER of sum_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 1,HAS_TSTRB 0,HAS_TREADY 1,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(WORDS*B_WORD_WIDTH/8);
     
+    ATTRIBUTE X_INTERFACE_INFO of registers_clk : SIGNAL is "xilinx.com:interface:bram:1.0 registers CLK";
     ATTRIBUTE X_INTERFACE_INFO of registers_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 registers DIN";
     ATTRIBUTE X_INTERFACE_INFO of registers_miso: SIGNAL is "xilinx.com:interface:bram:1.0 registers DOUT";
     ATTRIBUTE X_INTERFACE_INFO of registers_addr: SIGNAL is "xilinx.com:interface:bram:1.0 registers ADDR";
@@ -108,6 +113,7 @@ architecture rtl of acadia_stream_adder is
 
 
     signal rst       : std_logic;
+    signal rst_ext   : std_logic;
     signal tlast_err : std_logic;
     signal range_err : std_logic;
 begin
@@ -170,18 +176,39 @@ begin
         end if;
     end process tlast_err_proc;
 
-    registers_miso(0) <= range_err;
-    registers_miso(1) <= tlast_err;
+    -- Expose the error signals through a CDC
+    xpm_cdc_registers_miso : xpm_cdc_array_single
+        generic map (
+            DEST_SYNC_FF   => 4,   
+            INIT_SYNC_FF   => 0,   
+            SIM_ASSERT_CHK => 0,
+            SRC_INPUT_REG  => 1, 
+            WIDTH          => 32
+        )
+        port map (
+            src_clk   => clk,
+            src_in(0) => range_err,
+            src_in(1) => tlast_err,
+            src_in(31 downto 2) => (others => '0'),
 
-    -- Create a register-driven reset signal
-    rst_proc: process(clk) begin
-        if rising_edge(clk) then
-            if(rst = '1') then
-                rst <= '0';
-            elsif(registers_en = '1' and registers_we = '1') then
-                rst <= registers_mosi(2);
-            end if;
-        end if;
-    end process rst_proc;
+            dest_out => registers_miso,
+            dest_clk => registers_clk
+        );
+
+    rst_ext <= registers_en and registers_we and registers_mosi(2);
+
+    xpm_cdc_rst : xpm_cdc_single
+        generic map (
+            DEST_SYNC_FF   => 4,   
+            INIT_SYNC_FF   => 0,   
+            SIM_ASSERT_CHK => 0,
+            SRC_INPUT_REG  => 1 
+        )
+        port map (
+            src_clk  => registers_clk,
+            src_in   => rst_ext,
+            dest_out => rst,
+            dest_clk => clk
+        );
 
 end rtl;

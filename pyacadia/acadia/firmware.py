@@ -1092,16 +1092,22 @@ class Firmware:
                                     f"hedgehog/input{idx}_datamover/m_axi_mm2s_aresetn", 
                                     f"hedgehog/proc_sys_reset_{inp['AXI_clock']}/peripheral_aresetn")
 
-                    # Connect command, status, and error
+                    # Connect command and status
                     connect_bd_intf_net(f, 
                                         f"hedgehog/input{idx}_datamover_controller/cmd", 
                                         f"hedgehog/input{idx}_datamover/S_AXIS_MM2S_CMD")
                     connect_bd_intf_net(f, 
                                         f"hedgehog/input{idx}_datamover_controller/sts", 
                                         f"hedgehog/input{idx}_datamover/M_AXIS_MM2S_STS")
-                    connect_bd_net(f, 
-                                   f"hedgehog/input{idx}_datamover/mm2s_err", 
-                                   f"hedgehog/input{idx}_datamover_controller/err")
+                    
+                    # Connect the error signal through a CDC
+                    # TODO: this isn't always necessary
+                    create_ip(f, name=f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
+                    set_property(f, name=f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err", properties={"CDC_TYPE": "xpm_cdc_single"})
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_clk", f"hedgehog/clk_wiz/{inp['AXI_clock']}")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_in", f"hedgehog/input{idx}_datamover/mm2s_err")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_out", f"hedgehog/input{idx}_datamover_controller/err")
                     
                     # Connect the datamover to the switch through a FIFO
                     create_ip(f, f"hedgehog/input{idx}_datamover_fifo", "xilinx.com:ip:axis_data_fifo:2.0")
@@ -1187,16 +1193,21 @@ class Firmware:
                                     f"hedgehog/module{idx_module}_s2mm_datamover_controller/master_bus",
                                     f"hedgehog/sequencer_bus_decoder/module{idx_module}_s2mm_datamover_controller")
 
-                # Connect command, status, and error
+                # Connect command and status
                 connect_bd_intf_net(f, 
                                     f"hedgehog/module{idx_module}_s2mm_datamover_controller/cmd", 
                                     f"hedgehog/module{idx_module}_datamover/S_AXIS_S2MM_CMD")
                 connect_bd_intf_net(f, 
                                     f"hedgehog/module{idx_module}_s2mm_datamover_controller/sts", 
                                     f"hedgehog/module{idx_module}_datamover/M_AXIS_S2MM_STS")
-                connect_bd_net(f, 
-                               f"hedgehog/module{idx_module}_s2mm_datamover_controller/err",
-                                f"hedgehog/module{idx_module}_datamover/s2mm_err")
+                
+                # Connect the error signal through a CDC
+                create_ip(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
+                set_property(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err", properties={"CDC_TYPE": "xpm_cdc_single"})
+                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_clk", f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_in", f"hedgehog/module{idx_module}_datamover/s2mm_err")
+                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_out", f"hedgehog/module{idx_module}_s2mm_datamover_controller/err")
 
                 if module["kind"] == "direct":
                     # No MM2S needed, just connect to the datamover (through a FIFO)
@@ -1337,16 +1348,21 @@ class Firmware:
                                         f"hedgehog/module{idx_module}_mm2s_datamover_controller/master_bus",
                                         f"hedgehog/sequencer_bus_decoder/module{idx_module}_mm2s_datamover_controller")
 
-                    # Connect command, status, and error
+                    # Connect command and status
                     connect_bd_intf_net(f, 
                                         f"hedgehog/module{idx_module}_mm2s_datamover_controller/cmd", 
                                         f"hedgehog/module{idx_module}_datamover/S_AXIS_MM2S_CMD")
                     connect_bd_intf_net(f, 
                                         f"hedgehog/module{idx_module}_mm2s_datamover_controller/sts", 
                                         f"hedgehog/module{idx_module}_datamover/M_AXIS_MM2S_STS")
-                    connect_bd_net(f, 
-                                    f"hedgehog/module{idx_module}_mm2s_datamover_controller/err",
-                                    f"hedgehog/module{idx_module}_datamover/mm2s_err")
+                    
+                    # Connect the error signal through a CDC
+                    create_ip(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
+                    set_property(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err", properties={"CDC_TYPE": "xpm_cdc_single"})
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_clk", f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_in", f"hedgehog/module{idx_module}_datamover/mm2s_err")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_out", f"hedgehog/module{idx_module}_mm2s_datamover_controller/err")
                     
                     # Add FIFOs for the inputs
                     

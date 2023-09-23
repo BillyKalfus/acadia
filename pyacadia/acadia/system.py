@@ -3,13 +3,13 @@ __all__ = ["Acadia", "ChannelSynchronizer"]
 import os
 import mmap
 import time
-import copy
+from dataclasses import dataclass
 from functools import wraps
 
 import numpy as np
 
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Symbol, Operation
-from .sequencer import Sequencer, Source, Destination
+from .sequencer import Sequencer
 from .dma import DMA
 from .channel import Channel
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
@@ -284,6 +284,223 @@ class ChannelSynchronizer(Synchronizer):
             
         super().__exit__(exc_type, exc_val, exc_tb)
         
+@dataclass
+class StreamConfiguration:
+    """
+    An abstraction for configurations of the stream processing path.
+    
+    The ``input_source`` field defines the source of data driving the stream. 
+    If an ``int`` is provided, this is understood to indicate which slave port 
+    of the input switch should be used. If ``input_source`` is a 
+    :class:`Channel` object (which must be an ADC), then the default behavior 
+    will depend on whether the specified ADC is directly connected to the input
+    switch; if so, then that channel's input switch port number is inferred, 
+    but if not, an output of the ADC switch will need to be used. By default 
+    the first ADC switch output is used, but if multiple ADCs that aren't 
+    directly connected to the stream input switch are to be used 
+    simultaneously, a different ADC switch output must be specified with 
+    ``ADC_switch_output_num``.
+    
+    To specify an input from memory, ``input_source`` may be a string
+    indicating which interconnect to read from; this will be one of
+    ``bulk``, ``config``, or ``sequencer``. A given interconnect may have
+    multiple DataMovers driving the input switch; by default the first one
+    for the specified type will be used, but for simultaneous streaming an 
+    input should be manually specified by providing a switch port number 
+    directly.
+    
+    The ``module`` field indicates which stream processing module to use.
+    If an integer is provided, this is interpreted as the module number.
+    If a string is provided, this indicates the kind of module to request, the
+    first of which will be used. As with the inputs, if simultaneous streaming 
+    is desired, the module number may need to be directly provided.
+    
+    In order to infer port numbers, a reference to a :class:`Firmware` object
+    is required. If the hardware being configured does not use the default 
+    firmware, the hardware's :class:`Firmware` instance should be provided in
+    the ``firmware`` field.
+    
+    """
+    input_source: object    
+    adc_switch_output_num : int = None
+    module: object
+    firmware: Firmware = None
+    
+    def __post_init__(self):
+        if self.firmware is None:
+            self.firmware = Firmware()
+        
+        if isinstance(self.input_source, Channel):
+            if self.input_source.is_dac:
+                raise ValueError("Input source channels must be ADCs.")
+            
+            # Establish some internal fields for mapping requested inputs and 
+            # modules to internal switch port numbers
+            self._input_switch_master = None
+            self._input_switch_slave = None
+            self._adc_switch_master = None
+            self._adc_switch_slave = None
+            
+            # We now need to determine which switch input port to use
+            # First, check if the ADC is directly connected to the input switch
+            for idx,inp in enumerate(self.firmware["stream_processing_path"]["inputs"]):
+                if inp["kind"] == "ADC" and inp["channel"] == self.input_source.num:
+                    self._input_switch_master = idx
+                    break
+                    
+            if self._input_switch_master is None:
+                # We haven't yet found it, configure the ADC input switch if it exists
+                if len([inp for inp in self.firmware["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"]) == 0:
+                    raise ValueError(f"Requested an ADC that isn't directly"
+                                     " connected to the input switch in a"
+                                     " system without an ADC switch.")
+                self._adc_switch_master = self.input_source.num
+                self._adc_switch_slave = self.adc_switch_output_num if self.adc_switch_output_num is not None else 0
+                
+                # Figure out which master port of the input switch is given by the specified ADC output
+                adc_switch_inputs = []
+                for idx,inp in enumerate(self.firmware["stream_processing_path"]["inputs"]):
+                    if inp["kind"] == "ADC_switch":
+                        adc_switch_inputs.append(idx)
+                        
+                # This will throw an error if there aren't enough ADC switch outputs to accommodate the 
+                # the requested switch output
+                self._input_switch_master = adc_switch_inputs[self._adc_switch_slave]
+                
+                
+                # Figure out which master for the ADC switch it is
+                adc_switch_inputs = list(range(self.firmware.NUM_ADCS))
+                for inp in self.firmware["stream_processing_path"]["inputs"]:
+                    if inp["kind"] == "ADC":
+                        adc_switch_inputs.remove(inp["channel"])
+                
+                # This will raise an exception if it's not in the list
+                self._adc_switch_master = adc_switch_inputs.index(self.input_source.num)
+            
+        elif isinstance(self.input_source, str):
+            # Go through all the inputs and determine which ports correspond to datamovers
+            # for the various interconnects
+            memory_ports = {"bulk": [], "config": [], "sequencer": []}
+            for idx,inp in enumerate(self.firmware["stream_processing_path"]["inputs"]):
+                if inp["kind"] == "memory":
+                    memory_ports[inp["source"]].append(idx)
+                    
+            if self.input_source not in memory_ports:
+                raise ValueError(f"Unrecognized memory source {self.input_source}")
+            
+            # Return the first one for the given type
+            # If there aren't any, this will just throw an error
+            self._input_switch_master = memory_ports[self.input_source][0]
+            
+        elif isinstance(self.input_source, int):
+            self._input_switch_master = self.input_source
+            
+        else:
+            raise TypeError(f"Invalid type of input source ({type(self.input_source)})")
+        
+        # Now determine which module to use
+        if isinstance(self.module, str):
+            self._input_switch_slave = self.modules()[self.module][0]
+        elif isinstance(self.module, int):
+            self._input_switch_slave = self.module
+        else:
+            raise TypeError(f"Invalid type for specifying module: {type(self.input_source)}")
+            
+        
+    def inputs(self):
+        """
+        Create lists of input port numbers for the input types available.
+        This function can be used when you know you want to use an input of a
+        particular kind, but do not know which port numbers will provide that
+        input.
+        
+        :return: A ``dict`` whose keys are input kinds and whose values are 
+            lists, whose elements are port numbers for inputs of the kind
+            specified by the key
+        """
+        
+        memory_ports = {"bulk": [], "config": [], "sequencer": [], "ADC_switch": []}
+        for idx,inp in enumerate(self.firmware["inputs"]):
+            if inp["kind"] == "memory":
+                memory_ports[inp["source"]].append(idx)
+            elif inp["kind"] == "ADC_switch":
+                memory_ports[inp["kind"]].append(idx)
+            elif inp["kind"] == "ADC":
+                memory_ports[f"ADC{inp['channel']}"] = idx
+            else:
+                raise ValueError(f"Unexpected input kind in firmware: {inp['kind']}")
+        return memory_ports
+    
+    def modules(self):
+        """
+        Create lists of module numbers for the module types available. This
+        function can be used when you know you want to process a stream with
+        a particular kind of module, but do not know which module number to 
+        use.
+        
+        :return: A ``dict`` whose keys are module kinds and whose values are 
+            lists, the elements of which are port numbers for modules of the 
+            kind specified by the corresponding key.
+        """
+        
+        modules = {"bulk": [], "sequencer": [], "config": [], 
+                       "dsp": [], "adder": [], "cmacc": []}
+        for idx,module in enumerate(self.firmware["stream_processing_path"]['modules']):
+            if module["kind"] == "direct":
+                modules[module["source"]].append(idx)
+            else:
+                modules[module["kind"]].append(idx)
+                
+        return modules
+            
+        
+class AcadiaArray:
+    """
+    A wrapper for a segment of memory in the Acadia hardware and efficient 
+    routines for populating and transferring it. Instances are initialized 
+    with a region specifier that indicates which region of memory the 
+    array should encapsulate (described further in :meth:`__init__`).
+    The memory segment backing an instance of this class is not allocated 
+    until :meth:`allocate` is explicitly called on it, allowing higher-level 
+    functions to manipulate the array in ways that would require recompilation
+    without having to instantiate a new object (and therefore lose any 
+    references to it enclosed within other objects).
+    """
+    
+    def __init__(self, region=None, size=None, generator=None, dtype=np.int8):
+        """
+        Create an empty reference to an array.
+        
+        :param region: The memory region in which to create the array. If an
+            instance of :class:`Channel`, the type of the underlying memory 
+            will be determined by the instance's ``memory_type`` attribute.
+            Otherwise, one may pass a subclass of ``type``, the type will be
+            directly used to instantiate the array when allocated.
+            
+        :type region: :class:`Channel` or subclass of ``type``
+        
+        :param size: The size of the array in bytes. This does not need to be
+            provided at instantiation but an exception will be thrown if an
+            unsized array is allocated.
+            
+        :type size: int or a :class:`Symbol` encapsulating an int
+        
+        :param generator: An object that can be used to populate the array.
+            See documentation for :meth:`populate` for further information
+            about how population behavior depends on the type of this 
+            parameter.
+            
+        :param dtype: The type of the array to which the mapped memory will
+            be cast. 
+        """
+        if isinstance(region, Channel):
+            self._type = region.memory_type
+        elif isinstance(region, type):
+            self._type = type
+        else:
+            raise TypeError(f"Invalid region specifier {region}")
+        
+        
 class Acadia:
     """
     A class that implements system-wide commands for the Acadia hardware.
@@ -351,7 +568,7 @@ class Acadia:
         def zdma_postinit(zdma_self):
             zdma_self.fci_bus_address = self._firmware.sequencer_bus_decoder["zdma_controller"].address().value()
             zdma_self.channel = zdma_self._resource_id
-            super().__post_init__()
+            super(zdma_self).__post_init__()
         
         self._ZDMA = ManagedResource("ZDMAResource", 
                                          (ZDMA,), 
@@ -361,6 +578,13 @@ class Acadia:
         
         self._ADC_AXIS_switch = AXISSwitch()
         
+        self._create_cache()
+        self._create_dac_arrays()
+        self._create_cmacc_kernel_arrays()
+        self._create_pl_ddr_arrays()
+        self._create_ps_ddr_arrays()
+        self._create_ocm_arrays()
+        
         # Create channel objects that abstract the channels of this board
         # so that when parameters are updated, everything that depends on
         # the channel receives the update
@@ -369,26 +593,23 @@ class Acadia:
         for tile in range(4):
             for block in range(4):
                 dac_channel = Channel(tile=tile, block=block, is_dac=True)
-                dac_channel.analog_sample_frequency = 6e9
-                dac_channel.interface_sample_frequency = 1e9
-                dac_channel.interface_width_bytes = 16
+                dac_channel.memory_type = self.DACArray[tile*4 + block]
+                dac_channel.analog_sample_frequency = self._firmware["rfdc"]["dac"]["tile_sample_rate_hz"][tile]
+                dac_channel.interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["dac"]["tile_axis_clocks"][tile]] 
+                                                          * self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 32)
+                dac_channel.interface_width_bytes = self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 8
                 dac_channel.dma = self._dac_dmas[dac_channel.num]
                 
                 self._DAC_channels.append(dac_channel)
                 
                 adc_channel = Channel(tile=tile, block=block, is_dac=False)
-                adc_channel.analog_sample_frequency = 2e9
-                adc_channel.interface_sample_frequency = 1e9
-                adc_channel.interface_width_bytes = 16
+                adc_channel.analog_sample_frequency = self._firmware["rfdc"]["adc"]["tile_sample_rate_hz"][tile]
+                adc_channel.interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["adc"]["tile_axis_clocks"][tile]] 
+                                                          * self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 32)
+                adc_channel.interface_width_bytes = self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 8
                 
                 self._ADC_channels.append(adc_channel)
                 
-        self._create_cache()
-        self._create_dac_arrays()
-        self._create_cmacc_kernel_arrays()
-        self._create_pl_ddr_arrays()
-        self._create_ps_ddr_arrays()
-        self._create_ocm_arrays()
         
     def attach(self):
         """
