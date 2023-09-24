@@ -467,7 +467,7 @@ class AcadiaArray:
     references to it enclosed within other objects).
     """
     
-    def __init__(self, region=None, size=None, generator=None, dtype=np.int8):
+    def __init__(self, size=None, region=None, generator=None, dtype=np.int8):
         """
         Create an empty reference to an array.
         
@@ -477,7 +477,7 @@ class AcadiaArray:
             Otherwise, one may pass a subclass of ``type``, the type will be
             directly used to instantiate the array when allocated.
             
-        :type region: :class:`Channel` or subclass of ``type``
+        :type region: :class:`Channel` or :class:`ManagedMemory`
         
         :param size: The size of the array in bytes. This does not need to be
             provided at instantiation but an exception will be thrown if an
@@ -485,21 +485,74 @@ class AcadiaArray:
             
         :type size: int or a :class:`Symbol` encapsulating an int
         
-        :param generator: An object that can be used to populate the array.
-            See documentation for :meth:`populate` for further information
-            about how population behavior depends on the type of this 
-            parameter.
+        :param generator: A function that can be used to populate the array.
+            This should be a callable that accepts a numpy array as the first
+            argument, which is understood to be a mapped array encapsulating
+            the underlying memory. The function may accept any other positional
+            or keyword arguments.
             
         :param dtype: The type of the array to which the mapped memory will
             be cast. 
         """
         if isinstance(region, Channel):
             self._type = region.memory_type
-        elif isinstance(region, type):
+        elif isinstance(region, ManagedMemory):
             self._type = type
+        elif region is None:
+            self._type = np.ndarray
         else:
             raise TypeError(f"Invalid region specifier {region}")
         
+        if generator is not None and not callable(generator):
+            raise ValueError(f"Provided non-callable generator {generator}")
+        
+        self._generator = generator
+        self._size = size
+        self._dtype = dtype
+        
+        # The actual underlying memory resource will be stored here
+        self._resource = None
+        
+    def allocate(self):
+        """
+        Create an instance of the underlying memory type, thereby reserving a
+        resource ID for that type and notifying the compiler to reserve memory.
+        """
+        if self._resource is None:
+            if self._type is np.ndarray:
+                self._resource = np.ndarray(shape=(self._size,), dtype=self._dtype)
+            else:
+                self._resource = self._type(size=self._size)
+                
+    def populate(self, *args, **kwargs):
+        """
+        Populate the underlying array resource. If the instance was initialized
+        with a value for ``generator``, then that value is treated as a 
+        callable whose first argument is element number. Any other arguments
+        are passed directly to ``generator``.
+        
+        :raises: ``AttributeError`` if the memory is not mapped, determined
+            by checking whether the underlying resource has a memory attribute.
+        :raises: ``ValueError`` if the array does not have a generator
+        """
+        self.allocate()
+        
+        if not hasattr(self._resource, "memory"):
+            raise AttributeError(f"Attempted to populate non-mapped array")
+        
+        if self._generator is None:
+            raise ValueError("Attempted to populate array without generator")
+        
+        self._generator(self._resource.memory, *args, **kwargs)
+            
+    def __getitem__(self, k):
+        if self._resource is None:
+            return Operation("getitem", self._resource, k)
+        return self._resource[k]
+    
+    def __setitem__(self, k, v):
+        self._resource[k] = v
+    
         
 class Acadia:
     """
@@ -2035,7 +2088,9 @@ class Acadia:
     def _create_cache(self):
         def _cache_getitem(cache_self, key):
             proc = Processor.active_processor()
-            if isinstance(proc, Sequencer):
+            if proc is None:
+                return cache_self.memory[key]
+            elif isinstance(proc, Sequencer):
                 return proc.bus_read(cache_self.word_address() + key, 
                                      latency=self.get_bus_latency("cache"))
             return Operation("getitem", cache_self, key)
