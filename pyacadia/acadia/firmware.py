@@ -343,22 +343,22 @@ class Firmware:
         self._hdl_modules.append(self.adc_dma_descriptor_memory_controller)
         
         # If we have any CMACCs, make a memory controller for the kernel ports
-        max_cmacc_memory = 0
-        num_cmaccs = 0
+        self._max_cmacc_memory = 0
+        self._num_cmaccs = 0
         for m in self.config["stream_processing_path"]["modules"]:
             if m["kind"] == "cmacc":
-                num_cmaccs += 1
-                if m["kernel_memory_depth"] > max_cmacc_memory:
-                    max_cmacc_memory = m["kernel_memory_depth"]
+                self._num_cmaccs += 1
+                if m["kernel_memory_depth"] > self._max_cmacc_memory:
+                    self._max_cmacc_memory = m["kernel_memory_depth"]
                     
-        if num_cmaccs > 0:
-            self.max_cmacc_memory = max_cmacc_memory
+        if self._num_cmaccs > 0:
+            self._max_cmacc_memory = self._max_cmacc_memory
             self.cmacc_kernel_memory_controller = AXIMemoryArray(f"cmacc_kernel", 
                 instantiate_memories=False,
-                size_bits=max_cmacc_memory*32, 
+                size_bits=self._max_cmacc_memory*32, 
                 width=self.config["stream_processing_path"]["cmacc_kernel_memory_controller"]["controller_width"], 
                 controller_width=self.config["stream_processing_path"]["cmacc_kernel_memory_controller"]["controller_width"],
-                elements=num_cmaccs, 
+                elements=self._num_cmaccs, 
                 read_only=False,
                 use_rst=False,
                 synchronous=False,
@@ -385,8 +385,7 @@ class Firmware:
             memory_tcl += self.dac_dma_descriptor_memory_controller.generate_ip_tcl(ip_directory)
             memory_tcl += self.adc_dma_descriptor_memory_controller.generate_ip_tcl(ip_directory)
             
-            num_cmaccs = len([m for m in self.config["stream_processing_path"]["modules"] if m["kind"] == "cmacc"])
-            if num_cmaccs > 0:
+            if self._num_cmaccs > 0:
                 memory_tcl += self.cmacc_kernel_memory_controller.generate_ip_tcl(ip_directory)
             
             for controller in self.dac_tile_memory_controllers:
@@ -490,7 +489,7 @@ class Firmware:
             slaves = 8
             if len([inp for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"]) > 0:
                 slaves += 1
-            if num_cmaccs > 0:
+            if self._num_cmaccs > 0:
                 slaves += 1
             
             set_property(f, 
@@ -903,10 +902,9 @@ class Firmware:
             # Some ADCs will be directly connected to the stream input path input switch, and the remainder
             # will have their own switch
             adc_direct_inputs = [inp["channel"] for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC"]
-            adc_switch_inputs = [f"ADC{i}" for i in range(self.NUM_ADCS) if f"ADC{i}" not in adc_direct_inputs]
+            adc_switch_inputs = [f"ADC{i}" for i in range(self.NUM_ADCS) if i not in adc_direct_inputs]
             num_adc_switch_outputs = len([inp for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"])
             
-            stream_processing_input_switch_slave = 0
             create_ip(f, name="hedgehog/stream_processing_input_switch", vlnv="xilinx.com:ip:axis_switch:1.1")
             set_property(f, name="hedgehog/stream_processing_input_switch", 
                              properties="CONFIG.TDATA_NUM_BYTES.VALUE_SRC USER "
@@ -954,7 +952,6 @@ class Firmware:
             if num_adc_switch_outputs > 0:
                 
                 # Create the switch and connect it to the AXI network
-                adc_input_switch_slave = 0
                 create_ip(f, name="hedgehog/adc_input_switch", vlnv="xilinx.com:ip:axis_switch:1.1")
                 set_property(f, name="hedgehog/adc_input_switch", 
                                 properties="CONFIG.TDATA_NUM_BYTES.VALUE_SRC USER "
@@ -997,29 +994,29 @@ class Firmware:
                               "hedgehog/adc_input_switch/" + self.config["stream_processing_path"]["adc_input_switch"]["axi_segment"], 
                               self.config["stream_processing_path"]["adc_input_switch"]["axi_address"], 
                               self.config["stream_processing_path"]["adc_input_switch"]["axi_size_bits"] // 8)
-                
-                # Connect the ADC switch outputs to the stream processing path switch
-                for adc_input_switch_master in range(num_adc_switch_outputs):
-                    connect_bd_intf_net(f, f"hedgehog/adc_input_switch/M{adc_input_switch_master:02d}_AXIS", 
-                                        f"hedgehog/stream_processing_input_switch/S{stream_processing_input_switch_slave:02d}_AXIS")
-                    stream_processing_input_switch_slave += 1
             
-            # Connect the ADC DMA outputs to the switches
-            direct_connections = [inp["channel"] for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC"]
-            for channel in direct_connections:
-                connect_bd_intf_net(f, f"hedgehog/adc{channel}_dma/data_out", 
-                                        f"hedgehog/stream_processing_input_switch/S{stream_processing_input_switch_slave:02d}_AXIS")
-                stream_processing_input_switch_slave += 1
-                
+            # Connect the ADC DMA outputs to the ADC input switch if they're not directly connected to the input switch
+            adc_input_switch_master = 0
+            direct_connections = [inp["channel"] for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC"]                
             for channel in range(self.NUM_ADCS):
                 if channel not in direct_connections:
                     connect_bd_intf_net(f, f"hedgehog/adc{channel}_dma/data_out", 
-                                        f"hedgehog/adc_input_switch/S{adc_input_switch_slave:02d}_AXIS")
-                    adc_input_switch_slave += 1
-                
+                                        f"hedgehog/adc_input_switch/S{adc_input_switch_master:02d}_AXIS")
+                    adc_input_switch_master += 1
+                    
             # ------------------- DataMover-driven stream processing inputs -------------------- #
+            adc_input_switch_slave = 0
             for idx,inp in enumerate(self.config["stream_processing_path"]["inputs"]):
-                if inp["kind"] == "memory":
+                if inp["kind"] == "ADC":
+                    # Connect the corresponding ADC DMA data output directly to the switch
+                    connect_bd_intf_net(f, f"hedgehog/adc{inp['channel']}_dma/data_out", 
+                                        f"hedgehog/stream_processing_input_switch/S{idx:02d}_AXIS")
+                elif inp["kind"] == "ADC_switch":
+                    # Connect an output of the ADC switch to the input switch
+                    connect_bd_intf_net(f, f"hedgehog/adc_input_switch/M{adc_input_switch_slave:02d}_AXIS", 
+                                        f"hedgehog/stream_processing_input_switch/S{idx:02d}_AXIS")
+                    adc_input_switch_slave += 1
+                elif inp["kind"] == "memory":
                     # First, create the DataMover Controller and connect it to the bus
                     create_module(f, 
                                 f"hedgehog/input{idx}_datamover_controller", 
@@ -1136,12 +1133,14 @@ class Firmware:
                     # Connect the FIFO output to the switch
                     connect_bd_intf_net(f, 
                                         f"hedgehog/input{idx}_datamover_fifo/m_axis", 
-                                        f"hedgehog/stream_processing_input_switch/S{stream_processing_input_switch_slave:02d}_AXIS")
+                                        f"hedgehog/stream_processing_input_switch/S{idx:02d}_AXIS")
                     
-                    stream_processing_input_switch_slave += 1
+                else:
+                    raise ValueError(f"Unrecognized input kind {inp['kind']}")
+                    
                     
             # ------------------- CMACC Kernel Memory (if any) -------------------- #
-            if num_cmaccs > 0:
+            if self._num_cmaccs > 0:
                 # Create the memory controller
                 create_module(f, f"hedgehog/cmacc_kernel_memory", f"cmacc_kernel_axi_memory")
                 connect_bd_intf_net(f, f"hedgehog/cmacc_kernel_memory/s_axi", f"hedgehog/config_smartconnect/M{config_smartconnect_slave:02d}_AXI")
@@ -1689,11 +1688,11 @@ class Firmware:
                         range=4*self.config[f"dac_tile{i}_sample_memory"]["size_bits"] // 8, 
                         addr_seg=f"hedgehog/dac_tile{i}_memory/" + self.config[f"dac_tile{i}_sample_memory"]["segment"])
 
-                if num_cmaccs > 0:
+                if self._num_cmaccs > 0:
                     assign_bd_address(f, 
                         target_address_space=target_address_space, 
                         offset=self.config["stream_processing_path"][f"cmacc_kernel_memory_controller"]["base_address"], 
-                        range=num_cmaccs*self.max_cmacc_memory*4, 
+                        range=self._num_cmaccs*self._max_cmacc_memory*4, 
                         addr_seg=f"hedgehog/cmacc_kernel_memory/" + self.config["stream_processing_path"][f"cmacc_kernel_memory_controller"]["segment"])
                 
                 for t,count in [("dac", self.NUM_DACS), 

@@ -313,7 +313,7 @@ class ManagedResource(type):
         instance._resource_id = type_self._allocation_index
         instance.size = size
             
-        if hasattr(type_self, "_next_instance_symbol") and not type_self._next_instance_symbol.assigned():
+        if type_self._next_instance_symbol is not None and not type_self._next_instance_symbol.assigned():
             type_self._next_instance_symbol.assign(instance)            
         type_self.instances.append(instance)
         type_self._allocation_index += instance.size
@@ -334,7 +334,7 @@ class ManagedResource(type):
             the resource once generated. 
         """
 
-        if (not hasattr(type_self, "_next_instance_symbol")) or type_self._next_instance_symbol.assigned():
+        if type_self._next_instance_symbol is None or type_self._next_instance_symbol.assigned():
             type_self._next_instance_symbol = Symbol(value_type=type_self)
 
         return type_self._next_instance_symbol
@@ -349,6 +349,7 @@ class ManagedResource(type):
         type_instance._allocation_limit = allocation_limit
         type_instance.instances = []
         type_instance._allocation_index = 0
+        type_self._next_instance_symbol = None
         
         return type_instance
     
@@ -452,6 +453,18 @@ class ManagedMemory(ManagedResource):
             type_instance.__getitem__ = res_getitem
         
         return type_instance
+    
+    def __call__(type_self, *args, **kwargs):
+        """
+        Create a new instance representing an entry in a pool of managed 
+        memory. The ``size`` keyword is understood to represent the amount
+        of occupied memory in bytes, and the ``dtype`` argument represents the
+        numpy type to which the memory will be cast when attached.
+        """
+        dtype = kwargs.pop("dtype", None)
+        instance = super().__call__(*args, **kwargs)
+        instance._dtype = dtype 
+        return instance
             
     
 @dataclass

@@ -856,7 +856,7 @@ class PSGPIO:
     def sysfs_read(gpio):
         with open(f"/sys/class/gpio/gpio{gpio}/value", "r") as f:
             v = f.read()
-        return v
+        return int(v) == 1
         
 @dataclass
 class ZDMA:

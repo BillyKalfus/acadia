@@ -1420,22 +1420,23 @@ class AXIMemoryArray(HDLModule):
 
         
             
-        if self._instantiate_memories and self._user_port_input_pipeline > 0:
-            for element in range(self._elements):
-                # Create the user interface
-                user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
-                hdl += f'    mem{element}_user_port_input_pipeline_proc: process({user_clk}) begin\n'
-                hdl += f'        if rising_edge({user_clk}) then\n'
+        if self._instantiate_memories:
+            if self._user_port_input_pipeline > 0:
+                for element in range(self._elements):
+                    # Create the user interface
+                    user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"
+                    hdl += f'    mem{element}_user_port_input_pipeline_proc: process({user_clk}) begin\n'
+                    hdl += f'        if rising_edge({user_clk}) then\n'
 
-                for i in range(self._user_port_input_pipeline):
-                    delay = "_" + "d"*i if i != 0 else ""
-                    hdl += f'            mem{element}_addr_{"d"*(i+1)}     <= mem{element}_addr{delay};\n' 
-                    if not self._read_only:
-                        hdl += f'            mem{element}_din_{"d"*(i+1)}      <= mem{element}_wrdata{delay};\n' 
-                        hdl += f'            mem{element}_we_{"d"*(i+1)}       <= mem{element}_we{delay};\n' 
-                
-                hdl += f'        end if;\n'
-                hdl += f'    end process mem{element}_user_port_input_pipeline_proc;\n\n'
+                    for i in range(self._user_port_input_pipeline):
+                        delay = "_" + "d"*i if i != 0 else ""
+                        hdl += f'            mem{element}_addr_{"d"*(i+1)}     <= mem{element}_addr{delay};\n' 
+                        if not self._read_only:
+                            hdl += f'            mem{element}_din_{"d"*(i+1)}      <= mem{element}_wrdata{delay};\n' 
+                            hdl += f'            mem{element}_we_{"d"*(i+1)}       <= mem{element}_we{delay};\n' 
+                    
+                    hdl += f'        end if;\n'
+                    hdl += f'    end process mem{element}_user_port_input_pipeline_proc;\n\n'
 
             for element in range(self._elements):
                 user_clk = "s_axi_aclk" if self._synchronous else f"mem{element}_clk"

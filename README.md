@@ -1,4 +1,4 @@
-# The Acadia Quantum Control System
+# The Acadia Microwave Instrument
 
 William Kalfus and Jacob Curtis
 
@@ -6,7 +6,7 @@ Yale University, 2023
 
 ## Description
 
-The Acadia Quantum Control ecosystem is intended to provide a modern, simple, and unified framework for integrating real-time signal synthesis and processing with hardware compute resources. The framework was developed to target the ZCU216 RFSoC evaluation board but straightforwardly extends to other hardware. 
+The Acadia platform is intended to provide a modern, simple, and unified framework for integrating real-time signal synthesis and processing with hardware compute resources. The framework was developed to target the ZCU216 RFSoC evaluation board but straightforwardly extends to other hardware. 
 
 
 ## Installation

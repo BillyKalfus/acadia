@@ -39,6 +39,7 @@ do
 done
 
 # Download the scipy layer
+# https://support.xilinx.com/s/question/0D52E00007G0ubzSAB/python-scipy-install-with-petalinux-20202-for-the-zynq7000?language=en_US
 cd project-spec
 git clone -b zeus https://github.com/gpanders/meta-scipy 
 cd ..
