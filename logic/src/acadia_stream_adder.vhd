@@ -9,6 +9,17 @@
 -- Target Devices: ZCU216
 -- Tool Versions: 2020.2
 -- Description: A module which sums two input AXI-Stream signals.
+--    A module that adds every 16-bit word in an input stream to 
+--    the corresponding word of another stream driven by a 
+--    dedicated DataMover. The width of this dedicated DataMover
+--    must be greater than or equal to that of the input stream
+--    width, and this width is also that which is used for the 
+--    DataMover writing the output to memory.
+--    
+--    This module has only one register with the following bitfield:
+--        Bit 0: range error
+--        Bit 1: tlast error
+--        Bit 2: reset
 -- 
 -- Dependencies: 
 -- 

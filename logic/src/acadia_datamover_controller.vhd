@@ -73,6 +73,11 @@ entity acadia_datamover_controller is
     port (
         clk  : in  std_logic;
 
+        -- An extra peripheral interface for monitoring attached FIFOs
+        fifo_nrst     : out std_logic;
+        fifo_rst      : out std_logic;
+        fifo_overflow : in  std_logic;
+
         -- Register access
         master_bus_mosi : in  std_logic_vector(31 downto 0);
         master_bus_miso : out std_logic_vector(31 downto 0);
@@ -124,6 +129,8 @@ architecture rtl of acadia_datamover_controller is
     ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";
 
     signal rst        : std_logic;
+
+    signal fifo_overflow_d : std_logic;
             
     signal cmd_waiting : std_logic;
     signal cmd_btt     : std_logic_vector(22 downto 0);
@@ -138,6 +145,9 @@ architecture rtl of acadia_datamover_controller is
     signal total_bytes_transferred_d : std_logic_vector(31 downto 0);
 
 begin
+
+    fifo_nrst <= not rst;
+    fifo_rst <= rst;
 
     -- Use a process for loading commands into the DataMover's FIFO
     cmd_tvalid <= cmd_waiting;
@@ -187,6 +197,7 @@ begin
     -- Make a process for reading registers  
     rd_proc: process(clk) begin
         if rising_edge(clk) then
+            fifo_overflow_d <= fifo_overflow;
             case master_bus_addr(1 downto 0) is
                 when "00" =>
                     master_bus_miso <= sts_d;
@@ -198,7 +209,8 @@ begin
                 when "11" => 
                     master_bus_miso(0) <= cmd_ack;
                     master_bus_miso(1) <= err_latch;
-                    master_bus_miso(31 downto 2) <= (others => '0');
+                    master_bus_miso(2) <= fifo_overflow_d;
+                    master_bus_miso(31 downto 3) <= (others => '0');
                 when others =>
                     master_bus_miso <= (others => '0');
                 end case;

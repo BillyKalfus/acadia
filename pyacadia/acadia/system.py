@@ -15,30 +15,13 @@ from .channel import Channel
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
 from .firmware import Firmware
 
-class ChannelSynchronizer(Synchronizer):
+class DMASynchronizer(Synchronizer):
     """
-    Synchronizes DMA triggers, frequency and phase updates for NCOs, 
-    DAC VOP and ADC DSA updates for the analog datapaths, and DAC TDD signals. 
-    The constants below indicate how functions should be named in order to
-    carry out the correct behavior in the synchronizer. For synchronized 
-    functions that don't have the channel to be acted on as a parent, the 
-    first positional argument must be the channel (if the channel is not 
-    expected to be passed in as a keyword argument; if so, the corresponding
-    keyword value will be used).
+    Synchronizes DMA triggers.
     """
-
+    
     DMA = 1
-    NCO_FREQUENCY = 2
-    NCO_PHASE = 3
-    NCO_PHASE_RESET = 4
-    VOP = 5
-    DSA = 6
-    TDD = 7
-
-    def __init__(self, firmware, dma_block_latency, allow_standalone=False):
-        self._firmware = firmware
-        self._dma_block_latency = dma_block_latency
-        super().__init__(allow_standalone)
+    BARRIER = 2
     
     def __call__(self, *args, **kwargs):
         if not isinstance(Processor.active_processor(), Sequencer):
@@ -50,6 +33,123 @@ class ChannelSynchronizer(Synchronizer):
             
         self._dma_trigger = kwargs.pop("trigger", True)
         self._dma_block = kwargs.pop("block", self._dma_trigger) # don't block if we don't trigger
+        return super().__call__(*args, **kwargs)
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Get a reference to the Sequencer
+        proc = Processor.active_processor()
+        
+        # Keep track of the aggregate values of all the calls
+        # Store the mask so that if we don't block, we can know which DMAs were triggered
+        self._acadia = None
+        
+        # Keep track of the total runtime for each channel since the last 
+        # barrier (or since the start, if there haven't been any barriers 
+        # yet) so that when we do add one, we can know where to add it
+        channel_lengths = {}
+        
+        self.dma_mask = 0
+
+        for idx_call,call in enumerate(self._calls):
+            function,acadia,args,kwargs = call.values()
+            
+            if self._acadia is None:
+                self._acadia = acadia
+            elif acadia is not self._acadia:
+                raise ValueError(f"Unable to synchronize different instances of `Acadia`")
+                
+            if function == DMASynchronizer.DMA:
+                if not isinstance(kwargs["channel"], Channel):
+                    raise TypeError(f"Unable to identify channel (received"
+                                    f" {kwargs['channel']}).")
+                
+                if kwargs["channel"] in channel_lengths:
+                    channel_lengths[kwargs["channel"]] += kwargs["length"]
+                else:
+                    channel_lengths[kwargs["channel"]] = kwargs["length"]
+                    
+                self.dma_mask |= acadia.get_dma(kwargs["channel"]).mask
+                acadia.channel_dma_stream(**kwargs)
+                
+            elif function == DMASynchronizer.BARRIER:
+                # We first need to figure out the time in the block at which 
+                # the barrier exists.
+                barrier_time = 0
+                for length in channel_lengths.values():
+                    if not isinstance(length, int):
+                        raise TypeError(f"Received invalid length: {length}")
+                    if length > barrier_time:
+                        barrier_time = length
+                        
+                # Then, for every channel that has some action after the 
+                # barrier, we need to add a blank so that the next action 
+                # starts at the right time
+                future_channels = []
+                for idx_future_call in range(idx_call+1, len(self._calls)):
+                    if (self._calls[idx_future_call]["function"] == DMASynchronizer.DMA 
+                            and self._calls[idx_future_call]["kwargs"]["channel"] not in future_channels):
+                        future_channels.append(self._calls[idx_future_call]["kwargs"]["channel"])
+                
+                for channel in future_channels:
+                    delay_length = barrier_time - (channel_lengths[channel] if channel in channel_lengths else 0)
+                    acadia.channel_dma_stream(channel=channel,
+                                              length=delay_length,
+                                              word_address=0,
+                                              blank=True)
+                    
+                # Reset channel lengths so that when we hit the next barrier 
+                # (if any) it only adds delays after this one
+                channel_lengths = {}
+                
+        if self.dma_mask == 0:
+            raise ValueError("Empty synchronizer")
+        
+        # Add instructions to do so now
+        if self._dma_trigger:
+            # The only parent object that we could have had was an Acadia object,
+            # so we know on which object we should call dma_trigger
+            dma_trigger_device = self._acadia._firmware.sequencer_bus_decoder["dma_trigger"]
+            proc.bus_write(address=dma_trigger_device.address().value(),
+                            data=self.dma_mask,
+                            comment="Trigger DMAs")
+
+        if self._dma_block:
+            # Wait until all the DMAs in the mask have completed
+            dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
+            bus_op = proc.bus_read(dma_running_device.address().value(),
+                        latency=self._acadia.get_bus_latency("dma_running_dataport"))
+            with proc.repeat_until(bus_op & self.dma_mask == 0):
+                pass
+
+        super().__exit__(exc_type, exc_val, exc_tb)
+
+class RFDCSynchronizer(Synchronizer):
+    """
+    Synchronizes DMA triggers, frequency and phase updates for NCOs, 
+    DAC VOP and ADC DSA updates for the analog datapaths, and DAC TDD signals. 
+    The constants below indicate how functions should be named in order to
+    carry out the correct behavior in the synchronizer. For synchronized 
+    functions that don't have the channel to be acted on as a parent, the 
+    first positional argument must be the channel (if the channel is not 
+    expected to be passed in as a keyword argument; if so, the corresponding
+    keyword value will be used).
+    """
+
+    NCO_FREQUENCY = 2
+    NCO_PHASE = 3
+    NCO_PHASE_RESET = 4
+    VOP = 5
+    DSA = 6
+    TDD = 7
+    
+    def __call__(self, *args, **kwargs):
+        if not isinstance(Processor.active_processor(), Sequencer):
+            raise TypeError("Synchronization is only supported for contexts of"
+                            " a `Sequencer` object. Either enter an appropriate"
+                            " context to enforce synchronization or call the"
+                            " appropriate method to act directly on the"
+                            " hardware.")
+
         self._nco_pl_event = kwargs.pop("nco_pl_event", False)
         return super().__call__(*args, **kwargs)
     
@@ -58,7 +158,6 @@ class ChannelSynchronizer(Synchronizer):
         proc = Processor.active_processor()
         
         # Keep track of the aggregate values of all the calls
-        dma_mask = 0
         nco_phase_reset = 0
         nco_update_enables = [0]*8
         nco_update_request = 0
@@ -71,19 +170,24 @@ class ChannelSynchronizer(Synchronizer):
         tdd_mode_set_reg = 0
         tdd_mode_clear_reg = 0
         
+        self._acadia = None
+        
         for call in self._calls:
             function,acadia,args,kwargs = call.values()
+            
+            if self._acadia is None:
+                self._acadia = acadia
+            elif acadia is not self._acadia:
+                raise ValueError(f"Unable to synchronize different instances of `Acadia`")
 
             channel = kwargs["channel"] if "channel" in kwargs else args[0]
             if not isinstance(channel, Channel):
                 raise TypeError(f"Unable to identify channel (received {channel}).")
             
-            rfdc_bit_position = acadia.get_dma(channel).mask
+            
+            rfdc_bit_position = 1 << (channel.num if channel.is_dac else channel.num+16)
                 
-            if function == ChannelSynchronizer.DMA:
-                dma_mask |= acadia.get_dma(channel).mask
-                
-            elif function == ChannelSynchronizer.NCO_FREQUENCY:
+            if function == RFDCSynchronizer.NCO_FREQUENCY:
                 if isinstance(proc, Sequencer):
                     # The bit position for the channel in the update request and 
                     # phase reset registers
@@ -100,7 +204,7 @@ class ChannelSynchronizer(Synchronizer):
                     # if kwargs["high"]:
                     nco_update_enables[update_enable_reg] |= (1 << 2) << (6*channel.block)
 
-            elif function == ChannelSynchronizer.NCO_PHASE:
+            elif function == RFDCSynchronizer.NCO_PHASE:
                 if isinstance(proc, Sequencer):
                     # The bit position for the channel in the update request and 
                     # phase reset registers
@@ -115,7 +219,7 @@ class ChannelSynchronizer(Synchronizer):
                     # if kwargs["high"]:
                     nco_update_enables[update_enable_reg] |= (1 << 4) << (6*channel.block)
 
-            elif function == ChannelSynchronizer.NCO_PHASE_RESET:
+            elif function == RFDCSynchronizer.NCO_PHASE_RESET:
                 if isinstance(proc, Sequencer):
                     # The bit position for the channel in the update request and 
                     # phase reset registers
@@ -128,18 +232,18 @@ class ChannelSynchronizer(Synchronizer):
                     nco_phase_reset |= rfdc_bit_position
                     nco_update_enables[update_enable_reg] |= (1 << 5) << (6*channel.block)
                 
-            elif function == ChannelSynchronizer.VOP:
+            elif function == RFDCSynchronizer.VOP:
                 if isinstance(proc, Sequencer):
                     vop_dsa_update_reg |= 1 << (4*channel.tile + channel.block)
                 
-            elif function == ChannelSynchronizer.DSA:
+            elif function == RFDCSynchronizer.DSA:
                 if isinstance(proc, Sequencer):
                     vop_dsa_update_reg |= 1 << (16 + channel.tile)
                     data = args[0] << (channel.block*5)
                     mask = 0b11111 << (channel.block*5)
                     tile_dsa_codes[channel.tile] = (tile_dsa_codes[channel.tile] & ~mask) | data
                 
-            elif function == ChannelSynchronizer.TDD:
+            elif function == RFDCSynchronizer.TDD:
                 if isinstance(proc, Sequencer):
                     if args[0]:
                         tdd_mode_set_reg |= rfdc_bit_position
@@ -149,134 +253,111 @@ class ChannelSynchronizer(Synchronizer):
                     raise TypeError("TDD mode may only be controlled by the"
                                     " Sequencer. Enter the corresponding"
                                     " context to control TDD mode.")
-                
-        # Store the mask so that if we don't block, we can know which DMAs were triggered
-        self.dma_mask = dma_mask
         
-        if isinstance(proc, Sequencer):
-            rts_address = self._firmware.rfdc_rts_regs.address().value()
+        rts_address = self._acadia._firmware.rfdc_rts_regs.address().value()
 
-            # If any DMAs were triggered, add instructions to do so now
-            if dma_mask != 0:
-                if self._dma_trigger:
-                    # The only parent object that we could have had was an Acadia object,
-                    # so we know on which object we should call dma_trigger
-                    dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
-                    proc.bus_write(address=dma_trigger_device.address().value(),
-                                   data=dma_mask,
-                                   comment="Trigger DMAs")
+        # Generate register writes for all the NCO updates that need to happen
+        if nco_update_request != 0:
+            for tile in range(8):
+                if nco_update_enables[tile] != 0:
+                    proc.bus_write(address=rts_address + 0x60 + tile,
+                                    data=nco_update_enables[tile], 
+                                    comment=f"Set update enable for tile {tile}")
 
-                if self._dma_block:
-                    # Wait until all the DMAs in the mask have completed
-                    dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
-                    bus_op = proc.bus_read(dma_running_device.address().value(),
-                                latency=self._dma_block_latency)
-                    with proc.repeat_until(bus_op & dma_mask == 0):
-                        pass
+            if nco_phase_reset != 0:
+                proc.bus_write(address=rts_address + 0x68, 
+                                data=nco_phase_reset,
+                                comment="Set phase reset register")
 
-            # Generate register writes for all the NCO updates that need to happen
-            if nco_update_request != 0:
-                for tile in range(8):
-                    if nco_update_enables[tile] != 0:
-                        proc.bus_write(address=rts_address + 0x60 + tile,
-                                       data=nco_update_enables[tile], 
-                                       comment=f"Set update enable for tile {tile}")
+            # Carry out the procedure for a synchronized update with SYSREF
+            # We'll assume that the SYSREF is already being generated continuously
 
-                if nco_phase_reset != 0:
-                    proc.bus_write(address=rts_address + 0x68, 
-                                   data=nco_phase_reset,
-                                   comment="Set phase reset register")
+            # 1. Set dac0_sysref_int_gating high and pulse dac0_nco_update_req
+            proc.bus_write(address=rts_address + 0x69, 
+                            data=((1 << 8) | (1 << 0)),
+                            comment="Set sysref_gating high and dac0_nco_update_req")
+            proc.nop()
+            proc.bus_write(address=rts_address + 0x69, 
+                            data=(1 << 8),
+                            comment="Clear dac0_nco_update_req")
 
-                # Carry out the procedure for a synchronized update with SYSREF
-                # We'll assume that the SYSREF is already being generated continuously
+            # 2. Wait until dac0_nco_update_busy[1] goes high, indicating that
+            #    SYSREF has been properly gated
+            with proc.repeat_until(proc.bus_read(rts_address) & (1 << 1) != 0):
+                pass
 
-                # 1. Set dac0_sysref_int_gating high and pulse dac0_nco_update_req
+            # 3. Pulse the rest of the nco_update_req signals if necessary
+            #    (and make sure to keep dac0_sysref_int_gating high)
+            if (nco_update_request & ~(1 << 0)) != 0:
                 proc.bus_write(address=rts_address + 0x69, 
-                               data=((1 << 8) | (1 << 0)),
-                               comment="Set sysref_gating high and dac0_nco_update_req")
+                            data=((1 << 8) | nco_update_request),
+                            comment="Set the other nco_update_req signals")
                 proc.nop()
                 proc.bus_write(address=rts_address + 0x69, 
-                               data=(1 << 8),
-                               comment="Clear dac0_nco_update_req")
+                                data=(1 << 8),
+                                comment="Clear the other nco_update_req signals")
 
-                # 2. Wait until dac0_nco_update_busy[1] goes high, indicating that
-                #    SYSREF has been properly gated
-                with proc.repeat_until(proc.bus_read(rts_address) & (1 << 1) != 0):
-                    pass
+            # 4. Wait until all the busy outputs (except for dac0_nco_update_busy[1])
+            #    are low
+            m = 0xFFFF & ~(1 << 1)
+            with proc.repeat_until(proc.bus_read(rts_address) & m == 0):
+                pass
 
-                # 3. Pulse the rest of the nco_update_req signals if necessary
-                #    (and make sure to keep dac0_sysref_int_gating high)
-                if (nco_update_request & ~(1 << 0)) != 0:
-                    proc.bus_write(address=rts_address + 0x69, 
-                                data=((1 << 8) | nco_update_request),
-                                comment="Set the other nco_update_req signals")
-                    proc.nop()
-                    proc.bus_write(address=rts_address + 0x69, 
-                                   data=(1 << 8),
-                                   comment="Clear the other nco_update_req signals")
+            # 5. Re-enable SYSREF by pulsing dac0_sysref_int_reenable
+            proc.bus_write(address=rts_address + 0x69, 
+                            data=((1 << 9)|(1 << 8)),
+                            comment="Set dac0_sysref_int_reenable")
+            proc.nop()
+            proc.bus_write(address=rts_address + 0x69, 
+                            data=(1 << 8),
+                            comment="Clear dac0_sysref_int_reenable")
 
-                # 4. Wait until all the busy outputs (except for dac0_nco_update_busy[1])
-                #    are low
-                m = 0xFFFF & ~(1 << 1)
-                with proc.repeat_until(proc.bus_read(rts_address) & m == 0):
-                    pass
+            # 6. Wait until dac0_nco_update_busy[1] goes low
+            with proc.repeat_until(proc.bus_read(rts_address) & 0xFFFF == 0):
+                pass
 
-                # 5. Re-enable SYSREF by pulsing dac0_sysref_int_reenable
-                proc.bus_write(address=rts_address + 0x69, 
-                               data=((1 << 9)|(1 << 8)),
-                               comment="Set dac0_sysref_int_reenable")
-                proc.nop()
-                proc.bus_write(address=rts_address + 0x69, 
-                               data=(1 << 8),
-                               comment="Clear dac0_sysref_int_reenable")
+            # Do we ever need to set dac0_nco_sysref_int_gating low? If so, do it here
+            proc.bus_write(address=rts_address + 0x69, 
+                            data=0,
+                            comment="Clear sysref_gating")
 
-                # 6. Wait until dac0_nco_update_busy[1] goes low
-                with proc.repeat_until(proc.bus_read(rts_address) & 0xFFFF == 0):
-                    pass
-
-                # Do we ever need to set dac0_nco_sysref_int_gating low? If so, do it here
-                proc.bus_write(address=rts_address + 0x69, 
-                               data=0,
-                               comment="Clear sysref_gating")
-
-                if self._nco_pl_event:
-                    # Write the PL event register
-                    # The bit pattern is the same as for the update request register
-                    # and the blocks we want to drive events for will be the same
-                    # Pulse it for one cycle
-                    proc.bus_write(address=rts_address + 0x6C, 
-                                   data=nco_update_request,
-                                   comment="Set the pl_event register")
-                    proc.nop()
-                    proc.bus_write(address=rts_address + 0x6C, 
-                                   data=0,
-                                   comment="Clear the pl_event register")
-
-            # Write any DSA updates
-            for i in range(4):
-                if vop_dsa_update_reg & (1 << (16+i)):
-                    proc.bus_write(address=rts_address + 0x80, 
-                                   data=tile_dsa_codes[i],
-                                   comment=f"Set DSA register for tile {i}")
-
-            # Update VOP if necessary
-            if vop_dsa_update_reg != 0:
-                proc.bus_write(address=rts_address + 0x6D, 
-                               data=vop_dsa_update_reg,
-                               comment=f"Set VOP/DSA update register")
-
-            if tdd_mode_set_reg != 0:
-                proc.bus_write(address=rts_address + 0x6B, 
-                               data=tdd_mode_set_reg,
-                               comment="Write TDD mode set register")
-            if tdd_mode_clear_reg != 0:
+            if self._nco_pl_event:
+                # Write the PL event register
+                # The bit pattern is the same as for the update request register
+                # and the blocks we want to drive events for will be the same
+                # Pulse it for one cycle
                 proc.bus_write(address=rts_address + 0x6C, 
-                               data=tdd_mode_clear_reg,
-                               comment="Write TDD mode clear register")
+                                data=nco_update_request,
+                                comment="Set the pl_event register")
+                proc.nop()
+                proc.bus_write(address=rts_address + 0x6C, 
+                                data=0,
+                                comment="Clear the pl_event register")
+
+        # Write any DSA updates
+        for i in range(4):
+            if vop_dsa_update_reg & (1 << (16+i)):
+                proc.bus_write(address=rts_address + 0x80, 
+                                data=tile_dsa_codes[i],
+                                comment=f"Set DSA register for tile {i}")
+
+        # Update VOP if necessary
+        if vop_dsa_update_reg != 0:
+            proc.bus_write(address=rts_address + 0x6D, 
+                            data=vop_dsa_update_reg,
+                            comment=f"Set VOP/DSA update register")
+
+        if tdd_mode_set_reg != 0:
+            proc.bus_write(address=rts_address + 0x6B, 
+                            data=tdd_mode_set_reg,
+                            comment="Write TDD mode set register")
+        if tdd_mode_clear_reg != 0:
+            proc.bus_write(address=rts_address + 0x6C, 
+                            data=tdd_mode_clear_reg,
+                            comment="Write TDD mode clear register")
             
         super().__exit__(exc_type, exc_val, exc_tb)
     
-        
 class Acadia:
     """
     A class that implements system-wide commands for the Acadia hardware.
@@ -303,6 +384,26 @@ class Acadia:
     def __init__(self, firmware=None):    
         self._firmware = Firmware(firmware)
         
+        def input_switch_port(res_self):
+            return self.config.stream_inputs()[res_self.kind][res_self._resource_id]
+        
+        self._stream_input_resources = {k: ManagedResource(f"{k}StreamInput", 
+                                                           (), 
+                                                           {"kind": k, 
+                                                            "switch_port": input_switch_port}, 
+                                                           allocation_limit=len(v)) 
+                                        for k,v in self.config.stream_inputs()}
+        
+        def module_switch_port(res_self):
+            return self.config.stream_modules()[res_self.kind][res_self._resource_id]
+        
+        self._stream_module_resources = {k: ManagedResource(f"{k}Module", 
+                                                           (), 
+                                                           {"kind": k,
+                                                            "switch_port": module_switch_port}, 
+                                                           allocation_limit=len(v)) 
+                                        for k,v in self.config.stream_modules()}
+        
         # Create various Processors
         # Note that the Processors cannot be ManagedMemory (and therefore, have the
         # Processor objects keep track of their instruction memory usage) 
@@ -316,9 +417,8 @@ class Acadia:
         self._active_sequencer = None
 
         # Create a synchronizer for channel actions
-        self.synchronizer = ChannelSynchronizer(self._firmware, 
-                                                self.get_bus_latency("dma_running_dataport"),
-                                                allow_standalone=True)
+        self.channel_synchronizer = DMASynchronizer(allow_standalone=True)
+        self.tile_synchronizer = RFDCSynchronizer(allow_standalone=True)
         
         self._create_dmas()
         self._create_cache()
@@ -528,7 +628,7 @@ class Acadia:
 
         raise NotImplemented
     
-    @Synchronizer.synchronized(ChannelSynchronizer.NCO_FREQUENCY, "synchronizer")
+    @Synchronizer.synchronized(RFDCSynchronizer.NCO_FREQUENCY, "tile_synchronizer")
     def update_nco_frequency(self, channel, frequency):
         """
         Configure some or all NCO settings. The three 16-bit registers for
@@ -560,7 +660,7 @@ class Acadia:
         else:
             raise TypeError("NCO frequency can only be set in `Sequencer` contexts.")
     
-    @Synchronizer.synchronized(ChannelSynchronizer.NCO_PHASE, "synchronizer")
+    @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE, "tile_synchronizer")
     def update_nco_phase(self, channel, phase, low=True, high=True):
         """
         Set the NCO phase offset to the given word.
@@ -590,7 +690,7 @@ class Acadia:
         else:
             raise TypeError("NCO phase can only be set in `Sequencer` contexts.")
 
-    @Synchronizer.synchronized(ChannelSynchronizer.NCO_PHASE_RESET, "synchronizer")
+    @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE_RESET, "tile_synchronizer")
     def reset_nco_phase(self, channel):
         """
         Reset the value of the NCO phase accumulator.
@@ -840,7 +940,6 @@ class Acadia:
     
     # -------------- ABSTRACTIONS FOR JOINT PS-PL ROUTINES ----------- #
     
-    @Synchronizer.synchronized(ChannelSynchronizer.DMA, "synchronizer")
     @requires_sequencer
     def channel_dma_stream(self, channel, length, word_address, 
                            decimate=0, fixed=False, blank=False):
@@ -886,31 +985,114 @@ class Acadia:
             comment=f"Add descriptor with parameters {descriptor.kwargs} to"
                     f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num}")
         
-    def generate(self, channel, waveform):
+    @requires_sequencer
+    def generate(self, channel, signal):
         """
-        Stream a waveform out of a DAC.
+        Stream a signal out of a DAC.
         
         :param channel: Channel to stream
         :type channel: :class:`Channel`
-        :param waveform: Waveform to stream
-        :type waveform: :class:`ProceduralWaveform`
+        :param signal: Signal to stream
+        :type signal: :class:`self.DACArray` or :class:`ProceduralWaveform`
         """
-        self.channel_dma_stream(channel, 
-                                len(waveform) // channel.interface_width_bytes, 
-                                waveform._resource.word_address())
+        # Notify the synchronizer, which will add the DMA command for us
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.DMA, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel,
+                "length": len(signal) // channel.interface_width_bytes,
+                "word_address": signal.word_address()
+            }})
         
-    def capture(self, configuration, waveform):
+    @requires_sequencer
+    def capture(self, configuration, dst):
         """
         Capture a waveform on an ADC.
         
         :param configuration:
         """
-        self.channel_dma_stream(configuration.input_source, 
-                                len(waveform) // configuration.input_source.interface_width_bytes, 
-                                0)
-        self._sequencer_command_dm(f"module{configuration._input_switch_slave}_s2mm_datamover", 
-                                   waveform._resource.byte_address(),
-                                   len(waveform))
+        # We only need to command the datamover and notify the synchronizer,
+        # which will then add the DMA command for us
+        self._sequencer_command_datamover(f"module{configuration._input_switch_slave}_s2mm_datamover", 
+                                   dst.byte_address(),
+                                   dst.byte_length())
+        
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.DMA, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": configuration.input_source,
+                "length": dst.byte_length(),
+                "word_address": 0
+            }})
+        
+    @requires_sequencer
+    def generate_blank(self, channel, length):
+        """
+        Generate a blank signal on a channel for a given length of time. This
+        can be used to insert delays between DMA commands without sequencer 
+        intervention.
+        
+        :param channel: Channel on which to insert a blank command
+        :type channel: :class:`Channel`
+        :param length: Delay length in seconds
+        :type length: float
+        """
+        length_cycles = self.config["clocks"]["generated_clocks"]["seq_clk"]*length
+        
+        if round(length_cycles,5) != round(length_cycles):
+            raise ValueError("DMA blanking length does not result in an"
+                             " integer number of cycles (received length"
+                             f" {length*1e9} ns = {length_cycles} cycles)") 
+        
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.DMA, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel,
+                "length": round(length_cycles),
+                "word_address": 0,
+                "blank": True
+            }})
+        
+    @DMASynchronizer.synchronized(None, "channel_synchronizer")
+    def barrier(self):
+        """
+        Insert a synchronization barrier. When a barrier is inserted in a 
+        synchronization block, the maximum length of all actions before the
+        barrier defines the time at which the barrier is inserted. Delays are
+        then inserted for every channel that has an action after the barrier
+        so that they start at the time of the barrier.
+        """
+        # Nothing actually needs to be done here, this just notifies the synchronizer
+        pass
+        
+    @requires_sequencer
+    def memcpy(self, configuration, src, dst):
+        """
+        Carry out a memory transfer using the stream processing path.
+        
+        :param configuration: Stream configuration used for carrying out the transfer
+        :type configuration: :class:`StreamConfiguration`
+        :param src: Data source
+        :type src: PLDDR0Array, PLDDR1Array, CacheArray, DACArray, CMACCKernelArray
+        :param dst: Data destination
+        :type dst: PLDDR0Array, PLDDR1Array, CacheArray, DACArray, CMACCKernelArray
+        """
+        
+        # TODO: Add some checks to make sure that data from src can get to dst
+        # using the provided configuration
+        
+        self._sequencer_command_datamover(f"module{configuration._input_switch_slave}_s2mm_datamover", 
+                                   dst.byte_address(),
+                                   src.byte_length())
+        self._sequencer_command_datamover(f"input{configuration._input_switch_master}_datamover", 
+                                   src.byte_address(),
+                                   src.byte_length())
 
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
 
@@ -932,7 +1114,7 @@ class Acadia:
 
         # The datamover controller has a read latency of 1 because its MISO is driven
         # in a synchronous process
-        if port == "datamover_controller":
+        if "datamover_controller" in port:
             latency += 1
 
         if port == "cache":
@@ -1023,59 +1205,47 @@ class Acadia:
         return self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("dma_running_dataport"))
 
     @requires_sequencer
-    def capture_count(self, channel):
+    def stream_count(self, configuration):
         """
-        Retrieve the number of status words produced for the DMA configured
-        to receive from the provided channel.
+        Retrieve the number of status words produced for the DataMover in the 
+        provided stream configuration.
 
-        :param channels: Channel(s) to check
-        :type channels: list of :class:`Channel`
+        :param configuration: Configuration to check
+        :type configuration: :class:`StreamConfiguration`
         """
-
-        if isinstance(channel.dma, self._CMACCDMA):
-            datamover_name = f"cmacc_dm{channel.dma._resource_id}"
-        elif isinstance(channel.dma, self._ADCDMA):
-            datamover_name = f"adc_dm{channel.dma._resource_id}"
-        else:
-            raise TypeError(f"Invalid type of DMA {channel.dma}")
-
-        address = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name] + 1
+        datamover_name = f"module{configuration._input_switch_slave}_s2mm_datamover_controller"
+        address = self._firmware.sequencer_bus_decoder[datamover_name] + 1
         return self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
                                                 f" retrieve status count for {datamover_name}",
-                                        latency=self.get_bus_latency("DATAMOVER_CONTROLLER"))
+                                        latency=self.get_bus_latency(datamover_name))
     
     @requires_sequencer
-    def capture_status(self, channel):
+    def stream_total_bytes_transferred(self, configuration):
         """
-        Retrieve the status of a capture that was completed on a given channel.
-        To ensure that the result is valid, this should be called after 
-        :meth:`captures_complete` returns ``True`` for the given channel.
+        Retrieve the number of status words produced for the DataMover in the 
+        provided stream configuration.
 
-        :param channel: Channel to check
-        :type channel: :class:`Channel`
+        :param configuration: Configuration to check
+        :type configuration: :class:`StreamConfiguration`
         """
-
-        if isinstance(channel.dma, self._CMACCDMA):
-            datamover_name = f"cmacc_dm{channel.dma._resource_id}"
-        elif isinstance(channel.dma, self._ADCDMA):
-            datamover_name = f"adc_dm{channel.dma._resource_id}"
-        else:
-            raise TypeError(f"Invalid type of DMA {channel.dma}")
-
-        address = self._firmware.sequencer_bus_decoder["datamover_controller"][datamover_name]
+        datamover_name = f"module{configuration._input_switch_slave}_s2mm_datamover_controller"
+        address = self._firmware.sequencer_bus_decoder[datamover_name] + 2
         return self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
-                                                f" retrieve status for {datamover_name}",
-                                        latency=self.get_bus_latency("DATAMOVER_CONTROLLER"))    
+                                                f" retrieve status count for {datamover_name}",
+                                        latency=self.get_bus_latency(datamover_name))  
 
     @requires_sequencer     
-    def reset_stream(self, stream):
+    def stream_reset(self, configuration):
         """
         Resets the stream datamover controllers and modules.
+        
+        :param configuration: Configuration to reset
+        :type configuration: :class:`StreamConfiguration`
         """
 
-        module = stream._input_switch_slave
+        module = configuration._input_switch_slave
         address = self._firmware.sequencer_bus_decoder[f"module{module}_s2mm_datamover_controller"].address().value() + 3
         self._active_sequencer.bus_write(address=address, data=0xFFFFFFFF)
             
@@ -1088,9 +1258,7 @@ class Acadia:
         """
         mask = 0
         for channel in channels:
-            dma = channel.dma
-            bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
-            mask |= 1 << bit_position
+            mask |= self.get_dma(channel).mask
 
         dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
         self._active_sequencer.bus_write(address=dma_trigger_device.address().value(),
@@ -1104,13 +1272,11 @@ class Acadia:
         """
         mask = 0
         for channel in channels:
-            dma = channel.dma
-            bit_position = channel.num if channel.is_dac else (type(dma).DMA_NUM_OFFSET + dma._resource_id)
-            mask |= 1 << bit_position
+            mask |= self.get_dma(channel).mask
 
         dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
         dma_running = self._active_sequencer.bus_read(address=dma_running_device.address().value(),
-                                                      latency=self.get_bus_latency("DMA_RUNNING_DATAPORT"))
+                                                      latency=self.get_bus_latency("dma_running_dataport"))
         with self._active_sequencer.repeat_until(dma_running & mask == 0):
             pass
 
@@ -1142,7 +1308,8 @@ class Acadia:
         :param stream: Stream configuration to apply
         :type stream: :class:`StreamConfiguration`
         """
-        self._stream_processing_path_input_switch.connect(stream._input_switch_slave, stream._input_switch_master)
+        self._stream_processing_path_input_switch.connect(stream._input_switch_slave, 
+                                                          stream._input_switch_master)
         
         if stream._adc_switch_master is not None:
             self._ADC_input_switch.connect(stream._adc_switch_slave, 
@@ -1161,14 +1328,12 @@ class Acadia:
         for dma in self._adc_dmas:
             dma.compile_all()
 
-        
     def assemble(self):
         """
         Assembles instruction memory for the sequencer and all DMAs.
         """
         
         num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
-        
         sequencer_program = np.empty((num_sequencer_instructions, 16), dtype=np.uint8)
         
         idx = 0
@@ -1253,7 +1418,6 @@ class Acadia:
             for instr in s._compiled_program:
                 print(f"{idx:04X}: {instr.pprint()}")
                 idx += 1
-
 
     def sequencer_run(self):
         """
@@ -1558,7 +1722,7 @@ class Acadia:
         
         return np.frombuffer(m, dtype=dtype)
 
-    def _sequencer_command_dm(self, datamover_name, address, size, tag=0xA, incr=True, address_base=None):
+    def _sequencer_command_datamover(self, datamover_name, address, size, tag=0xA, incr=True, address_base=None):
         """
         Configure a DataMover (either MM2S or S2MM).
 
@@ -1621,84 +1785,49 @@ class Acadia:
                             data=size)
         self._active_sequencer.bus_write(address=bus_address_base, 
                             data=addr_reg)
-        
-        
+            
 @dataclass
 class StreamConfiguration:
     """
     An abstraction for configurations of the stream processing path.
     
     The ``input_source`` field defines the source of data driving the stream. 
-    If an ``int`` is provided, this is understood to indicate which slave port 
-    of the input switch should be used. If ``input_source`` is a 
+    If ``input_source`` is a 
     :class:`Channel` object (which must be an ADC), then the default behavior 
     will depend on whether the specified ADC is directly connected to the input
-    switch; if so, then that channel's input switch port number is inferred, 
-    but if not, an output of the ADC switch will need to be used. By default 
-    the first ADC switch output is used, but if multiple ADCs that aren't 
-    directly connected to the stream input switch are to be used 
-    simultaneously, a different ADC switch output must be specified with 
-    ``ADC_switch_output_num``.
+    switch. If ``input_source`` is a string, it is understood to specify the 
+    kind of input to request.
     
-    To specify an input from memory, ``input_source`` may be a string
-    indicating which interconnect to read from; this will be one of
-    ``bulk``, ``config``, or ``sequencer``. A given interconnect may have
-    multiple DataMovers driving the input switch; by default the first one
-    for the specified type will be used, but for simultaneous streaming an 
-    input should be manually specified by providing a switch port number 
-    directly.
-    
-    The ``module`` field indicates which stream processing module to use.
-    If an integer is provided, this is interpreted as the module number.
-    If a string is provided, this indicates the kind of module to request, the
-    first of which will be used. As with the inputs, if simultaneous streaming 
-    is desired, the module number may need to be directly provided.
+    The ``module`` field indicates which kind of stream processing module to 
+    use.
     """
     
-    input_source: object    
-    module: object
-    acadia: Acadia
+    input_source: object
+    acadia: Acadia 
+    module: str = "memory"
     adc_switch_output_num : int = None
     
     def __post_init__(self):
+        
+        # Establish some hidden fields for mapping requested inputs and 
+        # modules to internal switch port numbers
+        self._input_resource = None
+        self._module_resource = None
+        self._adc_switch_master = None
+        self._adc_switch_slave = None
         
         if isinstance(self.input_source, Channel):
             if self.input_source.is_dac:
                 raise ValueError("Input source channels must be ADCs.")
             
-            # Establish some internal fields for mapping requested inputs and 
-            # modules to internal switch port numbers
-            self._input_switch_master = None
-            self._input_switch_slave = None
-            self._adc_switch_master = None
-            self._adc_switch_slave = None
-            
             # We now need to determine which switch input port to use
             # First, check if the ADC is directly connected to the input switch
-            for idx,inp in enumerate(self.acadia._firmware["stream_processing_path"]["inputs"]):
-                if inp["kind"] == "ADC" and inp["channel"] == self.input_source.num:
-                    self._input_switch_master = idx
-                    break
-                    
-            if self._input_switch_master is None:
-                # We haven't yet found it, configure the ADC input switch if it exists
-                if len([inp for inp in self.acadia._firmware["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"]) == 0:
-                    raise ValueError(f"Requested an ADC that isn't directly"
-                                     " connected to the input switch in a"
-                                     " system without an ADC switch.")
-                self._adc_switch_master = self.input_source.num
-                self._adc_switch_slave = self.adc_switch_output_num if self.adc_switch_output_num is not None else 0
-                
-                # Figure out which master port of the input switch is given by the specified ADC output
-                adc_switch_inputs = []
-                for idx,inp in enumerate(self.acadia._firmware["stream_processing_path"]["inputs"]):
-                    if inp["kind"] == "ADC_switch":
-                        adc_switch_inputs.append(idx)
-                        
-                # This will throw an error if there aren't enough ADC switch outputs to accommodate the 
-                # the requested switch output
-                self._input_switch_master = adc_switch_inputs[self._adc_switch_slave]
-                
+            name = f"ADC{self.input_source.num}"
+            if name in self.acadia._stream_input_resources:
+                self._input_resource = self.acadia._stream_input_resources[name]()
+            else:
+                self._input_resource = self.acadia._stream_input_resources["ADC_switch"]()                
+                self._adc_switch_slave = self._input_resource._resource_id
                 
                 # Figure out which master for the ADC switch it is
                 adc_switch_inputs = list(range(self.acadia._firmware.NUM_ADCS))
@@ -1710,79 +1839,42 @@ class StreamConfiguration:
                 self._adc_switch_master = adc_switch_inputs.index(self.input_source.num)
             
         elif isinstance(self.input_source, str):
-            # Go through all the inputs and determine which ports correspond to datamovers
-            # for the various interconnects
-            memory_ports = {"bulk": [], "config": [], "sequencer": []}
-            for idx,inp in enumerate(self.acadia._firmware["stream_processing_path"]["inputs"]):
-                if inp["kind"] == "memory":
-                    memory_ports[inp["source"]].append(idx)
-                    
-            if self.input_source not in memory_ports:
-                raise ValueError(f"Unrecognized memory source {self.input_source}")
-            
-            # Return the first one for the given type
-            # If there aren't any, this will just throw an error
-            self._input_switch_master = memory_ports[self.input_source][0]
-            
-        elif isinstance(self.input_source, int):
-            self._input_switch_master = self.input_source
+            self._input_resource = self.acadia._stream_input_resources[self.input_source]()
             
         else:
             raise TypeError(f"Invalid type of input source ({type(self.input_source)})")
         
+        self._input_switch_master = self._input_resource.switch_port()
+        
         # Now determine which module to use
-        if isinstance(self.module, str):
-            self._input_switch_slave = self.modules()[self.module][0]
-        elif isinstance(self.module, int):
-            self._input_switch_slave = self.module
-        else:
+        if not isinstance(self.module, str):            
             raise TypeError(f"Invalid type for specifying module: {type(self.input_source)}")
+        
+        self._module_resource = self.acadia.stream_modules[self.module]()
+        self._input_switch_slave = self._module_resource.switch_port()
+    
+    def reset(self):
+        """
+        Reset the datamover controller, module, and any associated FIFOs.
+        """
+        # Write the DataMover controller
+        address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value()
+        self.acadia._active_sequencer.bus_write(address=address, data=0)
+        
+        if self._module_resource.kind == "adder":
+            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value()
+            self.acadia._active_sequencer.bus_write(address=address, data=(1 << 2))
+        elif self._module_resource.kind == "dsp":
+            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value()
+            self.acadia._active_sequencer.bus_write(address=address, data=(1 << 4))
+        elif self._module_resource.kind == "cmacc":
+            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value() + 2
+            self.acadia._active_sequencer.bus_write(address=address, data=(1 << 24))
             
-        
-    def inputs(self):
+    def release(self):
         """
-        Create lists of input port numbers for the input types available.
-        This function can be used when you know you want to use an input of a
-        particular kind, but do not know which port numbers will provide that
-        input.
-        
-        :return: A ``dict`` whose keys are input kinds and whose values are 
-            lists, whose elements are port numbers for inputs of the kind
-            specified by the key
+        Release the module resources required for the configuration.
         """
-        
-        memory_ports = {"bulk": [], "config": [], "sequencer": [], "ADC_switch": []}
-        for idx,inp in enumerate(self.acadia._firmware["inputs"]):
-            if inp["kind"] == "memory":
-                memory_ports[inp["source"]].append(idx)
-            elif inp["kind"] == "ADC_switch":
-                memory_ports[inp["kind"]].append(idx)
-            elif inp["kind"] == "ADC":
-                memory_ports[f"ADC{inp['channel']}"] = idx
-            else:
-                raise ValueError(f"Unexpected input kind in firmware: {inp['kind']}")
-        return memory_ports
-    
-    def modules(self):
-        """
-        Create lists of module numbers for the module types available. This
-        function can be used when you know you want to process a stream with
-        a particular kind of module, but do not know which module number to 
-        use.
-        
-        :return: A ``dict`` whose keys are module kinds and whose values are 
-            lists, the elements of which are port numbers for modules of the 
-            kind specified by the corresponding key.
-        """
-        
-        modules = {"bulk": [], "sequencer": [], "config": [], 
-                       "dsp": [], "adder": [], "cmacc": []}
-        for idx,module in enumerate(self.acadia._firmware["stream_processing_path"]['modules']):
-            if module["kind"] == "direct":
-                modules[module["destination"]].append(idx)
-            else:
-                modules[module["kind"]].append(idx)
-                
-        return modules
-        
-    
+        self._input_resource._released = True
+        self._module_resource._released = True
+            

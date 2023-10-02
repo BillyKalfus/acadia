@@ -349,6 +349,7 @@ class ManagedResource(type):
         type_instance._allocation_limit = allocation_limit
         type_instance.instances = []
         type_instance._allocation_index = 0
+                
         type_self._next_instance_symbol = None
         
         return type_instance
@@ -1085,6 +1086,7 @@ class Synchronizer:
             raise ValueError("Synchronizer is already active.")
         self._active = True
         self._calls = []
+        return self
                 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._active = False

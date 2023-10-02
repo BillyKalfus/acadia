@@ -165,6 +165,7 @@ set obj [get_filesets sources_1]
 set files [list \
  [file normalize "${origin_dir}/acadia_axis_pipeline.vhd" ]\
  [file normalize "${origin_dir}/acadia_backpressure_fifo.vhd" ]\
+ [file normalize "${origin_dir}/acadia_backpressure_fifo_bd.vhd" ]\
  [file normalize "${origin_dir}/acadia_datamover_controller.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma_fifo.vhd" ]\
  [file normalize "${origin_dir}/acadia_dma.vhd" ]\
@@ -191,6 +192,17 @@ set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
 set file "acadia_backpressure_fifo.vhd"
+set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
+set_property -name "file_type" -value "VHDL" -objects $file_obj
+set_property -name "is_enabled" -value "1" -objects $file_obj
+set_property -name "is_global_include" -value "0" -objects $file_obj
+set_property -name "library" -value "xil_defaultlib" -objects $file_obj
+set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
+set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
+set_property -name "used_in_simulation" -value "1" -objects $file_obj
+set_property -name "used_in_synthesis" -value "1" -objects $file_obj
+
+set file "acadia_backpressure_fifo_bd.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj

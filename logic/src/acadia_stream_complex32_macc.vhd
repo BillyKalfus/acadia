@@ -8,11 +8,49 @@
 -- Project Name: acadia
 -- Target Devices: ZCU216
 -- Tool Versions: 2020.2
--- Description: A module which multiplies a continuous incoming data stream
--- against a kernel stored in a BRAM. The kernel address is provided by an
--- AXI-stream input, and the handshaking signals of this stream control the 
--- operation (and reset) of the accumulator, along with the final accumulator 
--- value being latched.
+-- Description: 
+--     A module which multiplies a continuous incoming data stream
+--     against a kernel stored in a BRAM. Input streams are 
+--     interpreted as packed 32-bit complex numbers (with two 
+--     16-bit quadratures) and multiplied against a second stream
+--     of complex numbers driven by a dedicated block RAM. The
+--     result is accumulated internally as a 64-bit complex number
+--     and exposed to the sequencer via a register. The status 
+--     signals allow fast access to the completion state of the 
+--     accumulator as well as the most significant bit of the 
+--     accumulator value. By loading the accumulator with an 
+--     initial offset, one can threshold the accumulator value 
+--     against an arbitrary value.
+--     
+--     This module uses the following registers:
+--         Address 0: Accumulator Real
+--             Writing to this address loads the real accumulator
+--             with the provided value and clears the 
+--             "accumulator_done" signal. Reading from this address
+--             returns the current value of the real accumulator.
+--         Address 1: Accumulator Imaginary
+--             Identical to address 0, but for the imaginary 
+--             accumulator.
+--         Address 2: Control/Status
+--             Bits 15-0 (RW) : Kernel Memory Pointer 
+--             Bit 16 (R)     : Range Error
+--                 An overflow or underflow has occurred in the 
+--                 calculation. After being set, this signal is latched
+--                 until the module is reset.
+--             Bit 17 (R)     : Output FIFO Overflow
+--             Bit 18 (R)     : Accumulator Done
+--                 The stream has completed its path through the 
+--                 accumulator and the accumulation results are 
+--                 available.
+--             Bit 19 (R)     : Accumulator Real MSB
+--             Bit 20 (R)     : Accumulator Imaginary MSB
+--             Bits 22-21 (RW): Write mode
+--                 When 1, a copy of the input data is written
+--                 When 2, the product data is written
+--                 Otherwise, nothing is written
+--             Bit 23 (RW)    : Write last
+--                 When set, only the last value is presented on the output stream.           
+--             Bit 24 (W)     : Reset
 -- 
 -- Dependencies: 
 -- 
