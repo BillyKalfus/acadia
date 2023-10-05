@@ -333,7 +333,12 @@ class DataManager:
             raise TypeError(f"Received address of invalid type: {address}")
         
         s = socket.socket(socket_family, socket.SOCK_STREAM)
-        s.connect(address)
+        try:
+            s.connect(address)
+        except:
+            logging.debug("Failed to connect")
+            return None
+        
         logging.debug(f"Established connection to server {address}")
         
         s.sendall(len(filename).to_bytes(1, "little"))
@@ -386,6 +391,28 @@ class DataManager:
         logging.debug(f"Group contains {len(group)} records")
         
         return group
+    
+    @staticmethod
+    def receive_all(address):
+        """
+        Retrieve all data groups from a server at the proviced address.
+        """
+        metadata_bytes = DataManager.receive_file("metadata.json", address)
+        if metadata_bytes is None:
+            logging.debug("Received no metadata")
+            return None
+            
+        metadata = json.loads(metadata_bytes)
+        logging.debug(f"Received metadata with"
+                      f" {len(metadata['groups'])} groups")
+        
+        # Get the groups themselves
+        groups = {}
+        for group_name,group_metadata in metadata["groups"].items():
+            group = DataManager.receive_group(group_name, address)
+            if group is not None:
+                groups[group_name] = group
+        return groups
         
     def start_server(self, address=("", 6672)):
         """
@@ -569,27 +596,15 @@ class Plotter:
             # Wait a bit so that we have some new data
             time.sleep(update_period)
             
-            # Get metadata so that we know what groups we have
-            metadata_bytes = DataManager.receive_file("metadata.json", 
-                                                       server_address)
-            if metadata_bytes is None:
-                logging.debug("Received no metadata")
+            data = DataManager.receive_all(server_address)
+            if data is None:
                 continue
-                
-            metadata = json.loads(metadata_bytes)
             
-            logging.debug(f"Received metadata with {len(metadata['groups'])} groups")
-            
-            # Get the groups themselves
-            for group_name,group_metadata in metadata["groups"].items():
-                group = DataManager.receive_group(group_name, server_address)
-                groups[group_name] = group
+            groups.update(data)
 
             # Update plots using the provided generator
             fig = next(gen)
-            
-            # # Redraw
-            # fig.canvas.draw() 
+
 
     def run(self, server_address=("localhost", 6672), update_period=0.2):
         """
