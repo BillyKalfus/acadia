@@ -1690,16 +1690,16 @@ class Firmware:
         """
         
         memory_ports = {"memory": [], "ADC_switch": []}
-        for idx,inp in enumerate(self.config["inputs"]):
+        for idx,inp in enumerate(self.config["stream_processing_path"]["inputs"]):
             if inp["kind"] == "memory" or inp["kind"] == "ADC_switch":
                 memory_ports[inp["kind"]].append(idx)
             elif inp["kind"] == "ADC":
-                memory_ports[f"ADC{inp['channel']}"] = idx
+                memory_ports[f"ADC{inp['channel']}"] = [idx]
             else:
                 raise ValueError(f"Unexpected input kind in firmware: {inp['kind']}")
         return memory_ports
     
-    def modules(self):
+    def stream_modules(self):
         """
         Create lists of module numbers for the module types available. This
         function can be used when you know you want to process a stream with
@@ -1712,7 +1712,7 @@ class Firmware:
         """
         
         modules = {"memory": [], "dsp": [], "adder": [], "cmacc": []}
-        for idx,module in enumerate(self.acadia._firmware["stream_processing_path"]['modules']):
+        for idx,module in enumerate(self.config["stream_processing_path"]['modules']):
             modules[module["kind"]].append(idx)
                 
         return modules

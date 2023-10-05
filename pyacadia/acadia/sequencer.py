@@ -1481,14 +1481,14 @@ class Sequencer(Processor):
                 
         return False
 
-    def compile_all(self):
+    def compile_all(self, overwrite=False):
         """
         Invokes the typical compilation procedure and then verifies that any
         intermediate computations are buffered with an appropriate amount of
         pipeline cycles.
         """
 
-        super().compile_all()
+        super().compile_all(overwrite)
 
         # Add necessary latencies until it can be confirmed that no more are
         # needed

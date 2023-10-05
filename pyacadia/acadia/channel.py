@@ -43,6 +43,9 @@ class Channel:
     tile: int = None
     block: int = None
     is_dac: bool = None
+    
+    def __hash__(self):
+        return hash((self.tile, self.block, self.is_dac))
 
     def __post_init__(self):
         self.num = self.tile*4 + self.block

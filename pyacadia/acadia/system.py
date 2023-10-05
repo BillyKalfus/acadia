@@ -115,7 +115,7 @@ class DMASynchronizer(Synchronizer):
 
         if self._dma_block:
             # Wait until all the DMAs in the mask have completed
-            dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
+            dma_running_device = self._acadia._firmware.sequencer_bus_decoder["dma_running"]
             bus_op = proc.bus_read(dma_running_device.address().value(),
                         latency=self._acadia.get_bus_latency("dma_running_dataport"))
             with proc.repeat_until(bus_op & self.dma_mask == 0):
@@ -385,24 +385,24 @@ class Acadia:
         self._firmware = Firmware(firmware)
         
         def input_switch_port(res_self):
-            return self.config.stream_inputs()[res_self.kind][res_self._resource_id]
+            return self._firmware.stream_inputs()[res_self.kind][res_self._resource_id]
         
         self._stream_input_resources = {k: ManagedResource(f"{k}StreamInput", 
                                                            (), 
                                                            {"kind": k, 
                                                             "switch_port": input_switch_port}, 
                                                            allocation_limit=len(v)) 
-                                        for k,v in self.config.stream_inputs()}
+                                        for k,v in self._firmware.stream_inputs().items()}
         
         def module_switch_port(res_self):
-            return self.config.stream_modules()[res_self.kind][res_self._resource_id]
+            return self._firmware.stream_modules()[res_self.kind][res_self._resource_id]
         
         self._stream_module_resources = {k: ManagedResource(f"{k}Module", 
                                                            (), 
                                                            {"kind": k,
                                                             "switch_port": module_switch_port}, 
                                                            allocation_limit=len(v)) 
-                                        for k,v in self.config.stream_modules()}
+                                        for k,v in self._firmware.stream_modules().items()}
         
         # Create various Processors
         # Note that the Processors cannot be ManagedMemory (and therefore, have the
@@ -1041,7 +1041,7 @@ class Acadia:
         :param length: Delay length in seconds
         :type length: float
         """
-        length_cycles = self.config["clocks"]["generated_clocks"]["seq_clk"]*length
+        length_cycles = self._firmware["clocks"]["generated_clocks"]["seq_clk"]*length
         
         if round(length_cycles,5) != round(length_cycles):
             raise ValueError("DMA blanking length does not result in an"
@@ -1282,18 +1282,22 @@ class Acadia:
 
     # -------------- RUNTIME UTILITIES ----------- #
     
-    def run(self, sequence):
+    def run(self, block=True):
         """
         Compile, assemble, load, and run a sequence on Acadia hardware.
         
         :param sequence: Sequence function to compile and run
         :type sequence: callable
+        :param block: If `True`, execution will block until the sequencer
+            signals completion.
         """
-        self.sequence(sequence)
-        self.compile_all()
         self.load(*self.assemble())
         self.sequencer_reset()
         self.sequencer_run()
+        
+        if block:
+            while not self.sequencer_done():
+                pass
         
     def sequencer_done(self):
         """
@@ -1315,18 +1319,19 @@ class Acadia:
             self._ADC_input_switch.connect(stream._adc_switch_slave, 
                                            stream._adc_switch_master)
         
-    def compile_all(self):
+    def compile(self, sequence, overwrite=False):
         """
         Compiles the programs for all internally-stored :class:`Processor` 
         objects.
         """
-
+        self.sequence(sequence)
+        
         for s in self._sequencer_type.instances:
-            s.compile_all()
+            s.compile_all(overwrite)
         for dma in self._dac_dmas:
-            dma.compile_all()
+            dma.compile_all(overwrite)
         for dma in self._adc_dmas:
-            dma.compile_all()
+            dma.compile_all(overwrite)
 
     def assemble(self):
         """
@@ -1603,16 +1608,16 @@ class Acadia:
         
     def _create_pl_ddr_arrays(self):
         self.PLDDR0Array = ManagedMemory(f"PLDDR0Array", (), {},
-            base_word_address=self._firmware["ddr4_memory"]["ddr4_c0"]["address"],
-            base_byte_address=self._firmware["ddr4_memory"]["ddr4_c0"]["address"],
+            base_word_address=self._firmware["memory"]["ddr4_c0"]["address"],
+            base_byte_address=self._firmware["memory"]["ddr4_c0"]["address"],
             word_width=8,
-            memory_size=self._firmware["ddr4_memory"]["ddr4_c0"]["size_bits"] // 8)
+            memory_size=self._firmware["memory"]["ddr4_c0"]["size_bits"] // 8)
         
         self.PLDDR1Array = ManagedMemory(f"PLDDR1Array", (), {},
-            base_word_address=self._firmware["ddr4_memory"]["ddr4_c1"]["address"],
-            base_byte_address=self._firmware["ddr4_memory"]["ddr4_c1"]["address"],
+            base_word_address=self._firmware["memory"]["ddr4_c1"]["address"],
+            base_byte_address=self._firmware["memory"]["ddr4_c1"]["address"],
             word_width=8,
-            memory_size=self._firmware["ddr4_memory"]["ddr4_c1"]["size_bits"])
+            memory_size=self._firmware["memory"]["ddr4_c1"]["size_bits"])
         
     def _create_ps_ddr_arrays(self):
         # PS DDR
@@ -1850,7 +1855,7 @@ class StreamConfiguration:
         if not isinstance(self.module, str):            
             raise TypeError(f"Invalid type for specifying module: {type(self.input_source)}")
         
-        self._module_resource = self.acadia.stream_modules[self.module]()
+        self._module_resource = self.acadia._stream_module_resources[self.module]()
         self._input_switch_slave = self._module_resource.switch_port()
     
     def reset(self):

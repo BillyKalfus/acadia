@@ -27,13 +27,11 @@ class Array:
             will be determined by the instance's ``memory_type`` attribute.
             Otherwise, one may pass a subclass of ``type`` which will be
             directly used to instantiate the array when allocated.
-            
         :type region: :class:`Channel` or :class:`ManagedMemory`
-        
         """
         if isinstance(region, Channel):
             if not region.is_dac:
-                raise ValueError(f"Attempted to create AcadiaArray for ADC"
+                raise ValueError(f"Attempted to create array for ADC"
                                  " channel. Because there is no dedicated"
                                  " memory for capture in Acadia, the capture"
                                  " memory region is not automatically able to"
@@ -41,11 +39,11 @@ class Array:
                                  " here, use the `PLDDR0Array` attribute of"
                                  " the `Acadia` object that this is capturing"
                                  " on.")
-            self._type = region.memory_type
+            self._class = region.memory_type
         elif isinstance(region, ManagedMemory):
-            self._type = region
+            self._class = region
         elif region is None:
-            self._type = None
+            self._class = None
         else:
             raise TypeError(f"Invalid region specifier {region}")
         
@@ -69,10 +67,10 @@ class Array:
         if self.allocated():
             raise ValueError("Attempted re-allocation of non-free memory")
                 
-        if self._type is None:
+        if self._class is None:
             self._resource = np.empty(shape=(size // dtype(0).nbytes,), dtype=dtype)
         else:
-            self._resource = self._type(size=self._size, dtype=dtype)
+            self._resource = self._class(size=self._size, dtype=dtype)
             
     def allocated(self):
         """
@@ -118,6 +116,30 @@ class Array:
             raise ValueError("Attempted access of unmapped memory.")
         
         return self._resource.memory
+    
+    def word_address(self):
+        if not self.allocated():
+            raise ValueError("Attempted address access of unallocated array")
+        
+        return self._resource.word_address()
+    
+    def byte_address(self):
+        if not self.allocated():
+            raise ValueError("Attempted address access of unallocated array")
+        
+        return self._resource.byte_address()
+    
+    def word_length(self):
+        if not self.allocated():
+            raise ValueError("Attempted length access of unallocated array")
+        
+        return self._resource.word_length()
+    
+    def byte_length(self):
+        if not self.allocated():
+            raise ValueError("Attempted length access of unallocated array")
+        
+        return self._resource.byte_length()
         
         
 class ProceduralArray(Array):
@@ -208,7 +230,7 @@ class ProceduralWaveform(ProceduralArray):
         self._channel = channel
         super().__init__(generator, region)
         
-    def allocate(self, length, dtype=np.int16):
+    def allocate(self, length):
         """
         Create an instance of the underlying memory type, thereby reserving a
         resource ID for that type and notifying the compiler to reserve memory
@@ -219,11 +241,18 @@ class ProceduralWaveform(ProceduralArray):
         """
         
         samples = self._channel.seconds_to_samples(length)
-        bytes_per_sample = 2*dtype(0).nbytes # factor of two because two quadratures
-        super().allocate(samples*bytes_per_sample, dtype)
+        bytes_per_sample = 2*2 # factor of two because two quadratures
+        super().allocate(samples*bytes_per_sample, np.int16)
         
         # Cache an array of time points for evaluating the generator
         self._time_axis = np.arange(0, length, self._channel.samples_to_seconds(1))
+        
+    def __len__(self):
+        """
+        :return: The length of the waveform in samples
+        :rtype: int
+        """
+        return self.byte_length() // 4
         
     def populate(self, *args, **kwargs):
         """
@@ -240,4 +269,13 @@ class ProceduralWaveform(ProceduralArray):
         if not self.allocated():
             raise ValueError(f"Attempted axis access of unallocated waveform.")
         return self._time_axis
+    
+class Waveform(ProceduralWaveform):
+    """
+    A waveform of constant length.
+    """
+    
+    def __init__(self, channel, length, region=None):
+        super().__init__(channel, None, region)
+        self.allocate(length)
         
