@@ -1002,7 +1002,7 @@ class Acadia:
             "args": (), 
             "kwargs": {
                 "channel": channel,
-                "length": len(signal) // channel.interface_width_bytes,
+                "length": signal.byte_length() // channel.interface_width_bytes,
                 "word_address": signal.word_address()
             }})
         
@@ -1025,7 +1025,7 @@ class Acadia:
             "args": (), 
             "kwargs": {
                 "channel": configuration.input_source,
-                "length": dst.byte_length(),
+                "length": dst.byte_length() // configuration.input_source.interface_width_bytes,
                 "word_address": 0
             }})
         
@@ -1282,16 +1282,17 @@ class Acadia:
 
     # -------------- RUNTIME UTILITIES ----------- #
     
-    def run(self, block=True):
+    def run(self, assemble=True, block=True):
         """
-        Compile, assemble, load, and run a sequence on Acadia hardware.
+        Assemble, load, and run a sequence on Acadia hardware.
+        Significant speedups may be achieved if reassembly is not
+        required.
         
-        :param sequence: Sequence function to compile and run
-        :type sequence: callable
         :param block: If `True`, execution will block until the sequencer
             signals completion.
         """
-        self.load(*self.assemble())
+        if assemble:
+            self.load(*self.assemble())
         self.sequencer_reset()
         self.sequencer_run()
         
@@ -1862,18 +1863,18 @@ class StreamConfiguration:
         """
         Reset the datamover controller, module, and any associated FIFOs.
         """
-        # Write the DataMover controller
+        # Reset the DataMover controller
         address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value()
-        self.acadia._active_sequencer.bus_write(address=address, data=0)
+        self.acadia._active_sequencer.bus_write(address=address+3, data=0)
         
         if self._module_resource.kind == "adder":
             address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value()
             self.acadia._active_sequencer.bus_write(address=address, data=(1 << 2))
         elif self._module_resource.kind == "dsp":
-            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value()
+            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value()
             self.acadia._active_sequencer.bus_write(address=address, data=(1 << 4))
         elif self._module_resource.kind == "cmacc":
-            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value() + 2
+            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value() + 2
             self.acadia._active_sequencer.bus_write(address=address, data=(1 << 24))
             
     def release(self):

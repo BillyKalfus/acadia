@@ -2,7 +2,6 @@ import os
 import datetime
 import shutil
 import json
-import fcntl
 import pickle
 import numpy as np
 import io
@@ -29,7 +28,7 @@ class RecordGroup(ABC):
         pass
     
     @abstractstaticmethod
-    def load(inpt):
+    def load(inpt, preprocessor):
         pass
     
     def __getitem__(self, k):
@@ -65,17 +64,32 @@ class ListRecordGroup(RecordGroup):
         pickle.dump(self._records, output_file)
         
     @staticmethod
-    def load(inpt):
+    def load(inpt, preprocessor=None):
         """
-        Load records from a file or bytes.
+        Load records from a file or bytes with an optional preprocessing stage.
+        
+        :param inpt: A file path or byte array to load data from
+        :type inpt: str or bytes
+        :param preprocessor: A function to call on the raw record data before
+            enclosing it in the group object. The function should accept a list
+            representing the output data as its first argument and a list
+            representing the input data as its second argument.
+        :type preprocessor: callable
         """
         if isinstance(inpt, str):
-            return ListRecordGroup(pickle.load(inpt))
-            
-        if isinstance(inpt, bytes):
-            return ListRecordGroup(pickle.loads(inpt))
+            input_data = pickle.load(inpt)
+        elif isinstance(inpt, bytes):
+            input_data = pickle.loads(inpt)
+        else:
+            raise TypeError(f"Data of invalid type: {type(inpt)}")
         
-        raise TypeError(f"Data of invalid type: {type(inpt)}")
+        group = ListRecordGroup()
+        if preprocessor is not None:
+            preprocessor(group._records, input_data)
+        else:
+            group._records = input_data
+            
+        return group
         
     def append(self, record):
         """
@@ -130,17 +144,34 @@ class ArrayRecordGroup(RecordGroup):
         inst = ArrayRecordGroup(records.shape[1:], records.shape[0], records.dtype)
         inst._records = records
         inst._count = records.shape[0]
+        inst._record_axes = None
         return inst
         
     def serialize(self, output_file):
-        axes = {f"axis{i}": ax for i,ax in enumerate(self._record_axes)}                
+        axes = {f"axis{i}": ax for i,ax in enumerate(self._record_axes)} if self._record_axes is not None else {}                
         np.savez(output_file, 
                  allow_pickle=False, 
                  records=self._records[:self._count,...], 
                  **axes)
     
     @staticmethod  
-    def load(inpt):
+    def load(inpt, preprocessor=None):
+        """
+        Load records from a file or bytes with an optional preprocessing stage.
+        
+        :param inpt: A file path or byte array to load data from
+        :type inpt: str or bytes
+        :param preprocessor: A function to call on the record data before
+            enclosing it in the group object. The function should accept a 
+            ``numpy.NpzFile`` object representing the input data and axes 
+            as its only argument, and a dictionary should be returned with
+            the key "records" containing the output data and the keys "axis<i>"
+            containing the axes for the data in the records. Note that the 
+            resulting record group will encapsulate these objects directly, 
+            so any allocation or copying should be performed in the 
+            preprocessing stage if necessary.
+        :type preprocessor: callable
+        """
         if isinstance(inpt, str):
             file = inpt
         elif isinstance(inpt, bytes):
@@ -149,9 +180,11 @@ class ArrayRecordGroup(RecordGroup):
             raise TypeError(f"Data of invalid type: {type(inpt)}")
         
         data = np.load(file, allow_pickle=False)
+        group_data = preprocessor(data) if preprocessor is not None else data
+        inst = ArrayRecordGroup.from_data(group_data["records"])
+        if "axis0" in group_data:
+            inst._record_axes = [group_data[f"axis{i}"] for i in range(group_data["records"].ndim-1)]
         
-        inst = ArrayRecordGroup.from_data(data["records"])
-        inst._record_axes = [data[f"axis{i}"] for i in range(data["records"].ndim-1)] if "axis0" in data else None
         return inst
         
     def __getitem__(self, k):
@@ -245,6 +278,8 @@ class DataManager:
         self._saved_files = []
         self._groups = {}
         
+        self._record_preprocessors = {}
+        
         self._save_count = save_count
         self._record_count = 0
         self._server_threads = []
@@ -254,10 +289,10 @@ class DataManager:
         self._lock = Lock()
         
     @staticmethod
-    def _server_thread(file_directory, address, lock, stop_event):
+    def _server_thread(file_directory, address, lock, stop_event, record_preprocessors):
         """
-        A thread for providing access to files in the output directory in a 
-        way that respects the requisite file locks.
+        A thread for providing access to files and data in the output 
+        directory in a way that respects the requisite file locks.
         """
         if isinstance(address, tuple):
             socket_family = socket.AF_INET
@@ -275,7 +310,7 @@ class DataManager:
         s.bind(address)
         s.listen()
         
-        # Continuously accept connections that will request files
+        # Continuously accept connections until the main thread commands otherwise
         while True:
             try:
                 conn, addr = s.accept()
@@ -288,43 +323,74 @@ class DataManager:
                 
             logging.debug(f"Received connection from {addr}")
             
-            # Get the length of the name of the file being requested
-            filename_length = int.from_bytes(conn.recv(1), "little")
-            logging.debug(f"Filename length {filename_length}")
-            
-            # Get the filename
-            filename_bytes = b''
-            while len(filename_bytes) < filename_length:
-                filename_bytes += conn.recv(filename_length - len(filename_bytes))
-            filename = filename_bytes.decode("ascii")
-            logging.debug(f"Requested file {filename}")
+            cmd = conn.recv(1)
+            if cmd == b'g':
+                # Receive a (potentially pre-processed) group
+                # Get the length of the name of the group being requested
+                group_name_length = int.from_bytes(conn.recv(1), "little")
+                logging.debug(f"Group name length {group_name_length}")
                 
-            # send an 8-byte file length
-            if filename not in os.listdir(file_directory):
-                logging.debug(f"File not found")
-                conn.sendall((0).to_bytes(8, "little"))
-            else:
+                # Get the group name
+                group_name_bytes = b''
+                while len(group_name_bytes) < group_name_length:
+                    group_name_bytes += conn.recv(group_name_length - len(group_name_bytes))
+                group_name = group_name_bytes.decode("ascii")
+                logging.debug(f"Requested group {group_name}")
+                
+                # Load the metadata to get the group type and filename
                 with lock:
-                    logging.debug(f"Data lock acquired")
-                    file_size = os.path.getsize(os.path.join(file_directory, 
-                                                            filename))
-                    conn.sendall(file_size.to_bytes(8, "little"))
-                    logging.debug(f"Located file, sent size {file_size}")
-                    
-                    # Send the file
-                    with open(os.path.join(file_directory, filename), "rb") as file:
-                        conn.sendfile(file)
+                    if "metadata.json" not in os.listdir(file_directory):
+                        # No data yet
+                        conn.sendall((0).to_bytes(1, "little"))
+                        conn.close()
+                        continue
                         
-                    logging.debug(f"File {filename} sent")
+                    with open(os.path.join(file_directory, "metadata.json"), "rb") as f:
+                        metadata = json.load(f)
+                    
+                    group_type = metadata['groups'][group_name]['type']
+                    group_filename = os.path.join(file_directory, metadata['groups'][group_name]['filename'])
+                    logging.debug(f"Identified group as type {group_type}")
+                    
+                    conn.sendall(len(group_type).to_bytes(1, "little"))
+                    conn.sendall(group_type.encode('ascii'))
+                    logging.debug(f"Sent group type {group_type}")
+
+                    if group_name in record_preprocessors:
+                        # If the data is to be preprocessed, create a new group and
+                        # send the serialized version of that
+                        group = eval(group_type).load(group_filename, record_preprocessors[group_name])
+                        data = io.BytesIO()
+                        group.serialize(data)
+                        data_size = data.tell()
+                        data.seek(0)
+                        
+                    else:
+                        # If there's no preprocessing to do, just send the data file
+                        data_size = os.path.getsize(group_filename)
+                        data = open(group_filename, "rb")
+                            
+                    conn.sendall(data_size.to_bytes(8, "little"))
+                    logging.debug(f"Sent data size {data_size}")
+                    
+                    conn.sendfile(data)
+                    logging.debug(f"Sent file")
+                    
+                    data.close()
+                
+            else:
+                logging.error(f"Received invalid command {cmd}")
                 
             # Close the connection and accept a new one
             conn.close()
-            
+    
     @staticmethod
-    def receive_file(filename, address):
+    def receive_group(group_name, address):
         """
-        Receive a file from a server.
+        Receive a data group from a server.
         """
+        
+        logging.debug(f"Requesting group {group_name} from {address}")
         if isinstance(address, tuple):
             socket_family = socket.AF_INET
         elif isinstance(address, str):
@@ -341,78 +407,45 @@ class DataManager:
         
         logging.debug(f"Established connection to server {address}")
         
-        s.sendall(len(filename).to_bytes(1, "little"))
-        logging.debug(f"Sent filename length {len(filename)}")
+        s.sendall(b'g')
+        logging.debug("Sent group command")
         
-        s.sendall(filename.encode("ascii"))
-        logging.debug(f"Sent filename {filename}")
+        s.sendall(len(group_name).to_bytes(1, "little"))
+        logging.debug(f"Sent group name length {len(group_name)}")
         
-        file_length_bytes = b''
-        while len(file_length_bytes) < 8:
-            file_length_bytes += s.recv(8 - len(file_length_bytes))
-            
-        file_length = int.from_bytes(file_length_bytes, "little")
-        logging.debug(f"Server responded with file size {file_length}")
+        s.sendall(group_name.encode("ascii"))
+        logging.debug(f"Sent group name {group_name}")
         
-        if file_length == 0:
+        group_type_length_bytes = s.recv(1)
+        group_type_length = int.from_bytes(group_type_length_bytes, "little")
+        logging.debug(f"Received group type length {group_type_length}")
+        
+        if group_type_length == 0:
             return None
         
-        file_data = b''
-        while len(file_data) < file_length:
-            file_data += s.recv(file_length - len(file_data))
+        group_type_bytes = b''
+        while len(group_type_bytes) < group_type_length:
+            group_type_bytes += s.recv(group_type_length - len(group_type_bytes))
+        group_type = group_type_bytes.decode('ascii')
+        logging.debug(f"Received group type {group_type}")
+        
+        data_length_bytes = b''
+        while len(data_length_bytes) < 8:
+            data_length_bytes += s.recv(8 - len(data_length_bytes))
             
-        logging.debug(f"Received file")
-            
-        return file_data
-    
-    @staticmethod
-    def receive_group(group_name, address):
-        """
-        Receive a data group from a server.
-        """
-        logging.debug(f"Requesting group {group_name} from {address}")
-        metadata_bytes = DataManager.receive_file("metadata.json", address)
-        if metadata_bytes is None:
-            logging.debug(f"Received no metadata")
+        data_length = int.from_bytes(data_length_bytes, "little")
+        logging.debug(f"Server responded with data size {data_length}")
+        
+        if data_length == 0:
             return None
         
-        metadata = json.loads(metadata_bytes)
-        group_type = metadata['groups'][group_name]['type']
-        logging.debug(f"Received metadata, group is of type {group_type}")
-        
-        group_data = DataManager.receive_file(metadata["groups"][group_name]["filename"], address)
-        logging.debug(f"Received records from server")
-        
-        if group_data is None:
-            logging.debug("Received no group data")
-            return None
-        
-        group = eval(group_type).load(group_data)
-        logging.debug(f"Group contains {len(group)} records")
-        
-        return group
-    
-    @staticmethod
-    def receive_all(address):
-        """
-        Retrieve all data groups from a server at the proviced address.
-        """
-        metadata_bytes = DataManager.receive_file("metadata.json", address)
-        if metadata_bytes is None:
-            logging.debug("Received no metadata")
-            return None
+        data = b''
+        while len(data) < data_length:
+            data += s.recv(data_length - len(data))
             
-        metadata = json.loads(metadata_bytes)
-        logging.debug(f"Received metadata with"
-                      f" {len(metadata['groups'])} groups")
+        logging.debug(f"Received data")
         
-        # Get the groups themselves
-        groups = {}
-        for group_name,group_metadata in metadata["groups"].items():
-            group = DataManager.receive_group(group_name, address)
-            if group is not None:
-                groups[group_name] = group
-        return groups
+        return eval(group_type).load(data)
         
     def start_server(self, address=("", 6672)):
         """
@@ -426,7 +459,8 @@ class DataManager:
                    args=(self._output_directory, 
                          address, 
                          self._lock, 
-                         self._server_stop_event),
+                         self._server_stop_event,
+                         self._record_preprocessors),
                    name=f"DataManager@{address}",
                    daemon=True)
         t.start()
@@ -482,40 +516,6 @@ class DataManager:
         # Clear the record count so that we wait the right amount of time
         # before saving again
         self._record_count = 0
-        
-    @staticmethod
-    def load_group(directory, group_name):
-        """
-        Load a group of records from a data file in a given directory. The
-        type of the returned group will match that of the stored group.
-        
-        :param directory: Data directory from which to load group data
-        :type directory: str
-        :param group_name: Name of the group to load
-        :type group_name: str
-        :return: A record group containing the loaded data
-        :rtype: A subclass of :class:`RecordGroup`
-        """
-        logging.debug(f"Loading records in group {group_name} from {directory}")
-        
-        file = open(os.path.join(directory, "metadata.json"), "w+")
-        
-        metadata = json.load(file)
-            
-        if group_name not in metadata["groups"]:
-            file.close()
-            raise ValueError(f"Unable to find group {group_name}")
-        
-        group = metadata["groups"][group_name]
-        
-        with open(group["filename"], "rb") as f:
-            group_obj = eval(group["type"]).load(f)
-            
-        file.close()
-        
-        logging.debug(f"Loaded {len(group_obj)} records")
-        
-        return group_obj
                         
     def save_file(self, file, suffix=""):
         """
@@ -540,14 +540,19 @@ class DataManager:
             "time": datetime.datetime.now(datetime.timezone.utc).strftime(self._datetime_format)
         })
         
-    def add_group(self, name, group):
+    def add_group(self, name, group, preprocessor=None):
         """
-        Add a group to be managed.
+        Add a group to be managed with an optional remote preprocessor.
         
         :param name: Name of group
         :type name: str
         :param group: Group to be managed
         :type group: :class:`RecordGroup`
+        :param preprocessor: A preprocessing function for the record data. 
+            Note that any preprocessing only applies to data sent by the 
+            server, NOT to data written to disk. For descriptions of the 
+            preprocessor requirements, see the documentation of :meth:`load`
+            for the corresponding `RecordGroup` subclass. 
         """
         if name in self._groups:
             raise KeyError(f"Group {name} already exists.")
@@ -557,79 +562,6 @@ class DataManager:
         
         self._groups[name] = group
         
-class Plotter:
-    """
-    A class for requesting data from :class:`DataManager` instances and 
-    creating live plots with processing pipelines. The 
-    """
-    
-    def __init__(self, plot_generator):
-        """
-        :param plot_generator: An iterable function for drawing the plot. The
-            function is expected to yield the created figure after updating the
-            data in any plotted objects. The function must accept a single dict
-            as an argument whose keys will be group names and whose values are
-            :class:`RecordGroup` instances containing their data.
-        :type plot_generator: callable
-        """
-        self._plot_generator = plot_generator
-        self._thread = None
-        self._thread_stop = Event()
+        if preprocessor is not None:
+            self._record_preprocessors[name] = preprocessor
         
-    @staticmethod
-    def _plot_thread(update_period, server_address, plot_generator, thread_stop_event):
-        import time
-        import matplotlib.pyplot as plt
-        import numpy as np
-        
-        logging.debug(f"Plotter thread launched to retrieve records from {server_address}")
-        
-        groups = {}
-        
-        # Create the generator for updating plots
-        gen = plot_generator(groups)
-        
-        while True:
-            if thread_stop_event.is_set():
-                logging.debug("Received stop event")
-                break
-            # Wait a bit so that we have some new data
-            time.sleep(update_period)
-            
-            data = DataManager.receive_all(server_address)
-            if data is None:
-                continue
-            
-            groups.update(data)
-
-            # Update plots using the provided generator
-            fig = next(gen)
-
-
-    def run(self, server_address=("localhost", 6672), update_period=0.2):
-        """
-        Periodically poll the server for data and update all plots.
-        
-        :param update_period: The amount of time to wait before polling a 
-            server for data updates
-        :type update_period: float
-        """        
-        self.stop()
-        self._thread = Thread(target=Plotter._plot_thread, 
-                              args=(update_period, 
-                                    server_address, 
-                                    self._plot_generator,
-                                    self._thread_stop),
-                              name=f"Plotter@{server_address}",
-                              daemon=True)
-        self._thread.start()
-        
-    def stop(self):
-        """
-        Stop any running plot threads
-        """
-        if self._thread is not None:
-            self._thread_stop.set()
-            self._thread.join()
-            self._thread_stop.clear()
-            self._thread = None
