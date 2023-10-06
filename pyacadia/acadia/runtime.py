@@ -27,9 +27,13 @@ class Runtime(ABC):
         args = ["ssh"]
         
         if self._jump_server is not None:
-            args += [""]
+            args += ["-J", self._jump_server]
+            
+        python_cmd = "python3 -c \" \""
+            
+        args += [f"root@{self._target_ip}", f"\"{python_cmd}\""]
         
-        subprocess.run
+        subprocess.run(args, capture_output=True, check=True)
         
         
     @abstractstaticmethod
