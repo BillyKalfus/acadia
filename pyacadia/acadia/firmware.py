@@ -88,8 +88,6 @@ class Firmware:
         # Create split dataport for triggering and monitoring the DMA and for setting continue signals
         _bit = 0
         _dma_trigger_ports = []
-        _dma_fifo_empty_ports = []
-        _dma_fifo_almost_empty_ports = []
         _dma_running_ports = []
 
         for label,count in [("dac", self.NUM_DACS), ("adc", self.NUM_ADCS)]:
@@ -102,20 +100,6 @@ class Firmware:
                     "gate": BusDataport.GATE_RESET,
                     "pipeline": self.config["sequencer_bus"]["dma_trigger_dataport"]["pipeline"][_bit]}]
 
-                _dma_fifo_empty_ports += [
-                    {"name": f"{label}{idx}_dma", 
-                    "direction": BusDataport.INPUT, 
-                    "offset": _bit,
-                    "width": 1,
-                    "pipeline": self.config["sequencer_bus"]["dma_fifo_empty_dataport"]["pipeline"][_bit]}]
-
-                _dma_fifo_almost_empty_ports += [
-                    {"name": f"{label}{idx}_dma", 
-                    "direction": BusDataport.INPUT, 
-                    "offset": _bit,
-                    "width": 1,
-                    "pipeline": self.config["sequencer_bus"]["dma_fifo_almost_empty_dataport"]["pipeline"][_bit]}]
-
                 _dma_running_ports += [
                     {"name": f"{label}{idx}_dma", 
                     "direction": BusDataport.INPUT, 
@@ -123,25 +107,14 @@ class Firmware:
                     "width": 1,
                     "pipeline": self.config["sequencer_bus"]["dma_running_dataport"]["pipeline"][_bit]}]
                 
-
-                fifo_port = BusDevice(name=f"{label}{idx}_dma_fifo", 
-                                      size=1, 
-                                      bus_data_bits=next_highest_power_of_2(self.config[f"{label}_dma_descriptor_memory"]["size_bits"] // 64, log=True))
-                self.sequencer_bus_decoder.add(fifo_port, pipeline=self.config["sequencer_bus"]["dma_fifo_dataport_pipeline"][_bit])
+                regs_port = BusDevice(name=f"{label}{idx}_dma", size=2)
+                self.sequencer_bus_decoder.add(regs_port, pipeline=self.config["sequencer_bus"]["dma_pipeline"][_bit])
 
                 _bit += 1
 
         self.dma_trigger = BusDataport(name="dma_trigger", ports=_dma_trigger_ports)
         self.sequencer_bus_decoder.add(self.dma_trigger, pipeline=self.config["sequencer_bus"]["dma_trigger_dataport"]["bus_pipeline"])
         self._hdl_modules.append(self.dma_trigger)
-        
-        self.dma_fifo_empty = BusDataport(name="dma_fifo_empty", ports=_dma_fifo_empty_ports)
-        self.sequencer_bus_decoder.add(self.dma_fifo_empty, pipeline=self.config["sequencer_bus"]["dma_fifo_empty_dataport"]["bus_pipeline"])
-        self._hdl_modules.append(self.dma_fifo_empty)
-
-        self.dma_fifo_almost_empty = BusDataport(name="dma_fifo_almost_empty", ports=_dma_fifo_almost_empty_ports)
-        self.sequencer_bus_decoder.add(self.dma_fifo_almost_empty, pipeline=self.config["sequencer_bus"]["dma_fifo_almost_empty_dataport"]["bus_pipeline"])
-        self._hdl_modules.append(self.dma_fifo_almost_empty) 
 
         self.dma_running = BusDataport(name="dma_running", ports=_dma_running_ports)
         self.sequencer_bus_decoder.add(self.dma_running, pipeline=self.config["sequencer_bus"]["dma_running_dataport"]["bus_pipeline"])
@@ -184,17 +157,17 @@ class Firmware:
             _ps_gpio_dataports += [{"name": f"gpio_out",
                                     "direction": BusDataport.INPUT,
                                     "offset": 0,
-                                    "width": self.config[f"ps_gpio{gpio_num}"]["width"],
-                                    "pipeline": self.config[f"ps_gpio{gpio_num}"]["pipeline"]}]
+                                    "width": self.config["sequencer_bus"][f"ps_gpio{gpio_num}"]["width"],
+                                    "pipeline": self.config["sequencer_bus"][f"ps_gpio{gpio_num}"]["pipeline"]}]
             _ps_gpio_dataports += [{"name": f"gpio_in",
                                     "direction": BusDataport.OUTPUT,
                                     "offset": 0,
-                                    "width": self.config[f"ps_gpio{gpio_num}"]["width"],
+                                    "width": self.config["sequencer_bus"][f"ps_gpio{gpio_num}"]["width"],
                                     "gate": BusDataport.GATE_REGCE,
-                                    "pipeline": self.config[f"ps_gpio{gpio_num}"]["pipeline"]}]
+                                    "pipeline": self.config["sequencer_bus"][f"ps_gpio{gpio_num}"]["pipeline"]}]
 
             _ps_gpio = BusDataport(name=f"ps_gpio{gpio_num}", ports=_ps_gpio_dataports)
-            self.sequencer_bus_decoder.add(_ps_gpio, pipeline=self.config[f"ps_gpio{gpio_num}"]["bus_pipeline"])
+            self.sequencer_bus_decoder.add(_ps_gpio, pipeline=self.config["sequencer_bus"][f"ps_gpio{gpio_num}"]["bus_pipeline"])
             self._hdl_modules.append(_ps_gpio)
 
         _ps_irq_dataports = []
@@ -205,22 +178,40 @@ class Firmware:
                 "offset": irq,
                 "width": 1,
                 "gate": BusDataport.GATE_REGCE,
-                "pipeline": self.config["ps_irq"]["irq_pipeline"]})
+                "pipeline": self.config["sequencer_bus"]["ps_irq"]["irq_pipeline"]})
 
         _ps_irq_dataports.append(
             {"name": f"gdma_irq",
             "direction": BusDataport.INPUT,
             "offset": 2,
             "width": 8,
-            "pipeline": self.config["ps_irq"]["gdma_pipeline"]})
+            "pipeline": self.config["sequencer_bus"]["ps_irq"]["gdma_pipeline"]})
 
         self.ps_irq = BusDataport(name="ps_irq", ports=_ps_irq_dataports)
-        self.sequencer_bus_decoder.add(self.ps_irq, pipeline=self.config["ps_irq"]["bus_pipeline"])
+        self.sequencer_bus_decoder.add(self.ps_irq, pipeline=self.config["sequencer_bus"]["ps_irq"]["bus_pipeline"])
         self._hdl_modules.append(self.ps_irq)
 
         # Create a register file for RFDC real-time updates and connect it to the sequencer bus
         self.rfdc_rts_regs = BusDevice("rfdc_rts_regs", size=256)
         self.sequencer_bus_decoder.add(self.rfdc_rts_regs, pipeline=self.config["sequencer_bus"]["rfdc_rts"]["bus_pipeline"])
+        
+        _io_dataports = []
+        _io_dataports.append(
+            {"name": f"DACIO",
+            "direction": BusDataport.OUTPUT,
+            "offset": 0,
+            "width": 16,
+            "pipeline": self.config["sequencer_bus"]["io_dataport"]["DACIO_pipeline"]})
+        _io_dataports.append(
+            {"name": f"ADCIO",
+            "direction": BusDataport.INPUT,
+            "offset": 16,
+            "width": 16,
+            "pipeline": self.config["sequencer_bus"]["io_dataport"]["ADCIO_pipeline"]})
+            
+        self.rf_io = BusDataport(name="io", ports=_io_dataports)
+        self.sequencer_bus_decoder.add(self.rf_io, pipeline=self.config["sequencer_bus"]["io_dataport"]["bus_pipeline"])
+        self._hdl_modules.append(self.rf_io)
 
         # Create a register file for interacting with the PS GDMA
         self.zdma_controller = BusDevice("zdma_controller", size=64)
@@ -819,13 +810,10 @@ class Firmware:
                 connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/mem{block}_dout", f"hedgehog/dac{channel}_pipeline/s_axis_tdata")
                 connect_bd_intf_net(f, f"hedgehog/dac{channel}_pipeline/m_axis", f"hedgehog/rfdc/s{tile}{block}_axis")
 
-                # Connect the DAC DMA to the registers
-                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac{channel}_dma_fifo_mosi", f"hedgehog/dac{channel}_dma/descriptor_address_fifo_in")
-                connect_bd_net(f, f"hedgehog/sequencer_bus_decoder/dac{channel}_dma_fifo_wr", f"hedgehog/dac{channel}_dma/descriptor_address_fifo_wr")
+                # Connect the DAC DMA to the bus and dataports
+                connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/dac{channel}_dma", f"hedgehog/dac{channel}_dma/master_bus")
                 connect_bd_net(f, f"hedgehog/dma_trigger_dataport/dac{channel}_dma", f"hedgehog/dac{channel}_dma/trigger")
                 connect_bd_net(f, f"hedgehog/dma_running_dataport/dac{channel}_dma", f"hedgehog/dac{channel}_dma/running")
-                connect_bd_net(f, f"hedgehog/dma_fifo_empty_dataport/dac{channel}_dma", f"hedgehog/dac{channel}_dma/descriptor_address_fifo_empty")
-                connect_bd_net(f, f"hedgehog/dma_fifo_almost_empty_dataport/dac{channel}_dma", f"hedgehog/dac{channel}_dma/descriptor_address_fifo_almost_empty")
                 
                 # Connect DAC Descriptor BRAMs and to the DMA                
                 connect_bd_intf_net(f, f"hedgehog/dac_dma_descriptor_memory/mem{channel}", f"hedgehog/dac{channel}_dma/DESCRIPTOR_MEM")
@@ -873,25 +861,10 @@ class Firmware:
                                f"hedgehog/adc{d}_pipeline/m_axis_tdata",
                                f"hedgehog/adc{d}_dma/data_in")
 
-                # Connect the ADC DMA signals to the dataports
-                connect_bd_net(f, 
-                               f"hedgehog/sequencer_bus_decoder/adc{d}_dma_fifo_mosi", 
-                               f"hedgehog/adc{d}_dma/descriptor_address_fifo_in")
-                connect_bd_net(f, 
-                               f"hedgehog/sequencer_bus_decoder/adc{d}_dma_fifo_wr", 
-                               f"hedgehog/adc{d}_dma/descriptor_address_fifo_wr")
-                connect_bd_net(f, 
-                               f"hedgehog/dma_trigger_dataport/adc{d}_dma", 
-                               f"hedgehog/adc{d}_dma/trigger")
-                connect_bd_net(f, 
-                               f"hedgehog/dma_running_dataport/adc{d}_dma", 
-                               f"hedgehog/adc{d}_dma/running")
-                connect_bd_net(f, 
-                               f"hedgehog/dma_fifo_empty_dataport/adc{d}_dma", 
-                               f"hedgehog/adc{d}_dma/descriptor_address_fifo_empty")
-                connect_bd_net(f, 
-                               f"hedgehog/dma_fifo_almost_empty_dataport/adc{d}_dma", 
-                               f"hedgehog/adc{d}_dma/descriptor_address_fifo_almost_empty")
+                # Connect the ADC DMA signals to the bus and dataports
+                connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/adc{d}_dma", f"hedgehog/adc{d}_dma/master_bus")
+                connect_bd_net(f, f"hedgehog/dma_trigger_dataport/adc{d}_dma", f"hedgehog/adc{d}_dma/trigger")
+                connect_bd_net(f, f"hedgehog/dma_running_dataport/adc{d}_dma", f"hedgehog/adc{d}_dma/running")
                 
                 # Connect to descriptor memory
                 connect_bd_intf_net(f, 
@@ -1572,7 +1545,7 @@ class Firmware:
             # ------------------- PS GPIO and Interrupt Connections -------------------- #
             # Create a concatenator for the PS inputs
             create_concatenator(f, "hedgehog/xlconcat_ps_gpio_in", 
-                                [32, 32, self.config["ps_gpio5"]["width"]])
+                                [32, 32, self.config["sequencer_bus"]["ps_gpio5"]["width"]])
             connect_bd_net(f, "hedgehog/xlconcat_ps_gpio_in/dout", "hedgehog/PS_GPIO_IN")
             
             for idx, gpio_port in enumerate([3,4,5]):
@@ -1580,8 +1553,8 @@ class Firmware:
                 
                 # Slice the PS outputs
                 create_slice(f, name=f"hedgehog/xlslice_ps_gpio{gpio_port}_out", 
-                                 input_width=64 + self.config["ps_gpio5"]["width"], 
-                                 input_from=(64 + self.config["ps_gpio5"]["width"] - 1 if gpio_port == 5 else (idx+1)*32-1),
+                                 input_width=64 + self.config["sequencer_bus"]["ps_gpio5"]["width"], 
+                                 input_from=(64 + self.config["sequencer_bus"]["ps_gpio5"]["width"] - 1 if gpio_port == 5 else (idx+1)*32-1),
                                  input_to=idx*32)
                 connect_bd_net(f, f"hedgehog/xlslice_ps_gpio{gpio_port}_out/Din", f"hedgehog/PS_GPIO_OUT")
                 connect_bd_net(f, f"hedgehog/xlslice_ps_gpio{gpio_port}_out/Dout", f"hedgehog/ps_gpio{gpio_port}_dataport/gpio_out")
@@ -1602,6 +1575,10 @@ class Firmware:
             connect_bd_net(f, f"hedgehog/xlconcat_ps_gdma_clk/dout", f"hedgehog/ps_gdma_clk")
             for i in range(8):
                 connect_bd_net(f, f"hedgehog/xlconcat_ps_gdma_clk/In{i}", f"hedgehog/clk_wiz/seq_clk")
+                
+            # ------------------- ADCIO and DACIO -------------------- #
+            connect_bd_net(f, "hedgehog/io_dataport/ADCIO", "hedgehog/ADCIO")
+            connect_bd_net(f, "hedgehog/io_dataport/DACIO", "hedgehog/DACIO")
                 
             # ------------------- AXI Address Assignment -------------------- #
             

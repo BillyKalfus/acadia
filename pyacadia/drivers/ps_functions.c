@@ -287,3 +287,21 @@ void to_samples_simd_batched(
         vst1_s16(output + i + 28, s_out7); 
     }
 }
+
+// https://github.com/Xilinx/u-boot-xlnx/blob/master/arch/arm/cpu/armv8/generic_timer.c
+unsigned long get_tbclk(void)
+{
+	unsigned long cntfrq;
+	asm volatile("mrs %0, cntfrq_el0" : "=r" (cntfrq));
+	return cntfrq;
+}
+
+unsigned long timer_read_counter(void)
+{
+	unsigned long cntpct;
+
+	isb();
+	asm volatile("mrs %0, cntpct_el0" : "=r" (cntpct));
+
+	return cntpct;
+}

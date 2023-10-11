@@ -27,17 +27,16 @@ use XPM.vcomponents.all;
 
 entity acadia_dma is
     generic (
-        DATA_WIDTH                : natural := 32;
-        ADDRESS_WIDTH             : natural := 16;
-        ADDRESS_COUNTER_WIDTH     : natural := 32;
-        DESCRIPTOR_MEM_ADDR_WIDTH : natural := 16;
-        DESCRIPTOR_FIFO_DEPTH     : natural := 16
+        DATA_WIDTH                 : positive := 32;
+        ADDRESS_WIDTH              : positive := 16;
+        ADDRESS_COUNTER_WIDTH      : positive := 32;
+        DESCRIPTOR_MEM_ADDR_WIDTH  : positive := 16;
+        DESCRIPTOR_FIFO_DEPTH      : positive := 8;
+        LOG2_DESCRIPTOR_FIFO_DEPTH : positive := 3
     );
     port (
         clk                 : in  std_logic;
         nrst                : in  std_logic;
-
-        trigger             : in  std_logic;
 
         -- Descriptor memory interface
         descriptor_mem_dout : in  std_logic_vector(63 downto 0);
@@ -58,29 +57,28 @@ entity acadia_dma is
 
         data_address_invalid : out std_logic;
         
-        -- Descriptor FIFO interface
-        descriptor_address_fifo_in           : in  std_logic_vector(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0);
-        descriptor_address_fifo_wr           : in  std_logic;
-        descriptor_address_fifo_almost_empty : out std_logic;
-        descriptor_address_fifo_empty        : out std_logic;
-        
+        -- Register access
+        master_bus_mosi : in  std_logic_vector(31 downto 0);
+        master_bus_miso : out std_logic_vector(31 downto 0);
+        master_bus_addr : in  std_logic_vector(31 downto 0);
+        master_bus_we   : in  std_logic;
+        master_bus_en   : in  std_logic;
+
+        -- Auxiliary signals
+        trigger        : in  std_logic;
         running        : out std_logic
     );
-
-    -- attribute USE_DSP : string;
 
 end acadia_dma;
 
 architecture rtl of acadia_dma is 
-    
-    -- attribute USE_DSP of rtl : architecture is "YES";
-
+     
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;
     ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
     
     ATTRIBUTE X_INTERFACE_INFO of clk      : SIGNAL is "xilinx.com:signal:clock:1.0 clk clk";
-    ATTRIBUTE X_INTERFACE_PARAMETER of clk : SIGNAL is "ASSOCIATED_BUSIF data_out:address_out:descriptor_mem";
+    ATTRIBUTE X_INTERFACE_PARAMETER of clk : SIGNAL is "ASSOCIATED_BUSIF data_out:address_out:descriptor_mem:master_bus";
 
     ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_dout : SIGNAL is "xilinx.com:interface:bram:1.0 descriptor_mem DOUT";
     ATTRIBUTE X_INTERFACE_INFO of descriptor_mem_addr : SIGNAL is "xilinx.com:interface:bram:1.0 descriptor_mem ADDR";
@@ -99,15 +97,21 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_MODE of address_out_tdata      : SIGNAL is "Master";
     ATTRIBUTE X_INTERFACE_PARAMETER of address_out_tdata : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(ADDRESS_WIDTH/8);
 
-    -- Inverted reset
-    signal rst              : std_logic;
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_we  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";
+
+    signal rst_int : std_logic;
 
     -- Run state
     signal running_int      : std_logic;
 
     -- Descriptor address FIFO
-    signal fifo_empty_int   : std_logic;
     signal fifo_rd_en_int   : std_logic;
+    signal fifo_wr_en_int   : std_logic;
+    signal fifo_occupancy_int : std_logic_vector(LOG2_DESCRIPTOR_FIFO_DEPTH downto 0);
                                                 
     -- Descriptor fields
     signal descriptor_lm1   : unsigned(ADDRESS_COUNTER_WIDTH-1 downto 0);
@@ -129,30 +133,43 @@ architecture rtl of acadia_dma is
     
 begin    
     
-    -- Create an active-high reset for the fifo
-    rst <= not nrst;
-    
+    rst_proc: process(clk) begin
+        if rising_edge(clk) then
+            if(nrst = '0' or 
+                    (master_bus_addr(0) = '1' 
+                    and master_bus_mosi(0) = '1' 
+                    and master_bus_en = '1' 
+                    and master_bus_we = '1')) then
+                rst_int <= '1';
+            else
+                rst_int <= '0';
+            end if;
+        end if;
+    end process rst_proc;
+
     -- Control the interface to descriptor memory
     descriptor_mem_clk  <= clk;
-    
+        
     descriptor_address_fifo_inst: entity work.acadia_dma_fifo
         generic map(
-            WIDTH => DESCRIPTOR_MEM_ADDR_WIDTH
+            WIDTH      => DESCRIPTOR_MEM_ADDR_WIDTH,
+            DEPTH      => DESCRIPTOR_FIFO_DEPTH,
+            LOG2_DEPTH => LOG2_DESCRIPTOR_FIFO_DEPTH
         )
         port map(
-            clk          => clk, 
-            nrst         => nrst, 
-            din          => descriptor_address_fifo_in,
-            wr_en        => descriptor_address_fifo_wr,
-            dout         => descriptor_mem_addr,
-            rd_en        => fifo_rd_en_int,
-            empty        => fifo_empty_int,
-            almost_empty => descriptor_address_fifo_almost_empty);
+            clk       => clk, 
+            rst       => rst_int, 
+            din       => master_bus_mosi(DESCRIPTOR_MEM_ADDR_WIDTH-1 downto 0),
+            wr_en     => fifo_wr_en_int,
+            dout      => descriptor_mem_addr,
+            rd_en     => fifo_rd_en_int,
+            occupancy => fifo_occupancy_int
+        );
         
     -- Because the FIFO is FWFT, we can pulse the FIFO read enable
     -- once we've already started the descriptor
-    fifo_rd_en_int <= (trigger and not running_int) or descriptor_done;
-    descriptor_address_fifo_empty <= fifo_empty_int;
+    fifo_rd_en_int <= (trigger and not running_int) or (descriptor_done and running_int);
+    fifo_wr_en_int <= (master_bus_we and master_bus_en) when master_bus_addr(0) = '0' else '0';
 
     -- Establish some progress flags
     -- These should ideally be mapped into the DSP slice pattern detector
@@ -160,7 +177,7 @@ begin
                                 
     running_int_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0' or (descriptor_done and fifo_empty_int) = '1') then
+            if(rst_int = '1' or (descriptor_done = '1' and unsigned(fifo_occupancy_int) = 0)) then
                 running_int <= '0';
             elsif(trigger = '1') then
                 running_int <= '1';
@@ -242,5 +259,13 @@ begin
     address_out_tlast  <= last_int;
 
     data_address_invalid <= not valid_int;
+
+    bus_miso_proc: process(clk) begin
+        if rising_edge(clk) then
+            master_bus_miso(LOG2_DESCRIPTOR_FIFO_DEPTH downto 0)    <= fifo_occupancy_int;
+            master_bus_miso(LOG2_DESCRIPTOR_FIFO_DEPTH+1)           <= running_int;
+            master_bus_miso(31 downto LOG2_DESCRIPTOR_FIFO_DEPTH+2) <= (others => '0');
+        end if;
+    end process bus_miso_proc;
     
 end rtl;

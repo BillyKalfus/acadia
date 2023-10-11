@@ -48,3 +48,7 @@ void to_samples_simd_batched(
     int16_t*, // output,
     uint32_t // n
 );
+
+// https://github.com/Xilinx/u-boot-xlnx/blob/master/arch/arm/cpu/armv8/generic_timer.c
+unsigned long get_tbclk(void);
+unsigned long timer_read_counter(void);

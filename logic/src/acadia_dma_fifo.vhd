@@ -30,18 +30,16 @@ entity acadia_dma_fifo is
         LOG2_DEPTH : positive := 3
     );
     port (
-         clk          : in  std_logic;
-         nrst         : in  std_logic;
+         clk       : in  std_logic;
+         rst       : in  std_logic;
          
-         din          : in  std_logic_vector(WIDTH-1 downto 0);
-         wr_en        : in  std_logic;
+         din       : in  std_logic_vector(WIDTH-1 downto 0);
+         wr_en     : in  std_logic;
          
-         dout         : out std_logic_vector(WIDTH-1 downto 0);
-         rd_en        : in  std_logic;
+         dout      : out std_logic_vector(WIDTH-1 downto 0);
+         rd_en     : in  std_logic;
          
-         empty        : out std_logic;
-         almost_empty : out std_logic
-    
+         occupancy : out std_logic_vector(LOG2_DEPTH downto 0)
     );
 end acadia_dma_fifo;
 
@@ -51,59 +49,46 @@ architecture rtl of acadia_dma_fifo is
     
     signal rd_ptr : unsigned(LOG2_DEPTH-1 downto 0);
     signal wr_ptr : unsigned(LOG2_DEPTH-1 downto 0);
-    signal full   : std_logic;
+    
+    signal occupancy_int : unsigned(LOG2_DEPTH downto 0);    
 begin
 
     rd_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0') then
+            if(rst = '1') then
                 rd_ptr <= (others => '0');
-            
-            -- Decrement the read pointer if we're just reading and not writing
-            -- Also make sure that we don't increase the read pointer past the 
-            -- write pointer unless they're only equal because we're full
-            elsif(rd_en = '1' and wr_en = '0' and (full = '1' or rd_ptr /= wr_ptr)) then
+            elsif(rd_en = '1' and occupancy_int /= 0) then
                 rd_ptr <= rd_ptr + 1;
             end if;
         end if;
     end process rd_proc;
     
+    -- There is a slight asymmetry between reading and writing;
+    -- if the FIFO isn't empty, we can read and write at the same time 
     wr_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0') then
+            if(rst = '1') then
                 wr_ptr <= (others => '0');
-            elsif(wr_en = '1') then
-                -- Increment the write pointer if we're not concurrently reading
-                -- and if we're not full
-                if(rd_en = '0' and full = '0') then
-                    wr_ptr <= wr_ptr + 1;
-                end if;
-                
-                -- Actually write the data so long as we're not full or we're 
-                -- concurrently reading
-                if(full = '0' or rd_en = '1') then
-                    fifo(to_integer(wr_ptr)) <= din;
-                end if;
+            elsif(wr_en = '1' and (occupancy_int /= DEPTH or rd_en = '1')) then
+                wr_ptr <= wr_ptr + 1;
+                fifo(to_integer(wr_ptr)) <= din;
             end if;
         end if;
     end process wr_proc;
     
-    full_proc: process(clk) begin
+    occupancy_proc: process(clk) begin
         if rising_edge(clk) then
-            -- Whenever we read, as long as we're not simultaneously writing
-            -- then we cannot be full afterwards
-            if(nrst = '0' or (rd_en = '1' and wr_en = '0')) then
-                full <= '0';
-                
-            -- We become full when we write and the write pointer is in the last
-            -- available position: right behind the read pointer
-            elsif(wr_en = '1' and wr_ptr = rd_ptr-1) then
-                full <= '1';
+            if(rst = '1') then
+                occupancy_int <= (others => '0');
+            elsif(rd_en = '1' and wr_en = '0' and occupancy_int /= 0) then
+                occupancy_int <= occupancy_int - 1;
+            elsif(wr_en = '1' and rd_en = '0' and occupancy_int /= DEPTH) then
+                occupancy_int <= occupancy_int + 1;
             end if;
         end if;
-    end process full_proc;
+    end process occupancy_proc;
     
     dout <= fifo(to_integer(rd_ptr));
-    empty <= (not full) when wr_ptr = rd_ptr else '0';
-    almost_empty <= '1' when wr_ptr = rd_ptr+1 else '0';
+    occupancy <= std_logic_vector(occupancy_int);
+    
 end rtl;

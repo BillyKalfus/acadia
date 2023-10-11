@@ -1218,7 +1218,7 @@ class Channel:
         # Check input type
         if isinstance(array, np.ndarray):
             if array.ndim != 1:
-                raise ValueError("Arrays must be 1D.")
+                raise ValueError(f"Arrays must be 1D (found shape {array.shape})")
             if array.dtype != np.complex128 and array.dtype != np.complex64:
                 raise TypeError(f"Numpy array dtype must be `np.complex128`"
                                 f" or `np.complex64` (received {array.dtype}).")
@@ -1257,7 +1257,7 @@ class Channel:
             array = np.frombuffer(array, dtype=np.int16)
         elif isinstance(array, np.ndarray):
             if array.ndim != 1:
-                raise ValueError("Arrays must be 1D.")
+                raise ValueError(f"Arrays must be 1D (found shape {array.shape})")
             array = array.view(np.int16)
         else:
             raise TypeError(f"Input type must be `memoryview` or numpy.ndarray"

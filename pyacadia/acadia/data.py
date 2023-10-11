@@ -234,7 +234,8 @@ class DataManager:
                  output_directory, 
                  subdirectory_prefix="", 
                  datetime_format="%m%d%y-%H%M%S",
-                 save_count=20):
+                 save_count=20,
+                 close_server=False):
         """
         Initializes a DataManager for collecting data records. Every time this
         is called, a subdirectory will be created within the specified output
@@ -268,6 +269,11 @@ class DataManager:
         :param save_count: Specifies how many records should be received before
             saving data to disk and announcing it on the server
         :type save_count: int
+        :param close_server: When using an instance as a context manager, this
+            flag determines whether the server should be closed when exiting 
+            the context. If this is `False`, exiting the context will block 
+            until the server is manually closed by a client.
+        :type close_server: bool
         """
         time_str = datetime.datetime.now(datetime.timezone.utc).strftime(datetime_format)
         self._output_directory = os.path.join(output_directory, f"{subdirectory_prefix}{time_str}")
@@ -277,19 +283,18 @@ class DataManager:
         self._datetime_format = datetime_format
         self._saved_files = []
         self._groups = {}
-        
         self._record_preprocessors = {}
-        
         self._save_count = save_count
         self._record_count = 0
         self._server_threads = []
-        
+        self._progress_dict = {}
+        self._progress_dict_lock = Lock()
         self._server_stop_event = Event()
-        
-        self._lock = Lock()
+        self._record_lock = Lock()
+        self._close_server = close_server
         
     @staticmethod
-    def _server_thread(file_directory, address, lock, stop_event, record_preprocessors):
+    def _server_thread(file_directory, address, record_lock, meta_container, meta_lock, stop_event, record_preprocessors):
         """
         A thread for providing access to files and data in the output 
         directory in a way that respects the requisite file locks.
@@ -316,7 +321,6 @@ class DataManager:
                 conn, addr = s.accept()
             except socket.timeout:
                 if stop_event.is_set():
-                    s.close()
                     break
                 else:
                     continue
@@ -338,7 +342,7 @@ class DataManager:
                 logging.debug(f"Requested group {group_name}")
                 
                 # Load the metadata to get the group type and filename
-                with lock:
+                with record_lock:
                     if "metadata.json" not in os.listdir(file_directory):
                         # No data yet
                         conn.sendall((0).to_bytes(1, "little"))
@@ -377,12 +381,25 @@ class DataManager:
                     logging.debug(f"Sent file")
                     
                     data.close()
-                
+            elif cmd == b'p':
+                # Return the internal meta container
+                logging.debug("Progress command")
+                with meta_lock:
+                    logging.debug(f"Progress: {meta_container}")
+                    data = pickle.dumps(meta_container)
+                    conn.sendall(len(data).to_bytes(8, "little"))
+                    conn.sendall(data)
+            elif cmd == b'q':
+                logging.debug("Closing server from manual command")
+                break
+                    
             else:
                 logging.error(f"Received invalid command {cmd}")
                 
             # Close the connection and accept a new one
             conn.close()
+            
+        s.close()
     
     @staticmethod
     def receive_group(group_name, address):
@@ -446,6 +463,69 @@ class DataManager:
         logging.debug(f"Received data")
         
         return eval(group_type).load(data)
+    
+    @staticmethod
+    def receive_counters(address):
+        """
+        Receive the progress counters from a server at the specified address.
+        
+        :return: Progress counters if the server has one, otherwise `None`
+        :rtype: dict
+        """        
+        logging.debug(f"Requesting progress from {address}")
+        if isinstance(address, tuple):
+            socket_family = socket.AF_INET
+        elif isinstance(address, str):
+            socket_family = socket.AF_UNIX
+        else:
+            raise TypeError(f"Received address of invalid type: {address}")
+        
+        s = socket.socket(socket_family, socket.SOCK_STREAM)
+        try:
+            s.connect(address)
+        except:
+            logging.debug("Failed to connect")
+            return None
+        
+        logging.info(f"Established connection to server {address}")
+        
+        s.sendall(b'p')
+        logging.info("Sent progress command")
+        
+        data_length_bytes = b''
+        while len(data_length_bytes) < 8:
+            data_length_bytes += s.recv(8-len(data_length_bytes))
+        data_length = int.from_bytes(data_length_bytes, "little")
+        
+        data = b''
+        while len(data) < data_length:
+            data += s.recv(data_length - len(data))
+        
+        counters = pickle.loads(data)
+        logging.info(f"Received {counters}")
+        
+        return counters
+    
+    @staticmethod
+    def stop_remote_server(address):
+        if isinstance(address, tuple):
+            socket_family = socket.AF_INET
+        elif isinstance(address, str):
+            socket_family = socket.AF_UNIX
+        else:
+            raise TypeError(f"Received address of invalid type: {address}")
+        
+        s = socket.socket(socket_family, socket.SOCK_STREAM)
+        try:
+            s.connect(address)
+        except:
+            logging.debug("Failed to connect")
+            return None
+        
+        logging.info(f"Established connection to server {address}")
+        
+        s.sendall(b'q')
+        s.close()
         
     def start_server(self, address=("", 6672)):
         """
@@ -458,7 +538,9 @@ class DataManager:
         t = Thread(target=DataManager._server_thread, 
                    args=(self._output_directory, 
                          address, 
-                         self._lock, 
+                         self._record_lock, 
+                         self._progress_dict,
+                         self._progress_dict_lock,
                          self._server_stop_event,
                          self._record_preprocessors),
                    name=f"DataManager@{address}",
@@ -487,7 +569,7 @@ class DataManager:
         Commit data in all groups to files.
         """
                 
-        with self._lock:
+        with self._record_lock:
             logging.debug("Saving records...")
             with open(os.path.join(self._output_directory, "metadata.json"), "w+") as file:
                 metadata = {"datetime_format": self._datetime_format, 
@@ -564,4 +646,36 @@ class DataManager:
         
         if preprocessor is not None:
             self._record_preprocessors[name] = preprocessor
+            
+    def progress(self, it):
+        """
+        Use an iterable to track progress through a program. If this method is
+        called, an internal counter is stored which may be retrieved with the 
+        server.
         
+        :param it: Iterator to consume
+        :type it: iterator
+        :return: A generator that yields the provided iterator's return values
+            while simultaneously updating the internal progress counter.
+        """
+        with self._progress_dict_lock:
+            self._progress_dict["total"] = len(it) if hasattr(it, "__len__") else None
+            self._progress_dict["progress"] = 0
+                
+        for item in it:
+            yield item
+            with self._progress_dict_lock:
+                self._progress_dict["progress"] += 1
+                
+    def __enter__(self):
+        self.start_server()
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._close_server:
+            self.stop_server()
+        else:
+            # Wait for the thread to be manually closed by a client
+            self._server_thread.join()
+            
+        super().__exit__(exc_type, exc_value, traceback)

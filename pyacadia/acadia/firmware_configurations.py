@@ -447,30 +447,6 @@ DEFAULT_CONFIG = {
         }    
     },
 
-    "ps_gpio3": {
-        "width": 32,
-        "pipeline": 2,
-        "bus_pipeline": 1
-    },
-
-    "ps_gpio4": {
-        "width": 32,
-        "pipeline": 2,
-        "bus_pipeline": 1
-    },
-
-    "ps_gpio5": {
-        "width": 16,
-        "pipeline": 2,
-        "bus_pipeline": 1
-    },
-
-    "ps_irq": {
-        "irq_pipeline": 2,
-        "gdma_pipeline": 2,
-        "bus_pipeline": True
-    },
-
     "ps_gpio": {
         "sysfs_offset": 338 + 3*26,
         "sequencer_run": 90,
@@ -491,16 +467,12 @@ DEFAULT_CONFIG = {
     "sequencer_bus": {
         "decoder_pipeline_miso": True,
 
-        "dma_fifo_dataport_pipeline": [False]*32,
+        "dma_pipeline": [True]*32,
 
-        "dma_fifo_empty_dataport": {
+        "io_dataport": {
             "bus_pipeline": True,
-            "pipeline": [1]*32,
-        },
-
-        "dma_fifo_almost_empty_dataport": {
-            "bus_pipeline": True,
-            "pipeline": [1]*32,
+            "ADCIO_pipeline": 2,
+            "DACIO_pipeline": 2
         },
 
         "dma_running_dataport": {
@@ -510,12 +482,36 @@ DEFAULT_CONFIG = {
 
         "dma_trigger_dataport": {
             "bus_pipeline": False,
-            "pipeline": [0]*32,
+            "pipeline": [1]*32,
         },
 
         "rfdc_rts": {
             "bus_pipeline": True,
             "nco_clk": "seq_clk"
+        },
+        
+        "ps_gpio3": {
+            "width": 32,
+            "pipeline": 2,
+            "bus_pipeline": True
+        },
+
+        "ps_gpio4": {
+            "width": 32,
+            "pipeline": 2,
+            "bus_pipeline": True
+        },
+
+        "ps_gpio5": {
+            "width": 16,
+            "pipeline": 2,
+            "bus_pipeline": True
+        },
+
+        "ps_irq": {
+            "irq_pipeline": 2,
+            "gdma_pipeline": 2,
+            "bus_pipeline": True
         },
 
         "zdma_controller": {

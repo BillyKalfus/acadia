@@ -8,7 +8,7 @@ from functools import wraps
 
 import numpy as np
 
-from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation
+from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
 from .channel import Channel
@@ -50,13 +50,14 @@ class DMASynchronizer(Synchronizer):
         
         self.dma_mask = 0
 
-        for idx_call,call in enumerate(self._calls):
+        for idx_call,(retval,call) in enumerate(self._calls):
             function,acadia,args,kwargs = call.values()
             
             if self._acadia is None:
                 self._acadia = acadia
             elif acadia is not self._acadia:
-                raise ValueError(f"Unable to synchronize different instances of `Acadia`")
+                raise ValueError(f"Unable to synchronize different instances"
+                                 f" of `Acadia`")
                 
             if function == DMASynchronizer.DMA:
                 if not isinstance(kwargs["channel"], Channel):
@@ -69,7 +70,8 @@ class DMASynchronizer(Synchronizer):
                     channel_lengths[kwargs["channel"]] = kwargs["length"]
                     
                 self.dma_mask |= acadia.get_dma(kwargs["channel"]).mask
-                acadia.channel_dma_stream(**kwargs)
+                descriptor = acadia.channel_dma_stream(**kwargs)
+                retval.assign(descriptor)
                 
             elif function == DMASynchronizer.BARRIER:
                 # We first need to figure out the time in the block at which 
@@ -90,12 +92,15 @@ class DMASynchronizer(Synchronizer):
                             and self._calls[idx_future_call]["kwargs"]["channel"] not in future_channels):
                         future_channels.append(self._calls[idx_future_call]["kwargs"]["channel"])
                 
+                descriptors = []
                 for channel in future_channels:
                     delay_length = barrier_time - (channel_lengths[channel] if channel in channel_lengths else 0)
-                    acadia.channel_dma_stream(channel=channel,
+                    descriptor = acadia.channel_dma_stream(channel=channel,
                                               length=delay_length,
                                               word_address=0,
                                               blank=True)
+                    descriptors.append(descriptor)
+                retval.assign(descriptors)
                     
                 # Reset channel lengths so that when we hit the next barrier 
                 # (if any) it only adds delays after this one
@@ -173,7 +178,7 @@ class RFDCSynchronizer(Synchronizer):
         self._acadia = None
         
         for call in self._calls:
-            function,acadia,args,kwargs = call.values()
+            retval,(function,acadia,args,kwargs) = call.values()
             
             if self._acadia is None:
                 self._acadia = acadia
@@ -958,6 +963,9 @@ class Acadia:
         :type fixed: bool
         :param blank: If ``True``, the output of the DMA never becomes valid
             but the DMA runs as normal otherwise
+        :return: The descriptor requested for the DMA as returned by the 
+            `request_descriptor` instruction for :class:`DMA`.
+        :rtype: :class:`ProcessorInstruction`
         """
 
         if not isinstance(channel, Channel):
@@ -975,36 +983,67 @@ class Acadia:
             fixed=fixed,
             blank=blank)
         
-        fifo_name = "dac" if channel.is_dac else "adc"
-        fifo_name += f"{channel.num}_dma_fifo"
-        fifo_device = self._firmware.sequencer_bus_decoder[fifo_name]
+        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num}_dma'
+        device = self._firmware.sequencer_bus_decoder[dev_name]
         
-        return self._active_sequencer.bus_write(
-            address=fifo_device.address().value(),
+        self._active_sequencer.bus_write(
+            address=device.address().value(),
             data=descriptor, 
             comment=f"Add descriptor with parameters {descriptor.kwargs} to"
                     f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num}")
         
+        return descriptor
+        
     @requires_sequencer
-    def generate(self, channel, signal):
+    def generate(self, signal):
         """
-        Stream a signal out of a DAC.
+        Stream a signal out of a DAC. If `signal` does not have any attribute
+        `_descriptors`, this attribute will be populated with a list of 
+        `Symbol` instances. Each `Symbol` will be assigned by the 
+        `ChannelSynchronizer` when commands are requested for the DMA, and it
+        will be assigned with the return value of :meth:`channel_dma_stream`.
         
         :param channel: Channel to stream
         :type channel: :class:`Channel`
         :param signal: Signal to stream
-        :type signal: :class:`self.DACArray` or :class:`ProceduralWaveform`
+        :type signal: :class:`self.DACArray` or any type implementing 
+            `dma_parameters()` returning a list of `dict`. Each `dict` will 
+            result in a sequential call to `channel_dma_stream` whose arguments
+            are the key/value pairs in the `dict`. 
         """
+        dma_parameters = None
+        for i in range(self._firmware.NUM_DACS):
+            if isinstance(signal, self.DACArray[i]):
+                dma_parameters = [{
+                    "channel": self.DAC(i),
+                    "length": signal.byte_length() // self.DAC(i).interface_width_bytes,
+                    "word_address": signal.word_address()
+                }]
+                break
+            
+        if dma_parameters is None and hasattr(signal, "dma_parameters"):
+            dma_parameters = signal.dma_parameters()
+            
+        if dma_parameters is None:
+            raise ValueError("Unable to identify DMA parameters"
+                             " for `generate`")
+        
         # Notify the synchronizer, which will add the DMA command for us
-        self.channel_synchronizer.add({
-            "function": DMASynchronizer.DMA, 
-            "self": self, 
-            "args": (), 
-            "kwargs": {
-                "channel": channel,
-                "length": signal.byte_length() // channel.interface_width_bytes,
-                "word_address": signal.word_address()
-            }})
+        # Every call to `add` will return a Symbol. When the synchronizer
+        # exits, that symbol will get populated with the return value of
+        # `channel_dma_stream`. This is a `ProcessorInstruction` representing
+        # the descriptor for the DMA
+        descriptors = []
+        for params in dma_parameters:
+            r = self.channel_synchronizer.add({
+                "function": DMASynchronizer.DMA, 
+                "self": self, 
+                "args": (), 
+                "kwargs": params})
+            descriptors.append(r)
+        
+        if not hasattr(signal, "_descriptors"):
+            signal._descriptors = descriptors
         
     @requires_sequencer
     def capture(self, configuration, dst):
@@ -1112,12 +1151,18 @@ class Acadia:
         if self._firmware["sequencer_bus"]["decoder_pipeline_miso"]:
             latency += 1
 
-        # The datamover controller has a read latency of 1 because its MISO is driven
+        # Datamover controllers have a read latency of 1 because its MISO is driven
         # in a synchronous process
         if "datamover_controller" in port:
             latency += 1
+            
+        elif "dma" in port:
+            # adc<x>_dma or dac<x>_dma
+            port_idx = int(port[3:port.index("_")])
+            port_idx += 16 if port.startswith("adc") else 0
+            latency += 1 if self._firmware["sequencer_bus"]["dma_pipeline"][port_idx] else 0
 
-        if port == "cache":
+        elif port == "cache":
             # One additional cycle minimum because the memory has a read latency of 1
             # even before any pipelining because it's a synchronous memory
             latency += 1 
@@ -1130,61 +1175,22 @@ class Acadia:
 
         return latency
         
-
     @requires_sequencer
-    def channel_fifos_almost_empty(self, *channels):
+    def dma_fifo_occupancy(self, channel):
         """
-        Create a condition that will determine whether the FIFOs of the DMAs
-        driving the given :class:`Channel`\s are almost empty.
+        Get the number of commands queued for the DMA of the given channel.
 
-        :param channels: Channel(s) to check
-        :type channels: list of :class:`Channel`
-        """
-
-        mask = 0
-        for channel in channels:
-            mask |= self.get_dma(channel).mask
-        bus_address = self._firmware.dma_fifo_almost_empty.address().value()
-
-        bus_op = self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("dma_fifo_almost_empty_dataport"))
-        return bus_op & mask != 0
-    
-    @requires_sequencer
-    def any_channel_fifos_empty(self, *channels):
-        """
-        Create a condition that will determine whether the FIFOs of the DMAs
-        driving any of the given :class:`Channel`\s are empty.
-
-        :param channels: Channel(s) to check
-        :type channels: list of :class:`Channel`
+        :param channel: Channel to check
+        :type channel: :class:`Channel`
         """
 
-        mask = 0
-        for channel in channels:
-            mask |= self.get_dma(channel).mask
-        bus_address = self._firmware.dma_fifo_empty.address().value()
+        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num}_dma'
+        device = self._firmware.sequencer_bus_decoder[dev_name]
 
-        bus_op = self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("dma_fifo_empty_dataport"))
-        return bus_op & mask != 0
-    
-    @requires_sequencer
-    def all_channel_fifos_empty(self, *channels):
-        """
-        Create a condition that will determine whether the FIFOs of the DMAs
-        driving all of the given :class:`Channel`\s are empty.
-
-        :param channels: Channel(s) to check
-        :type channels: list of :class:`Channel`
-        """
-
-        mask = 0
-        for channel in channels:
-            mask |= self.get_dma(channel).mask
-        bus_address = self._firmware.dma_fifo_empty.address().value()
-
-        bus_op = self._active_sequencer.bus_read(bus_address, 
-                                                 latency=self.get_bus_latency("dma_fifo_empty_dataport"))
-        return (~bus_op) & mask == 0
+        bus_op = self._active_sequencer.bus_read(device.address().value(), 
+                                                 latency=self.get_bus_latency(dev_name))
+        # Mask away the running bit
+        return bus_op & 0b1111 != 0
     
     @requires_sequencer
     def channels_running(self, *channels):
@@ -1202,7 +1208,8 @@ class Acadia:
         
         bus_address = self._firmware.dma_running.address().value()
 
-        return self._active_sequencer.bus_read(bus_address, latency=self.get_bus_latency("dma_running_dataport"))
+        return self._active_sequencer.bus_read(bus_address, 
+                                               latency=self.get_bus_latency("dma_running_dataport"))
 
     @requires_sequencer
     def stream_count(self, configuration):
@@ -1348,7 +1355,6 @@ class Acadia:
                 sequencer_program[idx,:] = np.frombuffer(instr.assemble().to_bytes(16, "little"), dtype=np.uint8)
                 idx += 1
 
-                
         dac_dma_programs = []
         for dma in self._dac_dmas:
             dma_program = np.empty((len(dma._compiled_program), 8), dtype=np.uint8)

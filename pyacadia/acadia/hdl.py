@@ -1601,3 +1601,20 @@ class AXIMemoryArray(HDLModule):
         
         return s
     
+class BusGTY:
+    """
+    A bus-controlled interface to the GTY transceivers.
+    """
+    pass
+
+    # create_ip -name gtwizard_ultrascale -vendor xilinx.com -library ip -version 1.7 -module_name gtwizard_ultrascale_0
+    # set_property -dict [list 
+    # CONFIG.INS_LOSS_NYQ {0} CONFIG.TX_LINE_RATE {10} CONFIG.TX_REFCLK_FREQUENCY {250} CONFIG.TX_DATA_ENCODING {8B10B} CONFIG.TX_USER_DATA_WIDTH {32} CONFIG.TX_INT_DATA_WIDTH {40} CONFIG.TX_BUFFER_MODE {0} CONFIG.TX_OUTCLK_SOURCE {TXPROGDIVCLK} CONFIG.TX_DIFF_SWING_EMPH_MODE {CUSTOM} CONFIG.RX_LINE_RATE {10} CONFIG.RX_REFCLK_FREQUENCY {250} CONFIG.RX_DATA_DECODING {8B10B} CONFIG.RX_INT_DATA_WIDTH {40} CONFIG.RX_BUFFER_MODE {0} CONFIG.RX_JTOL_FC {5.9988002} CONFIG.RX_TERMINATION {FLOAT} CONFIG.RX_COUPLING {DC} CONFIG.RX_REFCLK_SOURCE {X0Y4 clk1} CONFIG.TX_REFCLK_SOURCE {X0Y4 clk1} CONFIG.RX_RECCLK_OUTPUT {X0Y4 clk0} CONFIG.TXPROGDIV_FREQ_VAL {250} CONFIG.FREERUN_FREQUENCY {250} CONFIG.LOCATE_TX_USER_CLOCKING {CORE} CONFIG.LOCATE_RX_USER_CLOCKING {CORE} CONFIG.RX_COMMA_PRESET {K28.5} CONFIG.RX_COMMA_P_ENABLE {true} CONFIG.RX_COMMA_M_ENABLE {true} CONFIG.RX_COMMA_DOUBLE_ENABLE {false} CONFIG.RX_COMMA_MASK {1111111111} CONFIG.RX_COMMA_ALIGN_WORD {4} CONFIG.RX_COMMA_SHOW_REALIGN_ENABLE {false}] [get_ips gtwizard_ultrascale_0]
+    # generate_target {instantiation_template} [get_files /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci]
+    # generate_target all [get_files  /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci]
+    # catch { config_ip_cache -export [get_ips -all gtwizard_ultrascale_0] }
+    # export_ip_user_files -of_objects [get_files /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci] -no_script -sync -force -quiet
+    # create_ip_run [get_files -of_objects [get_fileset sources_1] /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci]
+    # launch_runs gtwizard_ultrascale_0_synth_1 -jobs 16
+    # export_simulation -of_objects [get_files /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci] -directory /home/billy/acadia-build/acadia.ip_user_files/sim_scripts -ip_user_files_dir /home/billy/acadia-build/acadia.ip_user_files -ipstatic_source_dir /home/billy/acadia-build/acadia.ip_user_files/ipstatic -lib_map_path [list {modelsim=/home/billy/acadia-build/acadia.cache/compile_simlib/modelsim} {questa=/home/billy/acadia-build/acadia.cache/compile_simlib/questa} {ies=/home/billy/acadia-build/acadia.cache/compile_simlib/ies} {xcelium=/home/billy/acadia-build/acadia.cache/compile_simlib/xcelium} {vcs=/home/billy/acadia-build/acadia.cache/compile_simlib/vcs} {riviera=/home/billy/acadia-build/acadia.cache/compile_simlib/riviera}] -use_ip_compiled_libs -force -quiet
+

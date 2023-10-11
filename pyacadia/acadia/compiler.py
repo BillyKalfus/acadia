@@ -1063,7 +1063,7 @@ class Synchronizer:
         self._active = False
         self._allow_standalone = allow_standalone
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, **kwargs):
         """
         Configures the :class:`Synchronizer` when the context is being entered.
         """
@@ -1072,14 +1072,17 @@ class Synchronizer:
         return self
     
     def add(self, obj):
-        if self._active:
-            self._calls.append(obj)
+        retval = Symbol()
+        
+        if self._active:            
+            self._calls.append((retval, obj))
         elif self._allow_standalone:
-            self._calls = [obj]
+            self._calls = [(retval, obj)]
             self.__exit__(None, None, None)
         else:
             raise ValueError("Attempted call to a synchronized function"
                              " outside of a synchronization context.")
+        return retval
     
     def __enter__(self):
         if self._active:
