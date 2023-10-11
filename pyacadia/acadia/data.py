@@ -286,15 +286,16 @@ class DataManager:
         self._record_preprocessors = {}
         self._save_count = save_count
         self._record_count = 0
-        self._server_threads = []
+        self._server_thread = None
         self._progress_dict = {}
         self._progress_dict_lock = Lock()
+        self._server_running_event = Event()
         self._server_stop_event = Event()
         self._record_lock = Lock()
         self._close_server = close_server
         
     @staticmethod
-    def _server_thread(file_directory, address, record_lock, meta_container, meta_lock, stop_event, record_preprocessors):
+    def _server_thread(file_directory, address, record_lock, meta_container, meta_lock, running_event, stop_event, record_preprocessors):
         """
         A thread for providing access to files and data in the output 
         directory in a way that respects the requisite file locks.
@@ -314,6 +315,8 @@ class DataManager:
         s.settimeout(0.1)
         s.bind(address)
         s.listen()
+        
+        running_event.set()
         
         # Continuously accept connections until the main thread commands otherwise
         while True:
@@ -400,6 +403,7 @@ class DataManager:
             conn.close()
             
         s.close()
+        running_event.clear()
     
     @staticmethod
     def receive_group(group_name, address):
@@ -416,6 +420,8 @@ class DataManager:
             raise TypeError(f"Received address of invalid type: {address}")
         
         s = socket.socket(socket_family, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         try:
             s.connect(address)
         except:
@@ -481,16 +487,18 @@ class DataManager:
             raise TypeError(f"Received address of invalid type: {address}")
         
         s = socket.socket(socket_family, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         try:
             s.connect(address)
         except:
             logging.debug("Failed to connect")
             return None
         
-        logging.info(f"Established connection to server {address}")
+        logging.debug(f"Established connection to server {address}")
         
         s.sendall(b'p')
-        logging.info("Sent progress command")
+        logging.debug("Sent progress command")
         
         data_length_bytes = b''
         while len(data_length_bytes) < 8:
@@ -502,7 +510,7 @@ class DataManager:
             data += s.recv(data_length - len(data))
         
         counters = pickle.loads(data)
-        logging.info(f"Received {counters}")
+        logging.debug(f"Received {counters}")
         
         return counters
     
@@ -516,6 +524,8 @@ class DataManager:
             raise TypeError(f"Received address of invalid type: {address}")
         
         s = socket.socket(socket_family, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         try:
             s.connect(address)
         except:
@@ -535,28 +545,35 @@ class DataManager:
         :param address: Address for hosting the server
         :type address: tuple (for network sockets) or str (for Unix sockets)
         """
-        t = Thread(target=DataManager._server_thread, 
+        self._server_thread = Thread(target=DataManager._server_thread, 
                    args=(self._output_directory, 
                          address, 
                          self._record_lock, 
                          self._progress_dict,
                          self._progress_dict_lock,
+                         self._server_running_event,
                          self._server_stop_event,
                          self._record_preprocessors),
                    name=f"DataManager@{address}",
                    daemon=True)
-        t.start()
-        self._server_threads.append(t)
+        self._server_thread.start()
         
     def stop_server(self):
         """
         Stop the server and all associated threads.
         """
         self._server_stop_event.set()
-        for t in self._server_threads:
-            t.join()
+        self._server_thread.join()
         self._server_stop_event.clear()
         self._server_threads = []
+        
+    def server_running(self):
+        """
+        Check whether or not the server is running.
+        
+        :rtype: bool
+        """
+        return self._server_running_event.is_set()
         
     def append(self, group_name, record):
         self._groups[group_name].append(record)
@@ -647,7 +664,21 @@ class DataManager:
         if preprocessor is not None:
             self._record_preprocessors[name] = preprocessor
             
-    def progress(self, it):
+    def progress_advance(self):
+        """
+        Notify the internal progress counter to increment by 1.
+        """
+        with self._progress_dict_lock:
+            self._progress_dict["progress"] += 1
+            
+    def progress_complete(self):
+        """
+        Notify the internal progress counter that data collection is complete.
+        """
+        with self._progress_dict_lock:
+            self._progress_dict["complete"] = True
+            
+    def iterator_progress(self, it):
         """
         Use an iterable to track progress through a program. If this method is
         called, an internal counter is stored which may be retrieved with the 
@@ -661,21 +692,11 @@ class DataManager:
         with self._progress_dict_lock:
             self._progress_dict["total"] = len(it) if hasattr(it, "__len__") else None
             self._progress_dict["progress"] = 0
+            self._progress_dict["complete"] = False
                 
         for item in it:
             yield item
-            with self._progress_dict_lock:
-                self._progress_dict["progress"] += 1
+            self.progress_advance()
                 
-    def __enter__(self):
-        self.start_server()
-        return self
-    
-    def __exit__(self, exc_type, exc_value, traceback):
-        if self._close_server:
-            self.stop_server()
-        else:
-            # Wait for the thread to be manually closed by a client
-            self._server_thread.join()
-            
-        super().__exit__(exc_type, exc_value, traceback)
+        self.progress_complete()
+                

@@ -2,7 +2,7 @@ import os
 import logging
 from threading import Thread, Event
 from functools import partial
-from abc import ABC, abstractstaticmethod, abstractmethod
+from abc import ABC, abstractclassmethod
 
 __all__ = ["Runtime"]
 
@@ -16,19 +16,16 @@ class Runtime(ABC):
                  filename,
                  target_port=6672, 
                  jump_server=None, 
-                 plot_update_period=0.1,
-                 progress_update_period=0.1):
+                 update_period=0.1):
         self._target_ip = target_ip
         self._target_port = target_port
         self._jump_server = jump_server
-        self._plot_thread = None
-        self._plot_update_period = plot_update_period
-        self._progress_update_period = progress_update_period
-        self._progress_thread = None
+        self._update_thread = None
+        self._update_period = update_period
         self._proc = None
         self._filename = filename
         
-    def run(self, block="process"):
+    def run(self):
         """
         Deploy the procedure described by the class on a remote target.
         Note that key-based authentication MUST be configured on the target
@@ -36,19 +33,14 @@ class Runtime(ABC):
         
             ``ssh-copy-id username@target``
             
-        on the host. This only needs to be done once.       
-        
-        :param block: If `"progress"`, this method will block until the 
+        on the host. This only needs to be done once.  
+  
+        :param block: If `True`, this method will block until the 
             :class:`DataManager` running on the target provides a progress
-            update indicating that all iterations have completed. Note that 
-            this requires the iterator passed to `DataManager.progress` to 
-            define `__len__` so that the server can determine completion.
-            If `"process"`, this will block until the remote process is 
-            complete. If `None`, the method will return after starting all 
-            required threads without waiting.
+            update indicating that all iterations have completed. Otherwise,
+            the method will return after starting all required threads without
+            waiting.
         :type block: bool
-        :param close: If both `close` and `block` are `True`, :meth:``stop``
-            will be called when the server indicates completion.
         """ 
         # Deploy a process on the target that will call main()
         import subprocess
@@ -68,7 +60,13 @@ class Runtime(ABC):
             args += ["-J", self._jump_server]
             
         cls = self.__class__.__name__
-        python_cmd = f"python3 -c \"f = open(\\\"/home/root/{os.path.basename(self._filename)}\\\", \\\"rb\\\"); exec(f.read()); f.close(); {cls}.main()\""
+        python_cmd = (f"python3 -c \""
+                      f"import logging; "
+                      f"logging.basicConfig(filename=\\\"/home/root/{os.path.basename(self._filename)}.log\\\", level=logging.DEBUG, filemode=\\\"w\\\"); "
+                      f"f = open(\\\"/home/root/{os.path.basename(self._filename)}\\\", \\\"rb\\\"); "
+                      f"exec(f.read()); "
+                      f"f.close(); "
+                      f"{cls}.remote_main()\"")
         
         logging.info("Running remote process...")
         logging.debug(f"Deploying python command {python_cmd}")
@@ -83,97 +81,37 @@ class Runtime(ABC):
         # Create an event for signalling threads to stop
         self._stop_event = Event()
         
-        fig,update_func = self.plot()
+        fig, init_func, update_func = self.plot()
         
-        # If we have a plot, launch a thread that will update plotting as well as a progress bar
-        if fig is not None and update_func is not None:
-            # Create a generator that will let us gracefully stop if requested 
-            # by the main thread
-            def frame_generator():
-                import time
-                frame_num = 0
-                while True:
-                    time.sleep(self._plot_update_period)
-                    if self._stop_event.is_set():
-                        break
-                    frame_num += 1
-                    
-                    yield frame_num
-            
-            # Create the animation in a new thread
-            def thread_func():     
-                from matplotlib.animation import FuncAnimation   
+        # Create a generator that will allow us to monitor the progress of the
+        # remote process
+        progress_gen = partial(Runtime._progress_generator, 
+                               stop_event=self._stop_event, 
+                               address=(self._target_ip, self._target_port))
+        
+        # Create a new thread for keeping track of progress and rendering
+        def thread_func():
+            if fig is not None and init_func is not None and update_func is not None:            
+                # If we're making a plot, create an animation that will consume the progress
+                # generator at the desired rate
+                from matplotlib.animation import FuncAnimation  
+                update_func_with_address = partial(update_func, (self._target_ip, self._target_port))
                 self._anim = FuncAnimation(fig, 
-                              partial(update_func, (self._target_ip, self._target_port)), 
-                              frames=frame_generator, 
-                              repeat=False, 
-                              blit=True)
+                            func=update_func_with_address, 
+                            init_func=init_func,
+                            frames=progress_gen, 
+                            repeat=False, 
+                            blit=True,
+                            interval=self._update_period)
+            else:
+                # No plot, just consume the iterable
+                import time
+                for progress_dict in progress_gen:
+                    time.sleep(self._update_period)
                 
                 
-            self._plot_thread = Thread(target=thread_func, name="PlotThread", daemon=True)
-            self._plot_thread.start()
-            
-        # Create a progress tracker thread
-        if self._progress_update_period <= 0:
-            raise ValueError("Must provide positive progress update period")
-        
-        def _progress_thread():
-            # Repeatedly ask for progress until we get a valid progress 
-            # dictionary from the server
-            from acadia.data import DataManager
-            import time
-            from tqdm.notebook import tqdm
-            
-            logging.debug("Progress monitoring thread started")
-            
-            progress_dict = {}
-            while len(progress_dict) == 0:
-                if self._stop_event.is_set():
-                    return
-                time.sleep(self._progress_update_period)
-                rcvd = DataManager.receive_counters((self._target_ip, self._target_port))
-                if rcvd is not None:
-                    progress_dict = rcvd
-                    
-            if block and "total" not in progress_dict:
-                raise ValueError("Cannot call `run` with `block=True` when the"
-                                 " remote `DataManager` does not provide a"
-                                 " total number of iterations.")
-                    
-            logging.debug(f"Creating progress bar with state {rcvd}")
-                                       
-            bar = tqdm(total=progress_dict["total"], position=progress_dict["progress"])
-            
-            while (progress_dict["progress"] < progress_dict["total"]) and self._proc.poll() is None:
-                if self._stop_event.is_set():
-                    break
-                time.sleep(self._progress_update_period)
-                rcvd = DataManager.receive_counters((self._target_ip, self._target_port))
-                if rcvd is not None:
-                    bar.update(rcvd["progress"]-progress_dict["progress"])
-                    progress_dict = rcvd
-                    
-            # We've received everything
-            bar.close()
-                
-        self._progress_thread = Thread(target=_progress_thread, 
-                                        daemon=True, 
-                                        name="ProgressThread")
-        self._progress_thread.start()
-            
-        if block == "progress":
-            logging.info("Waiting for progress completion.")
-            self._progress_thread.join()
-            self._progress_thread = None
-            self.stop()
-        elif block == "process":
-            logging.info("Awaiting process completion.")
-            while self._proc.poll() is None:
-                pass
-        elif block is not None:
-            raise ValueError(f"Unrecognized blocking mode {block}; stopping.")
-            
-        self.stop()    
+        self._update_thread = Thread(target=thread_func, name="UpdateThread", daemon=True)
+        self._update_thread.start()
         
     def stop(self):
         """
@@ -183,6 +121,10 @@ class Runtime(ABC):
             # We never started
             return
         
+        # Stop the update thread that we may have started
+        self._stop_event.set()
+        self._update_thread.join()
+        
         # Request the data manager server to stop
         from acadia.data import DataManager
         DataManager.stop_remote_server((self._target_ip, self._target_port))
@@ -190,19 +132,57 @@ class Runtime(ABC):
         if self._proc.poll() is None:
             # The process is still running, kill it
             self._proc.kill()
-            
-        # Stop any child threads that we may have started
-        self._stop_event.set()
-        
-        if self._plot_thread is not None:
-            self._plot_thread.join()
-        if self._progress_thread is not None:
-            self._progress_thread.join()
-        
-    @abstractstaticmethod
-    def main():
+
+    @classmethod
+    def remote_main(cls):
         """
-        A function that will be run on the target upon deployment.
+        This is the main entry point of the remote process.
+        """
+        import time
+        from acadia.data import DataManager
+        
+        mgr = DataManager("/home/root")
+        mgr.start_server()
+        
+        # Wait for the server to start without spamming it
+        tries = 100
+        while not mgr.server_running() and tries > 0:
+            time.sleep(0.01)
+            tries -= 1
+            
+        if not mgr.server_running():
+            raise ValueError("Unable to start server.")
+        
+        # Run the user main program
+        try:
+            cls.main(mgr)
+        except Exception as e:
+            exc = e
+        else:
+            exc = None
+        
+        # Mark the progress as complete so that the client sees it
+        mgr.save()
+        mgr.progress_complete()
+        
+        # Give the client a bit of time to get the last data and stop the 
+        # server; otherwise kill it ourselves
+        
+        tries = 100
+        while not mgr.server_running() and tries > 0:
+            time.sleep(0.01)
+            tries -= 1
+        mgr.stop_server()
+        
+        if exc is not None:
+            raise exc
+        
+    @abstractclassmethod
+    def main(cls, data_manager):
+        """
+        A function that will be run on the target upon deployment. A newly-
+        initialized :class:`DataManager` is passed as the only argument to
+        this method.
         """
         pass
     
@@ -210,11 +190,52 @@ class Runtime(ABC):
         """
         This function should initialize any figures or other graphical objects
         and return a function that will update them along with the primary
-        ``Figure`` object. This function must accept an integer as its second
-        argument, which will be populated with the frame number, and a tuple
-        as its first argument, which will be populated with the target's IP
-        address and port.
+        ``Figure`` object. This function must accept a progress dictionary (the
+        return value of `DataManager.receive_counters` as its first and only 
+        argument.
         """
-        return None, None            
+        return None, None, None            
     
+    @staticmethod
+    def _progress_generator(stop_event, address):
+        """
+        A generator for tracking the progress of the remote process.
+        """
+        # Repeatedly ask for progress until we get a valid progress 
+        # dictionary from the server
+        from acadia.data import DataManager
+        import time
+        from tqdm.notebook import tqdm
+        
+        logging.debug("Progress generator created")
+        
+        progress_dict = {}
+        bar = None
+        while len(progress_dict) == 0:
+            if stop_event.is_set():
+                return
+            rcvd = DataManager.receive_counters(address)
+            if rcvd is not None:
+                progress_dict = rcvd
+                
+        if "total" in progress_dict: 
+            logging.debug(f"Creating progress bar with state {rcvd}")              
+            bar = tqdm(total=progress_dict["total"])
+            bar.update(progress_dict["progress"])
+            
+        while not progress_dict["complete"]:
+            if stop_event.is_set():
+                break
+            rcvd = DataManager.receive_counters(address)
+            if rcvd is not None:
+                if bar is not None:
+                    bar.update(rcvd["progress"]-progress_dict["progress"])
+                progress_dict = rcvd
+                
+            yield progress_dict
+                
+        # Either we completed everything or we manually stopped
+        if bar is not None:
+            bar.close()
+            DataManager.stop_remote_server(address)
     
