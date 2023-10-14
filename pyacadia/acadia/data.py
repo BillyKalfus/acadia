@@ -7,9 +7,16 @@ import numpy as np
 import io
 import logging
 import socket
-
+import fcntl
+import subprocess
+import traceback
+import time
+import struct
+import operator
+from functools import reduce
+from itertools import count
 from abc import ABC, abstractstaticmethod, abstractmethod
-from threading import Thread, Event, Lock
+from numpy.lib.format import header_data_from_array_1_0, descr_to_dtype
 
 __all__ = ["RecordGroup", 
            "ListRecordGroup", 
@@ -17,96 +24,135 @@ __all__ = ["RecordGroup",
            "DataManager", 
            "Plotter"]
 
-
 class RecordGroup(ABC):
     """
     A group of records to be saved.
     """
     
     @abstractmethod
-    def serialize(self):
+    def serialize(self, record_indices=None, out=None):
+        """
+        Convert the record group and all of its data (or a user-provided 
+        subset) into a stream of bytes. The output will be fully rewritten
+        every time this is called, so :meth:`save` should be used for 
+        frequent, fast updates.
+        
+        :param record_indices: Indices of records to serialize. If `None`, all
+            records are included.
+        :type record_indices: array-like or None
+        :param out: If not `None`, this can be either a `str` or file-like 
+            object. If a `str`, this argument is treated as a filepath into
+            which the serialized data should be written. If a file-like object,
+            the object's `write` method will be used to write the data. If 
+            `None`, the serialized data is returned as a newly-allocated 
+            ``io.BytesIO`` object.
+        :type out: str, file-like object, or None
+        """
         pass
     
     @abstractstaticmethod
-    def load(inpt, preprocessor):
+    def deserialize(input_data):
+        """
+        The inverse of :meth:`serialize`; create a new instance from a stream 
+        of serial data.
+        
+        :param input_data: this can be either a `str` or file-like 
+            object. If a `str`, this argument is treated as a filepath from
+            which the serialized data should be read. If a file-like object,
+            the object's `read` method will be used to read the data.
+        :type input_data: str or file-like object
+        """
         pass
     
+    @abstractmethod
+    def save(self, group_name, output_dir):
+        """
+        Save the data in the record group into files. This should be used 
+        instead of :meth:`serialize` when frequent, fast updates to the file
+        storage are desired.
+        
+        :param group_name: Group name
+        :type group_name: str
+        :param output_dir: Directory into which group files will be saved
+        :type output_dir: str
+        """
+        pass
+    
+    @abstractstaticmethod
+    def load(group_name, input_dir, metadata=None, map=True):
+        """
+        Load data from files into a new instance.
+        
+        :param group_name: Group name
+        :type group_name: str
+        :param input_dir: Directory from which group files will be loaded
+        :type input_dir: str
+        :param metadata: Some types will require additional data for loading,
+            such as array types or shapes. This is subclass-specific and is
+            not required to be accessed.
+        :type metadata: dict
+        :param map: Indicate that memory-mapped data is preferred, if the 
+            class supports it.
+        :type map: bool
+        """
+        pass
+    
+    @abstractmethod    
+    def records(self):
+        """
+        :return: The underlying record data, whose type will be specific to the
+            instance class.
+        """
+        pass
+    
+    @abstractmethod
+    def append(self, record) -> None:
+        """
+        Append a new record to internal storage. Note that this does not save 
+        the data in any way, and recoverable storage should be created by 
+        calling :meth:`save` or :meth:`serialize`.
+        
+        :param record: Record to append
+        """
+        pass
+    
+    def metadata(self) -> dict:
+        """
+        :return: Metadata for the group. The returned data may be arbitrary
+            and specific to the subclass, but should contain sufficient 
+            information to reconstruct the instance when passed into 
+            :meth:`load`. This may be populated when saving, so the return
+            value is not defined if :meth:`save` has not been called 
+            previously.
+        :rtype: dict
+        """
+        return {}
+    
+    def files(self) -> list:
+        """
+        :return: Lists files created by the group
+        :rtype: list
+        """
+        return []
+    
+    @abstractmethod
+    def __len__(self) -> int:
+        """
+        :return: The number of records stored in the group
+        :rtype: int
+        """
+        pass
+    
+    @abstractmethod
     def __getitem__(self, k):
-        return self._records[k]
-        
-    def data(self):
-        return self._records
-    
-    def __len__(self):
-        return len(self._records)
-    
-    def append(self, record):
+        """
+        :return: The internally-stored record specified by key `k`
+        """
         pass
-    
-    def metadata(self):
-        return None
-
-class ListRecordGroup(RecordGroup):
-    """
-    A collection of records stored in a list.
-    """
-    
-    def __init__(self, records=None):
-        self._records = records if records is not None else []
-        super().__init__()
-        
-    def serialize(self, output_file):
-        """
-        Serialize the record into a file.
-        
-        :param output_file: File-like object to serialize into
-        """
-        pickle.dump(self._records, output_file)
-        
-    @staticmethod
-    def load(inpt, preprocessor=None):
-        """
-        Load records from a file or bytes with an optional preprocessing stage.
-        
-        :param inpt: A file path or byte array to load data from
-        :type inpt: str or bytes
-        :param preprocessor: A function to call on the raw record data before
-            enclosing it in the group object. The function should accept a list
-            representing the output data as its first argument and a list
-            representing the input data as its second argument.
-        :type preprocessor: callable
-        """
-        if isinstance(inpt, str):
-            input_data = pickle.load(inpt)
-        elif isinstance(inpt, bytes):
-            input_data = pickle.loads(inpt)
-        else:
-            raise TypeError(f"Data of invalid type: {type(inpt)}")
-        
-        group = ListRecordGroup()
-        if preprocessor is not None:
-            preprocessor(group._records, input_data)
-        else:
-            group._records = input_data
-            
-        return group
-        
-    def append(self, record):
-        """
-        :param record: Record to add to internal list
-        """
-        self._records.append(record)
-        super().append(record)
-        
-    def shape(self):
-        """
-        :return: Number of records currently saved
-        """
-        return (len(self._records),)
         
 class ArrayRecordGroup(RecordGroup):
     """
-    A collection of numeric records stored in a numpy array.
+    A collection of similarly-shaped array-like records.
     """
     
     def __init__(self, record_shape, max_records, dtype, record_axes=None):
@@ -127,76 +173,161 @@ class ArrayRecordGroup(RecordGroup):
         self._count = 0
         self._record_shape = record_shape
         self._record_axes = record_axes if record_axes is not None else []
+        self._last_saved_args = None
+        self._metadata = {}
         
         super().__init__()
+    
+    def metadata(self):
+        """
+        Retrieve metadata for all record files in the group. 
         
+        :return: A `dict` whose keys are file names and whose values are the
+            return values of `numpy.lib.format.header_data_from_array_1_0` for
+            the arrays backing those files.
+        :rtype: dict
+        """
+        return self._metadata
+    
+    def files(self):
+        return list(self._metadata.keys())
+    
+    def _save_array(self, arr, output_dir, filename):
+        with open(os.path.join(output_dir, filename), "wb") as f:
+            arr.tofile(f)
+                        
+        self._metadata[filename] = header_data_from_array_1_0(arr)
+        
+    def save(self, group_name, output_dir):
+        """
+        Save the data in the record group into files. A file will be created
+        for the primary data, and additional files will be created for the 
+        axes.
+        """
+        
+        # If our most recent call to this function had the same arguments,
+        # append to files instead of rewriting everything
+        # Additionally, the axes will only be written the first time        
+        if self._last_saved_args is None or self._last_saved_args["dir"] != output_dir or self._last_saved_args["name"] != group_name:
+            # First-time write, save the axes and update internal metadata
+            for i,axis in enumerate(self._record_axes):
+                self._save_array(axis, output_dir, f"{group_name}_axis{i}.bin")
+                    
+            # We have to save from the beginning of the file
+            record_offset = 0
+        else:
+            # We've saved here before, we can append from where we left off
+            # and we don't need to save the axes again
+            record_offset = self._last_saved_args["count"]
+            
+        if record_offset != self._count:
+            self._save_array(self._records[:self._count, ...], output_dir, f"{group_name}_records.bin")
+            self._last_saved_args = {"dir": output_dir, 
+                                    "name": group_name, 
+                                    "count": self._count}
+            
     @staticmethod
-    def from_data(records):
-        """
-        Create an ArrayRecordGroup from a numpy array of data. It is implied
-        that the first index iterates over individual records, and any other
-        dimensions in the array are the dimensions of the individual records
-        themselves.
+    def _load_array(filename, input_dir, header_data, map=False):
+        full_path = os.path.join(input_dir, filename)
         
-        :param records: Data to ingest
-        :type records: numpy array
-        """
-        inst = ArrayRecordGroup(records.shape[1:], records.shape[0], records.dtype)
-        inst._records = records
-        inst._count = records.shape[0]
-        inst._record_axes = None
-        return inst
+        logging.debug(f"{'Mapping' if map else 'Loading'} {full_path} with header {header_data}")
         
-    def serialize(self, output_file):
-        axes = {f"axis{i}": ax for i,ax in enumerate(self._record_axes)} if self._record_axes is not None else {}                
-        np.savez(output_file, 
-                 allow_pickle=False, 
-                 records=self._records[:self._count,...], 
-                 **axes)
+        if not os.path.isfile(full_path):
+            logging.debug(f"Unable to find array data for {filename} in"
+                          f" directory {input_dir}")
+            return None
+        
+        if filename not in header_data:
+            logging.debug(f"No header for {filename} found")
+            return None
+        
+        dtype = descr_to_dtype(header_data[filename]["descr"])
+        order = 'F' if header_data[filename]["fortran_order"] else 'C'
+        shape = tuple(header_data[filename]["shape"])
+        
+        logging.debug(f"Extracted: dtype {dtype}, order {order}, shape {shape}")
+        
+        if map:
+            arr = np.memmap(full_path, dtype=dtype, mode="r", shape=shape, order=order)
+        else:
+            arr = np.fromfile(full_path, dtype=dtype, count=reduce(operator.mul, shape))
+            arr = np.reshape(arr, shape, order=order)
+            
+        return arr
     
     @staticmethod  
-    def load(inpt, preprocessor=None):
+    def load(group_name, input_dir, metadata=None, map=False):
         """
-        Load records from a file or bytes with an optional preprocessing stage.
+        Load records from a directory of files. 
         
-        :param inpt: A file path or byte array to load data from
-        :type inpt: str or bytes
-        :param preprocessor: A function to call on the record data before
-            enclosing it in the group object. The function should accept a 
-            ``numpy.NpzFile`` object representing the input data and axes 
-            as its only argument, and a dictionary should be returned with
-            the key "records" containing the output data and the keys "axis<i>"
-            containing the axes for the data in the records. Note that the 
-            resulting record group will encapsulate these objects directly, 
-            so any allocation or copying should be performed in the 
-            preprocessing stage if necessary.
-        :type preprocessor: callable
+        :param name: The name of the group data to load
+        :type name: str
+        :param input_dir: The directory to load group files from
+        :type input_dir: str
+        :param metadata: Metadata for stored files, as would be returned by 
+            calling :meth:`metadata`
+        :type header_data: dict
+        :param map: If `True`, data is memory-mapped instead of loaded into 
+            memory.
         """
-        if isinstance(inpt, str):
-            file = inpt
-        elif isinstance(inpt, bytes):
-            file = io.BytesIO(inpt)
-        else:
-            raise TypeError(f"Data of invalid type: {type(inpt)}")
         
-        data = np.load(file, allow_pickle=False)
-        group_data = preprocessor(data) if preprocessor is not None else data
-        inst = ArrayRecordGroup.from_data(group_data["records"])
-        if "axis0" in group_data:
-            inst._record_axes = [group_data[f"axis{i}"] for i in range(group_data["records"].ndim-1)]
+        records = ArrayRecordGroup._load_array(f"{group_name}_records.bin", input_dir, metadata, map)
+        if records is None:
+            return None
+        
+        record_axes = []
+        for axis_idx in count():
+            axis_filename = f"{group_name}_axis{axis_idx}.bin"
+            if os.path.exists(os.path.join(input_dir, axis_filename)):
+                axis = ArrayRecordGroup._load_array(axis_filename, input_dir, metadata, map)
+                record_axes.append(axis)
+            else:
+                break
+            
+        # Create a record group from the data we loaded
+        inst = ArrayRecordGroup(records.shape[1:], records.shape[0], records.dtype, record_axes)
+        inst._records = records
+        inst._count = inst._max_records
         
         return inst
+    
+    def serialize(self, record_indices=None, out=None):
+        if out is None:
+            out = io.BytesIO()
+            created_out = True
+        else:
+            created_out = False
+            
+        records = np.take(self._records[:self._count,...], record_indices, axis=0)
+        axes = {f"axis{i}": ax for i,ax in enumerate(self._record_axes)}               
+        np.savez(out, allow_pickle=False, records=records, **axes)
         
+        if created_out:
+            return out
+        
+    @staticmethod
+    def deserialize(input_data):
+        data = np.load(input_data)
+        
+        record_axes = []
+        for i in count():
+            if f"axis{i}" in data:
+                record_axes.append(data[f"axis{i}"])
+        
+        inst = ArrayRecordGroup(data["records"].shape[1:], 
+                                data["records"].shape[0], 
+                                data["records"].dtype, 
+                                record_axes)
+        
+        inst._records = data["records"]
+        inst._count = inst._max_records
+        
+        return inst
+            
     def __getitem__(self, k):
-        """
-        Retrieve a record specified by a key.
-        """
         return np.take(self._records, k, axis=0)
     
     def append(self, record):
-        """
-        Add a record into the array.
-        """
         if record.shape != self._record_shape:
             raise ValueError(f"Incompatible record shape (expected"
                              f" {self._record_shape}, received {record.shape})")
@@ -209,12 +340,12 @@ class ArrayRecordGroup(RecordGroup):
         self._records[self._count, ...] = record    
         self._count += 1
         super().append(record)
-        
-    def shape(self):
-        return (self._count, *(self._records.shape[1:]))
     
     def __len__(self):
         return self._count
+    
+    def records(self):
+        return self._records
     
     def axis(self, idx=0):
         """
@@ -229,13 +360,373 @@ class DataManager:
     """
     An abstraction for collecting and storing groups of data records.
     """
+        
+    @staticmethod
+    def _sendint(sock, i: int):
+        """
+        Send an integer over a socket.
+        """
+        sock.sendall(i.to_bytes(8, "little"))
+        
+    @staticmethod
+    def _recvint(sock):
+        """
+        Receive an integer from a socket.
+        """
+        tstart = time.time()
+        i_bytes = b''
+        while len(i_bytes) < 8:
+            if time.time() - tstart > 1:
+                raise TimeoutError(f"Failed to receive int (received {len(i_bytes)} bytes)")
+            i_bytes += sock.recv(8 - len(i_bytes))
+        return int.from_bytes(i_bytes, "little")
+        
+    @staticmethod
+    def _sendstring(sock, s):
+        """
+        Send an ASCII string over a socket.
+        """
+        s_ascii = s.encode("ascii")
+        DataManager._sendint(sock, len(s_ascii))
+        sock.sendall(s_ascii)
+        
+    @staticmethod
+    def _recvstring(sock):
+        """
+        Receive an ASCII string from a socket
+        """
+        s_length = DataManager._recvint(sock)
+        logging.debug(f"Received string length {s_length}")
+        
+        if s_length == 0:
+            return ""
+        
+        buf = io.BytesIO()
+        tstart = time.time()
+        while buf.tell() < s_length:
+            if time.time() - tstart > 1:
+                raise TimeoutError(f"Failed to receive str (received {buf.tell()} bytes)")
+            buf.write(sock.recv(s_length - buf.tell()))
+            
+            
+        buf.seek(0)
+        return buf.read().decode("ascii")
+        
+    @staticmethod
+    def _sendfile(sock: socket.socket,
+                    filename: str, 
+                    directory: str, 
+                    lock: bool = True, 
+                    file_data_preprocessor=None):
+        """
+        Send a file over a socket.
+        
+        :param filename: Basename of the file
+        :type filename: str
+        :param directory: Directory containing the file
+        :type directory: str
+        :param s: Socket over which to send file
+        :type s: socket.socket
+        :param lock: If `True`, an exclusive advisory lock is acquired for the
+            file before reading
+        :type lock: bool
+        :param file_data_preprocessor: When the file data is read, it may be 
+            optionally pre-processed by a function that will accept the file
+            object and return the bytes to send.
+        """
+        file_path = os.path.join(directory, filename)
+        if not os.path.exists(file_path):
+            logging.error(f"File {filename} not found in directory {directory}")
+            return
+        
+        DataManager._sendstring(sock, filename)
+        
+        # Send file size and file
+        file_size = os.path.getsize(file_path)
+        
+        with open(file_path, "rb") as f:
+            if lock:
+                fcntl.fcntl(f, fcntl.F_SETLK, struct.pack("hhllhh", fcntl.F_RDLCK, 0, 0, 0, 0, 0))
+            if file_data_preprocessor is not None:
+                preprocessed_data = file_data_preprocessor(f)
+                data_size = len(preprocessed_data)
+                DataManager._sendint(sock, data_size)
+                sock.sendall(preprocessed_data)
+            else:
+                data_size = file_size
+                DataManager._sendint(sock, file_size)
+                sock.sendfile(f, count=file_size)
+            if lock:
+                fcntl.fcntl(f, fcntl.F_SETLK, struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0))
+        
+        logging.debug(f"Sent file {filename} ({file_size} bytes, sent {data_size})") 
+        
+    @staticmethod
+    def _recvfile(sock: socket.socket, output_directory, timeout=1):
+        """
+        Receive a file from a socket. The file will be written with a filename
+        provided by the socket, and the filename and size will be returned.
+        """  
+        
+        filename = DataManager._recvstring(sock)
+        file_size = DataManager._recvint(sock)
+        
+        logging.debug(f"Receiving file {filename} ({file_size} bytes)")
+        
+        with open(os.path.join(output_directory, filename), "wb") as f:
+            tstart = time.time()
+            while f.tell() < file_size:
+                if time.time() - tstart > timeout:
+                    raise TimeoutError(f"Timed out receiving file {filename}"
+                                       f" (received {f.tell()}/{file_size} bytes)")
+                piece = sock.recv(file_size - f.tell())
+                logging.debug(f"Received {len(piece)}-byte chunk")
+                f.write(piece)
+                
+        logging.debug(f"Received file {filename}")
+        
+                        
+    @staticmethod
+    def _server_process_func(file_directory, address):
+        """
+        A thread for providing access to files and data in the output 
+        directory in a way that respects the requisite file locks.
+        """
+        logging.debug("Server process launched")
+        
+        if isinstance(address, tuple):
+            socket_family = socket.AF_INET
+        elif isinstance(address, str):
+            socket_family = socket.AF_UNIX
+        else:
+            raise TypeError(f"Received address of invalid type: {address}")
+        
+        # Create the server
+        s = socket.socket(socket_family, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        s.settimeout(0.2)
+        s.bind(address)
+        s.listen()
+        
+        logging.debug(f"Started DataManager server at {address}")
+        
+        stop_file_path = os.path.join(file_directory, ".stop")
+        
+        # Continuously accept connections until the main thread commands otherwise
+        while True:
+            try:
+                conn, addr = s.accept()
+                logging.debug(f"Received connection from {addr}")
+                conn.settimeout(1)
+            except socket.timeout:
+                if os.path.exists(stop_file_path):
+                    logging.info("Stop file located, stopping")
+                    os.remove(stop_file_path)
+                    break
+                else:
+                    continue
+                
+            try:
+                cmd_id = DataManager._recvint(conn)
+                cmd = DataManager._recvint(conn)
+                logging.debug(f"(id {cmd_id}) Received command {cmd}")
+                
+                if cmd == 1:
+                    # Receive group metadata and files
+                    # Get the length of the name of the group being requested
+                    group_name = DataManager._recvstring(conn)
+                    logging.debug(f"(id {cmd_id}) Requested group {group_name}")
+                    
+                    # Load the metadata to get the group type and filename
+                    if not os.path.exists(os.path.join(file_directory, "metadata.json")):
+                        # No data yet
+                        logging.error(f"(id {cmd_id}) File metadata.json not found in directory {file_directory}")
+                        DataManager._sendstring(conn, "{}")
+                    else:
+                        with open(os.path.join(file_directory, "metadata.json"), "ab+") as f:
+                            fcntl.fcntl(f, fcntl.F_SETLKW, struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0))
+                            logging.debug(f"(id {cmd_id}) Locked metadata")
+                            
+                            f.seek(0)
+                            group_metadata = json.load(f)['groups'][group_name]
+                            
+                            fcntl.fcntl(f, fcntl.F_SETLK, struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0))
+                            logging.debug(f"(id {cmd_id}) Released metadata")
+                                        
+                        data = json.dumps(group_metadata)
+                        logging.debug(f"(id {cmd_id}) Sending metadata {data}")
+                        DataManager._sendstring(conn, data)
+
+                        # The metadata will contain all the names of the files to be sent 
+                        for idx,file in enumerate(group_metadata["files"]):
+                            file_path = os.path.join(file_directory, file)
+                            if not os.path.exists(file_path):
+                                logging.debug(f"(id {cmd_id}) File in metadata not found: {file}")
+                            else:
+                                logging.debug(f"(id {cmd_id}) Sending {file} ({os.path.getsize(file_path)} bytes)")  
+                                DataManager._sendfile(conn, file, file_directory, lock=False)
+                                # proc = subprocess.run(f"cat {file_path} | nc -c -l -p {address[1]+idx+1}", shell=True)
+                                logging.debug(f"(id {cmd_id}) Sent")             
+                    
+                elif cmd == 2:
+                    logging.debug(f"(id {cmd_id}) Progress command")
+                    if not os.path.exists(os.path.join(file_directory, "progress.json")):
+                        logging.debug(f"(id {cmd_id}) Progress file not found")
+                        DataManager._sendstring(conn, "{}")
+                    else:                    
+                        with open(os.path.join(file_directory, "progress.json"), "a+") as f:
+                            fcntl.fcntl(f, fcntl.F_SETLKW, struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0))
+                            logging.debug(f"(id {cmd_id}) Locked progress")
+                            
+                            f.seek(0)
+                            data = f.read()
+                            logging.debug(f"(id {cmd_id}) Sending progress {data}")
+                            DataManager._sendstring(conn, data)
+                            
+                            fcntl.fcntl(f, fcntl.F_SETLK, struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0))
+                            logging.debug(f"(id {cmd_id}) Released progress")
+                
+                elif cmd == 3:
+                    logging.debug(f"(id {cmd_id}) Closing server from manual command")
+                    with open(stop_file_path, "w+") as f:
+                        f.write("stop from client")
+                        
+                else:
+                    logging.error(f"(id {cmd_id}) Received invalid command {cmd}")
+                    
+                # Close the connection and accept a new one
+                conn.close()
+            except:
+                logging.debug(f"Exception in server loop: {traceback.format_exc()}")
+                
+        s.close()
+        
+    @staticmethod
+    def _create_server_connection(address):
+        """
+        Connect to a server and return a socket with the active connection.
+        """
+        if isinstance(address, tuple):
+            socket_family = socket.AF_INET
+        elif isinstance(address, str):
+            socket_family = socket.AF_UNIX
+        else:
+            raise TypeError(f"Received address of invalid type: {address}")
+        
+        s = socket.socket(socket_family, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        s.settimeout(2)
+        
+        try:
+            s.connect(address)
+        except:
+            logging.debug(f"Failed to connect: {traceback.format_exc()}")
+            return None
+
+        logging.debug(f"Established connection to server {address}")
+        
+        return s
     
+    @staticmethod
+    def receive_group(group_name, address, temp_directory="/tmp"):
+        """
+        Receive a data group from a server.
+        """
+        id = np.random.randint(1e6)
+        
+        logging.debug(f"(cmd id {id}) Requesting group {group_name}")
+        sock = DataManager._create_server_connection(address)
+        
+        if sock is None:
+            logging.debug("Failed to connect to server.")
+            return None
+        # sock.settimeout(0.5)
+        
+        DataManager._sendint(sock, id)
+        DataManager._sendint(sock, 1) 
+        
+        DataManager._sendstring(sock, group_name)
+        metadata_str = DataManager._recvstring(sock)
+        
+        if len(metadata_str) == 0 or metadata_str == "{}":
+            return None
+        
+        metadata = json.loads(metadata_str)
+        
+        logging.debug(f"(id {id}) Received metadata {metadata}")
+        
+        if len(metadata["files"]) == 0:
+            # The metadata contains some record of files that will be written
+            # but aren't ready yet
+            logging.error(f"(id {id}) No files in metadata")
+            sock.close()
+            return None
+        
+        for idx,file in enumerate(metadata["files"]):
+            file_path = os.path.join(temp_directory, file)
+            logging.debug(f"(id {id}) Receiving file {file}")
+            # done = False
+            # tstart = time.time()
+            # while not done:
+            #     if time.time() - tstart > 1:
+            #         logging.error(f"(id {id}) Failed to receive file {file}")
+            #         sock.close()
+            #         return None
+                
+            #     proc = subprocess.run(f"nc 192.168.2.69 {address[1]+idx+1} > {file_path}", shell=True)
+            #     done = proc.returncode == 0
+            
+            DataManager._recvfile(sock, temp_directory)
+            logging.debug(f"(id {id}) Received file {file} ({os.path.getsize(file_path)} bytes)")
+            
+        sock.close()
+        
+        group_type = eval(metadata["type"])
+        
+        return group_type.load(group_name, temp_directory, metadata=metadata["metadata"])
+    
+    @staticmethod
+    def receive_counters(address):
+        """
+        Receive the progress counters from a server at the specified address.
+        
+        :return: Progress counters if the server has one, otherwise `None`
+        :rtype: dict
+        """        
+        id = np.random.randint(1e6)
+        logging.debug(f"(id {id}) Requesting progress")
+        sock = DataManager._create_server_connection(address)   
+        if sock is None:
+            logging.debug(f"(id {id}) Failed to connect to server.")
+            return None
+          
+        DataManager._sendint(sock, id)
+        DataManager._sendint(sock, 2) 
+        
+        # logging.debug("Send progress command")
+        data = DataManager._recvstring(sock)
+        # logging.debug(f"Received {data}")
+        sock.close()
+        
+        return json.loads(data)
+    
+    @staticmethod
+    def stop_remote_server(address):
+        sock = DataManager._create_server_connection(address)   
+        id = np.random.randint(1e6)
+        logging.debug(f"(id {id}) Requesting remote server exit")
+        
+        DataManager._sendint(sock, id)
+        DataManager._sendint(sock, 3) 
+        sock.close()
+        
     def __init__(self, 
                  output_directory, 
                  subdirectory_prefix="", 
                  datetime_format="%m%d%y-%H%M%S",
-                 save_count=20,
-                 close_server=False):
+                 save_count=5):
         """
         Initializes a DataManager for collecting data records. Every time this
         is called, a subdirectory will be created within the specified output
@@ -269,11 +760,6 @@ class DataManager:
         :param save_count: Specifies how many records should be received before
             saving data to disk and announcing it on the server
         :type save_count: int
-        :param close_server: When using an instance as a context manager, this
-            flag determines whether the server should be closed when exiting 
-            the context. If this is `False`, exiting the context will block 
-            until the server is manually closed by a client.
-        :type close_server: bool
         """
         time_str = datetime.datetime.now(datetime.timezone.utc).strftime(datetime_format)
         self._output_directory = os.path.join(output_directory, f"{subdirectory_prefix}{time_str}")
@@ -283,259 +769,10 @@ class DataManager:
         self._datetime_format = datetime_format
         self._saved_files = []
         self._groups = {}
-        self._record_preprocessors = {}
         self._save_count = save_count
         self._record_count = 0
-        self._server_thread = None
+        self._server_process = None
         self._progress_dict = {}
-        self._progress_dict_lock = Lock()
-        self._server_running_event = Event()
-        self._server_stop_event = Event()
-        self._record_lock = Lock()
-        self._close_server = close_server
-        
-    @staticmethod
-    def _server_thread(file_directory, address, record_lock, meta_container, meta_lock, running_event, stop_event, record_preprocessors):
-        """
-        A thread for providing access to files and data in the output 
-        directory in a way that respects the requisite file locks.
-        """
-        if isinstance(address, tuple):
-            socket_family = socket.AF_INET
-        elif isinstance(address, str):
-            socket_family = socket.AF_UNIX
-        else:
-            raise TypeError(f"Received address of invalid type: {address}")
-        
-        logging.debug(f"Started DataManager server at {address}")
-        # Create the server
-        s = socket.socket(socket_family, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        s.settimeout(0.1)
-        s.bind(address)
-        s.listen()
-        
-        running_event.set()
-        
-        # Continuously accept connections until the main thread commands otherwise
-        while True:
-            try:
-                conn, addr = s.accept()
-            except socket.timeout:
-                if stop_event.is_set():
-                    break
-                else:
-                    continue
-                
-            logging.debug(f"Received connection from {addr}")
-            
-            cmd = conn.recv(1)
-            if cmd == b'g':
-                # Receive a (potentially pre-processed) group
-                # Get the length of the name of the group being requested
-                group_name_length = int.from_bytes(conn.recv(1), "little")
-                logging.debug(f"Group name length {group_name_length}")
-                
-                # Get the group name
-                group_name_bytes = b''
-                while len(group_name_bytes) < group_name_length:
-                    group_name_bytes += conn.recv(group_name_length - len(group_name_bytes))
-                group_name = group_name_bytes.decode("ascii")
-                logging.debug(f"Requested group {group_name}")
-                
-                # Load the metadata to get the group type and filename
-                with record_lock:
-                    if "metadata.json" not in os.listdir(file_directory):
-                        # No data yet
-                        conn.sendall((0).to_bytes(1, "little"))
-                        conn.close()
-                        continue
-                        
-                    with open(os.path.join(file_directory, "metadata.json"), "rb") as f:
-                        metadata = json.load(f)
-                    
-                    group_type = metadata['groups'][group_name]['type']
-                    group_filename = os.path.join(file_directory, metadata['groups'][group_name]['filename'])
-                    logging.debug(f"Identified group as type {group_type}")
-                    
-                    conn.sendall(len(group_type).to_bytes(1, "little"))
-                    conn.sendall(group_type.encode('ascii'))
-                    logging.debug(f"Sent group type {group_type}")
-
-                    if group_name in record_preprocessors:
-                        # If the data is to be preprocessed, create a new group and
-                        # send the serialized version of that
-                        group = eval(group_type).load(group_filename, record_preprocessors[group_name])
-                        data = io.BytesIO()
-                        group.serialize(data)
-                        data_size = data.tell()
-                        data.seek(0)
-                        
-                    else:
-                        # If there's no preprocessing to do, just send the data file
-                        data_size = os.path.getsize(group_filename)
-                        data = open(group_filename, "rb")
-                            
-                    conn.sendall(data_size.to_bytes(8, "little"))
-                    logging.debug(f"Sent data size {data_size}")
-                    
-                    conn.sendfile(data)
-                    logging.debug(f"Sent file")
-                    
-                    data.close()
-            elif cmd == b'p':
-                # Return the internal meta container
-                logging.debug("Progress command")
-                with meta_lock:
-                    logging.debug(f"Progress: {meta_container}")
-                    data = pickle.dumps(meta_container)
-                    conn.sendall(len(data).to_bytes(8, "little"))
-                    conn.sendall(data)
-            elif cmd == b'q':
-                logging.debug("Closing server from manual command")
-                break
-                    
-            else:
-                logging.error(f"Received invalid command {cmd}")
-                
-            # Close the connection and accept a new one
-            conn.close()
-            
-        s.close()
-        running_event.clear()
-    
-    @staticmethod
-    def receive_group(group_name, address):
-        """
-        Receive a data group from a server.
-        """
-        
-        logging.debug(f"Requesting group {group_name} from {address}")
-        if isinstance(address, tuple):
-            socket_family = socket.AF_INET
-        elif isinstance(address, str):
-            socket_family = socket.AF_UNIX
-        else:
-            raise TypeError(f"Received address of invalid type: {address}")
-        
-        s = socket.socket(socket_family, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        try:
-            s.connect(address)
-        except:
-            logging.debug("Failed to connect")
-            return None
-        
-        logging.debug(f"Established connection to server {address}")
-        
-        s.sendall(b'g')
-        logging.debug("Sent group command")
-        
-        s.sendall(len(group_name).to_bytes(1, "little"))
-        logging.debug(f"Sent group name length {len(group_name)}")
-        
-        s.sendall(group_name.encode("ascii"))
-        logging.debug(f"Sent group name {group_name}")
-        
-        group_type_length_bytes = s.recv(1)
-        group_type_length = int.from_bytes(group_type_length_bytes, "little")
-        logging.debug(f"Received group type length {group_type_length}")
-        
-        if group_type_length == 0:
-            return None
-        
-        group_type_bytes = b''
-        while len(group_type_bytes) < group_type_length:
-            group_type_bytes += s.recv(group_type_length - len(group_type_bytes))
-        group_type = group_type_bytes.decode('ascii')
-        logging.debug(f"Received group type {group_type}")
-        
-        data_length_bytes = b''
-        while len(data_length_bytes) < 8:
-            data_length_bytes += s.recv(8 - len(data_length_bytes))
-            
-        data_length = int.from_bytes(data_length_bytes, "little")
-        logging.debug(f"Server responded with data size {data_length}")
-        
-        if data_length == 0:
-            return None
-        
-        data = b''
-        while len(data) < data_length:
-            data += s.recv(data_length - len(data))
-            
-        logging.debug(f"Received data")
-        
-        return eval(group_type).load(data)
-    
-    @staticmethod
-    def receive_counters(address):
-        """
-        Receive the progress counters from a server at the specified address.
-        
-        :return: Progress counters if the server has one, otherwise `None`
-        :rtype: dict
-        """        
-        logging.debug(f"Requesting progress from {address}")
-        if isinstance(address, tuple):
-            socket_family = socket.AF_INET
-        elif isinstance(address, str):
-            socket_family = socket.AF_UNIX
-        else:
-            raise TypeError(f"Received address of invalid type: {address}")
-        
-        s = socket.socket(socket_family, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        try:
-            s.connect(address)
-        except:
-            logging.debug("Failed to connect")
-            return None
-        
-        logging.debug(f"Established connection to server {address}")
-        
-        s.sendall(b'p')
-        logging.debug("Sent progress command")
-        
-        data_length_bytes = b''
-        while len(data_length_bytes) < 8:
-            data_length_bytes += s.recv(8-len(data_length_bytes))
-        data_length = int.from_bytes(data_length_bytes, "little")
-        
-        data = b''
-        while len(data) < data_length:
-            data += s.recv(data_length - len(data))
-        
-        counters = pickle.loads(data)
-        logging.debug(f"Received {counters}")
-        
-        return counters
-    
-    @staticmethod
-    def stop_remote_server(address):
-        if isinstance(address, tuple):
-            socket_family = socket.AF_INET
-        elif isinstance(address, str):
-            socket_family = socket.AF_UNIX
-        else:
-            raise TypeError(f"Received address of invalid type: {address}")
-        
-        s = socket.socket(socket_family, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        try:
-            s.connect(address)
-        except:
-            logging.debug("Failed to connect")
-            return None
-        
-        logging.info(f"Established connection to server {address}")
-        
-        s.sendall(b'q')
-        s.close()
         
     def start_server(self, address=("", 6672)):
         """
@@ -545,27 +782,35 @@ class DataManager:
         :param address: Address for hosting the server
         :type address: tuple (for network sockets) or str (for Unix sockets)
         """
-        self._server_thread = Thread(target=DataManager._server_thread, 
-                   args=(self._output_directory, 
-                         address, 
-                         self._record_lock, 
-                         self._progress_dict,
-                         self._progress_dict_lock,
-                         self._server_running_event,
-                         self._server_stop_event,
-                         self._record_preprocessors),
-                   name=f"DataManager@{address}",
-                   daemon=True)
-        self._server_thread.start()
-        
+        try:
+            python_cmd = (f"import logging; "
+                        f"logging.basicConfig("
+                        f"filename='/home/root/data_server.log',"
+                        f" format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s',"
+                        f" level=logging.DEBUG,"
+                        f" filemode='w'); "
+                        f"from acadia.data import DataManager; "
+                        f"DataManager._server_process_func('{self._output_directory}', ('{address[0]}', {address[1]}));")
+
+            self._server_process = subprocess.Popen(["python3", "-c", python_cmd], 
+                                        stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, 
+                                        stderr=subprocess.PIPE,
+                                        preexec_fn=os.setsid)
+        except:
+            logging.error(f"Exception raised in server process: {traceback.format_exc()}")
+ 
     def stop_server(self):
         """
         Stop the server and all associated threads.
         """
-        self._server_stop_event.set()
-        self._server_thread.join()
-        self._server_stop_event.clear()
-        self._server_threads = []
+        with open(os.path.join(self._output_directory, ".stop"), "wb") as f:
+            f.write(b'stop plz')
+            
+        try:
+            self._server_process.wait(1)
+        except Exception as exc:
+            self._server_process.kill()
         
     def server_running(self):
         """
@@ -573,7 +818,8 @@ class DataManager:
         
         :rtype: bool
         """
-        return self._server_running_event.is_set()
+        return (self._server_process is not None
+                and self._server_process.poll() is None)
         
     def append(self, group_name, record):
         self._groups[group_name].append(record)
@@ -584,33 +830,36 @@ class DataManager:
     def save(self):
         """
         Commit data in all groups to files.
-        """
+        """   
+        logging.debug("Saving records...")
+        
+        metadata = {"datetime_format": self._datetime_format, 
+                    "groups": {}}
+        for name,group in self._groups.items():                    
+            metadata["groups"][name] =  {
+                "type": group.__class__.__name__,
+                "length": len(group),
+                "files": group.files(),
+                "metadata": group.metadata()
+            }
+
+            group.save(name, self._output_directory)
                 
-        with self._record_lock:
-            logging.debug("Saving records...")
-            with open(os.path.join(self._output_directory, "metadata.json"), "w+") as file:
-                metadata = {"datetime_format": self._datetime_format, 
-                            "groups": {}, 
-                            "files": []}
-                for name,group in self._groups.items():
-                    group_metadata = {
-                        "type": group.__class__.__name__,
-                        "length": len(group),
-                        "filename": name,
-                        "metadata": group.metadata()
-                    }
+        for saved_file in self._saved_files:
+            metadata["files"].append(saved_file)
                     
-                    metadata["groups"][name] = group_metadata
-                    
-                    with open(os.path.join(self._output_directory, name), "wb+") as f:
-                        group.serialize(f)
-                        
-                for saved_file in self._saved_files:
-                    metadata["files"].append(saved_file)
-                        
-                json.dump(metadata, file)
+        with open(os.path.join(self._output_directory, "metadata.json"), "a+") as file:
+            fcntl.fcntl(file, fcntl.F_SETLKW, struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0))
+            # logging.debug("Locked metadata")
             
-            logging.debug("Saved")
+            file.seek(0)
+            file.truncate()
+            json.dump(metadata, file)
+            
+            fcntl.fcntl(file, fcntl.F_SETLK, struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0))
+            # logging.debug("Released metadata")
+        
+        logging.debug("Saved")
         
         # Clear the record count so that we wait the right amount of time
         # before saving again
@@ -639,7 +888,7 @@ class DataManager:
             "time": datetime.datetime.now(datetime.timezone.utc).strftime(self._datetime_format)
         })
         
-    def add_group(self, name, group, preprocessor=None):
+    def add_group(self, name, group):
         """
         Add a group to be managed with an optional remote preprocessor.
         
@@ -661,22 +910,32 @@ class DataManager:
         
         self._groups[name] = group
         
-        if preprocessor is not None:
-            self._record_preprocessors[name] = preprocessor
+    def _update_progress_file(self):
+        with open(os.path.join(self._output_directory, "progress.json"), "a+") as f:
+            fcntl.fcntl(f, fcntl.F_SETLKW, struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0))
+            # logging.debug("Locked progress")
+            
+            f.seek(0)
+            f.truncate()
+            json.dump(self._progress_dict, f)
+            
+            fcntl.fcntl(f, fcntl.F_SETLK, struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0))
+            # logging.debug("Released progress")
             
     def progress_advance(self):
         """
         Notify the internal progress counter to increment by 1.
         """
-        with self._progress_dict_lock:
-            self._progress_dict["progress"] += 1
+        
+        self._progress_dict["progress"] += 1
+        self._update_progress_file()
             
     def progress_complete(self):
         """
         Notify the internal progress counter that data collection is complete.
         """
-        with self._progress_dict_lock:
-            self._progress_dict["complete"] = True
+        self._progress_dict["complete"] = True
+        self._update_progress_file()
             
     def iterator_progress(self, it):
         """
@@ -689,10 +948,10 @@ class DataManager:
         :return: A generator that yields the provided iterator's return values
             while simultaneously updating the internal progress counter.
         """
-        with self._progress_dict_lock:
-            self._progress_dict["total"] = len(it) if hasattr(it, "__len__") else None
-            self._progress_dict["progress"] = 0
-            self._progress_dict["complete"] = False
+        self._progress_dict["total"] = len(it) if hasattr(it, "__len__") else None
+        self._progress_dict["progress"] = 0
+        self._progress_dict["complete"] = False
+        self._update_progress_file()
                 
         for item in it:
             yield item
