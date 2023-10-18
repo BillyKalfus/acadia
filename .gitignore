@@ -5,6 +5,7 @@ lib/**/__pycache__/
 **/.ipynb_checkpoints/
 pyacadia/build/
 pyacadia/dist/
+pyacadia/examples/*.py
 pyacadia/pyacadia*/
 testing/
 docs/_build
