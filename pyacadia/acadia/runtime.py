@@ -18,7 +18,7 @@ from abc import ABC, abstractclassmethod, abstractmethod
 
 import numpy as np
 
-from .data import DataManager
+from .data import DataManager, DisplayMixin
 
 __all__ = ["Runtime", "RuntimeServer"]
 
@@ -210,39 +210,46 @@ class Runtime(ABC):
                     f.write(metadata_string)
                 
                 metadata = json.loads(metadata_string)
-                for group_name, group_data in metadata.items():
-                    for filename in group_data["files"]:
-                        file_path = os.path.join(temp_directory, filename)
-                        offset = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-                        file_bytes = RuntimeServer.request_file(address, filename, offset)
-                        if file_bytes is None:
-                            logging.error(f"File {filename} listed in metadata"
-                                          " but unable to be retrieved from"
-                                          " the server.")
-                            continue
-                        
-                        if len(file_bytes) > 0:
-                            with open(file_path, "ab") as f:
-                                f.write(file_bytes)
+                filedeltas = mgr.filedeltas(metadata)
+                logging.debug(f"Received deltas {filedeltas}")
+                
+                for filename,(offset,size) in filedeltas.items():
+                    if size == 0:
+                        continue
+                    
+                    file_path = os.path.join(temp_directory, filename)
+                    file_bytes = RuntimeServer.request_file(address, filename, offset, size)
+                    if file_bytes is None:
+                        logging.error(f"File {filename} listed in metadata"
+                                        " but unable to be retrieved from"
+                                        " the server.")
+                        continue
+                    
+                    if len(file_bytes) > 0:
+                        with open(file_path, "wb") as f:
+                            f.seek(offset)
+                            f.write(file_bytes)
+                            
                 mgr.load(reload=True)
                 
                 # logging.debug(f"Manager contains groups {mgr.group_names()}")
                 
                 for group_name in metadata.keys():
-                    if group_name in initialized_display_retvals:
-                        try:
-                            mgr[group_name].update_display(initialized_display_retvals[group_name])
-                        except:
-                            logging.error(f"Exception in display initialization"
-                                          f" for group {group_name}: {traceback.format_exc()}")
-                            stop_event.set()
-                    else:
-                        try:
-                            initialized_display_retvals[group_name] = mgr[group_name].initialize_display()
-                        except:
-                            logging.error(f"Exception in display update for"
-                                          f" group {group_name}: {traceback.format_exc()}")
-                            stop_event.set()
+                    if isinstance(mgr[group_name], DisplayMixin):
+                        if group_name in initialized_display_retvals:
+                            try:
+                                mgr[group_name].update_display(initialized_display_retvals[group_name])
+                            except:
+                                logging.error(f"Exception in display initialization"
+                                            f" for group {group_name}: {traceback.format_exc()}")
+                                stop_event.set()
+                        else:
+                            try:
+                                initialized_display_retvals[group_name] = mgr[group_name].initialize_display()
+                            except:
+                                logging.error(f"Exception in display update for"
+                                            f" group {group_name}: {traceback.format_exc()}")
+                                stop_event.set()
                         
                 
             time.sleep(update_period)
@@ -461,7 +468,7 @@ class RuntimeServer:
         return (retval if raw else json.loads(retval))
     
     @staticmethod
-    def request_file(address, filename, offset=0):
+    def request_file(address, filename, offset=0, size=0):
         """
         Retrieve reporters from a remote server at a given address.
         
@@ -477,6 +484,7 @@ class RuntimeServer:
         RuntimeServer._sendint(sock, 2)
         RuntimeServer._sendobj(sock, filename)
         RuntimeServer._sendint(sock, offset)
+        RuntimeServer._sendint(sock, size)
         retval = RuntimeServer._recvobj(sock)
         sock.close()
    
@@ -571,22 +579,16 @@ class RuntimeServer:
                 elif cmd == 2:
                     filename = RuntimeServer._recvobj(conn)
                     position = RuntimeServer._recvint(conn)
+                    size = RuntimeServer._recvint(conn)
                     file_path = os.path.join(file_directory, filename)
                     if os.path.exists(file_path):
-                        size = os.path.getsize(os.path.join(file_directory, filename))
-                        if position < size:
-                            logging.debug(f"Sending file {filename}"
-                                          f" ({position-size} bytes out of"
-                                          f" {size} total bytes)")
-                            with open(file_path, "rb") as f:
-                                f.seek(position)
-                                data = f.read()
-                        else:
-                            data = b''
-                            
-                        RuntimeServer._sendobj(conn, data)
+                        with open(file_path, "rb") as f:
+                            f.seek(position)
+                            data = f.read(size if size != 0 else None)
                     else:
-                        RuntimeServer._sendobj(conn, None)    
+                        data = None    
+                        
+                    RuntimeServer._sendobj(conn, data)
                     
                 elif cmd == 3:
                     logging.debug(f"(id {cmd_id}) Closing server from manual command")

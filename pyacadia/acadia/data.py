@@ -15,8 +15,10 @@ from abc import ABC
 from numpy.lib.format import header_data_from_array_1_0, descr_to_dtype
 import matplotlib.pyplot as plt
 
-__all__ = ["RecordGroup", 
-           "ArrayRecordGroup", 
+__all__ = ["RecordGroupMeta", 
+           "ArrayRecordGroup",
+           "CounterRecordGroup",
+           "DisplayMixin", 
            "DataManager"]
 
 WRLCK_STRUCT = struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0)
@@ -104,12 +106,33 @@ class RecordGroup:
         """
         return []
     
+    @staticmethod
+    def filedeltas(metadata1, metadata2) -> dict:
+        """
+        Given two sets of metadata for the group, this method determines 
+        which files have changed between the two instants at which the metadata
+        objects were generated. For each file, this will return a tuple whose
+        first element is the offset within file where changes begin and the 
+        second element is the length of changed data. The implementation of
+        this behavior will be specific to each subclass, but it must be 
+        guaranteed that for all the files with changes, if a file is copied at
+        the time that `metadata1` is produced, then the offset returned by this
+        method for that file will be a valid seek location for that file.
+        """
+        return {}
+    
     def __len__(self) -> int:
         """
         :return: The number of records stored in the group
         :rtype: int
         """
         return None
+    
+class DisplayMixin:
+    """
+    A mixin for :class:`RecordGroup` subclasses that are able to display their
+    data.
+    """
 
     def initialize_display(self):
         """
@@ -141,11 +164,20 @@ class RecordGroupMeta(type):
     def __new__(cls, name, bases, dct):
         if name in RecordGroupMeta.CLASSES:
             raise NameError(f"There already exists a class with name {name}")
-        c = super().__new__(cls, name, bases, dct)
+        
+        # Subclass RecordGroup if we haven't already
+        has_record_group = False
+        for base in bases:
+            if issubclass(base, RecordGroup):
+                has_record_group = True
+                break
+            
+        new_bases = bases if has_record_group else (RecordGroup, *bases)
+        c = super().__new__(cls, name, new_bases, dct)
         RecordGroupMeta.CLASSES[name] = c
         return c
         
-class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
+class ArrayRecordGroup(metaclass=RecordGroupMeta):
     """
     A collection of similarly-shaped array-like records.
     """
@@ -186,6 +218,32 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
     
     def files(self):
         return list(self._metadata.keys())
+    
+    @staticmethod
+    def filedeltas(metadata1, metadata2):
+        deltas = {}
+        
+        # For every file in metadata2, if it's not contained in metadata1 then
+        # return the full size of the file at offset 0. Otherwise, return an
+        # offset given by the size of file 1 and a size given by the difference
+        # in file sizes
+        for filename,file_header2 in metadata2.items():
+            dtype = descr_to_dtype(file_header2["descr"])
+            size_bytes2 = dtype.itemsize*reduce(operator.mul, file_header2["shape"])
+            
+            if metadata1 is None or filename not in metadata1:
+                deltas[filename] = (0, size_bytes2)
+            else:
+                if metadata1[filename]["descr"] != file_header2["descr"]:
+                    raise TypeError(f"Descriptor mismatch between metadata for"
+                                    f" file {filename}:\n"
+                                    f"    metadata1: {metadata1}\n"
+                                    f"    metadata2: {metadata2}")
+                    
+                size_bytes1 = dtype.itemsize*reduce(operator.mul, metadata1[filename]["shape"])
+                deltas[filename] = (size_bytes1, size_bytes2-size_bytes1)
+                
+        return deltas
     
     def allocate_cache(self, 
                        record_shape: tuple, 
@@ -241,6 +299,7 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
             incr = self._cache_count if self._cache_count is not None else 1
             self._metadata[filename]["shape"] = (self._metadata[filename]["shape"][0] + incr, 
                                                 *self._metadata[filename]["shape"][1:])
+            
         else:
             # Create a new entry in the metadata
             # We'll copy all the header information from the cache, but depending
@@ -270,25 +329,16 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
             logging.debug(f"Unable to find array data for {filename} in"
                           f" directory {directory}")
             return None
-        # else:
-        #     logging.debug(f"Found file {full_path} ({os.path.getsize(full_path)} bytes)")
         
         if filename not in header_data:
             logging.debug(f"No header for {filename} found")
             return None
-        
-        # logging.debug(f"{'Mapping' if map else 'Loading'} {full_path} with"
-        #               f" header {header_data[filename]}")
-        
         
         dtype = descr_to_dtype(header_data[filename]["descr"])
         order = 'F' if header_data[filename]["fortran_order"] else 'C'
         shape = tuple(header_data[filename]["shape"])
         count = reduce(operator.mul, shape)
         size = count*dtype.itemsize
-        
-        # logging.debug(f"Extracted: dtype {dtype}, order {order}, shape {shape}"
-        #               f" ({count} items in {size} bytes)")
         
         if map:
             file = open(full_path, "rb")
@@ -315,10 +365,12 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
         :param map: If `True`, data is memory-mapped instead of loaded into 
             memory.
         """
-        self._cache = self._load_array(f"{self._name}_records.bin", 
+        records_filename = f"{self._name}_records.bin"
+        self._cache = self._load_array(records_filename, 
                                                directory, 
                                                metadata, 
                                                map)
+        self._metadata[records_filename] = header_data_from_array_1_0(self._cache)
         
         self._record_axes = []
         for axis_idx in count():
@@ -326,6 +378,7 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
             if os.path.exists(os.path.join(directory, axis_filename)):
                 axis = self._load_array(axis_filename, directory, metadata, map)
                 self._record_axes.append(axis)
+                self._metadata[axis_filename] = header_data_from_array_1_0(axis)
             else:
                 break
             
@@ -356,6 +409,7 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
             self._cache_count += 1
             if self._cache_count == self._cache_size:
                 self._cache_full = True
+                
             
     def __len__(self):
         return self._cache_count
@@ -375,7 +429,7 @@ class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
         """
         return self._record_axes[idx]
     
-class CounterRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
+class CounterRecordGroup(metaclass=RecordGroupMeta):
     """
     A simple counter.
     """
@@ -607,6 +661,30 @@ class DataManager:
             yield item
             group.value += 1
             self.save([name])
+            
+    def filedeltas(self, metadata):
+        """
+        Given a set of metadata, return the filedeltas for any necessary 
+        updates.
+        """
+        if not isinstance(metadata, dict):
+            raise TypeError(f"Expected dict for metadata; received {type(metadata)}")
+        
+        deltas = {}
+        for group_name,group_metadata in metadata.items():
+            group_class = RecordGroupMeta.CLASSES[group_metadata["type"]]
+            
+            if group_name in self._groups:
+                if group_class != type(self._groups[group_name]):
+                    raise TypeError(f"Cannot resolve filedelta for {group_name}"
+                                    f" (current type {type(self._groups[group_name])},"
+                                    f" received {group_metadata['type']})")
+                current_metadata = self._groups[group_name].metadata()
+            else:
+                current_metadata = {}
+            
+            deltas.update(group_class.filedeltas(current_metadata, group_metadata["metadata"]))
+        return deltas
             
     def __getitem__(self, k):
         return self._groups[k]
