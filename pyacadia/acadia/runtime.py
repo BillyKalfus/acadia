@@ -3,15 +3,16 @@ import traceback
 import subprocess
 import socket
 import io
-import fcntl
-import struct
 import time
 import datetime
 import logging
 import pickle
 import json
+
 from ipywidgets import Button
 from IPython.display import display
+import matplotlib.pyplot as plt
+
 from threading import Thread, Event
 from abc import ABC, abstractclassmethod, abstractmethod
 
@@ -19,7 +20,7 @@ import numpy as np
 
 from .data import DataManager
 
-__all__ = ["Runtime", "RuntimeReporter", "RuntimeServer"]
+__all__ = ["Runtime", "RuntimeServer"]
 
 class Runtime(ABC):
     """
@@ -29,7 +30,7 @@ class Runtime(ABC):
     
     # ---------------- Functions to be implemented or overridden by the user ------------- #
     @abstractclassmethod
-    def main(cls, directory):
+    def main(cls, directory, datamanager):
         """
         A function that will be run on the target upon deployment. 
         """
@@ -143,6 +144,10 @@ class Runtime(ABC):
         logging.debug(f"Creating local temporary directory {temp_directory}")
         os.mkdir(temp_directory)
         
+        # Run the provided file so that we get any custom things defined in it
+        # with open(filename) as f:
+        #     exec(f.read())
+        
         logging.info(f"Starting local display thread")          
         self._display_thread = Thread(target=Runtime._display, 
                                      name="DisplayThread",
@@ -189,14 +194,14 @@ class Runtime(ABC):
         self._stop_button.disabled = True
             
     @staticmethod
-    def _display(stop_event, address, update_period, temp_directory):      
-        logging.debug("Reporter display thread started")
+    def _display(stop_event, address, update_period, temp_directory):    
+        logging.debug("Display thread started")
 
         mgr = DataManager(temp_directory)   
-        initialized_displays = []    
+        initialized_display_retvals = {}  
         while True:
             if stop_event.is_set():
-                logging.debug("Stopping reporter display")
+                logging.debug("Stopping display thread")
                 return
             
             metadata_string = RuntimeServer.request_metadata(address, raw=True)
@@ -224,11 +229,21 @@ class Runtime(ABC):
                 # logging.debug(f"Manager contains groups {mgr.group_names()}")
                 
                 for group_name in metadata.keys():
-                    if group_name in initialized_displays:
-                        mgr[group_name].update_display()
+                    if group_name in initialized_display_retvals:
+                        try:
+                            mgr[group_name].update_display(initialized_display_retvals[group_name])
+                        except:
+                            logging.error(f"Exception in display initialization"
+                                          f" for group {group_name}: {traceback.format_exc()}")
+                            stop_event.set()
                     else:
-                        mgr[group_name].initialize_display()
-                        initialized_displays.append(group_name)
+                        try:
+                            initialized_display_retvals[group_name] = mgr[group_name].initialize_display()
+                        except:
+                            logging.error(f"Exception in display update for"
+                                          f" group {group_name}: {traceback.format_exc()}")
+                            stop_event.set()
+                        
                 
             time.sleep(update_period)
         
@@ -289,7 +304,10 @@ class Runtime(ABC):
                     format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
         
         try:
-            cls.main(directory)
+            from acadia.data import DataManager
+            mgr = DataManager(directory=directory)
+            cls.main(directory, mgr)
+            mgr.save()
         except:
             logging.error(f"Exception in `main`: {traceback.format_exc()}")        
         

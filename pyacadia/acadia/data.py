@@ -10,11 +10,10 @@ import mmap
 from copy import copy
 from functools import reduce
 from itertools import count
-from abc import ABC, abstractmethod
+from abc import ABC
 
 from numpy.lib.format import header_data_from_array_1_0, descr_to_dtype
-from ipywidgets import IntProgress, FloatProgress
-from IPython.display import display
+import matplotlib.pyplot as plt
 
 __all__ = ["RecordGroup", 
            "ArrayRecordGroup", 
@@ -23,9 +22,12 @@ __all__ = ["RecordGroup",
 WRLCK_STRUCT = struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0)
 UNLCK_STRUCT = struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0)
 
-class RecordGroup(ABC):
+class RecordGroup:
     """
-    A group of records to be saved.
+    A group of records to be saved. This class should not be directly 
+    instantiated or subclassed; instead, subclasses should be created with the
+    metaclass :class:`RecordGroupMeta` in order to create a universal mapping
+    between class initializers and their names.
     """
     
     def __init__(self, name):
@@ -107,21 +109,43 @@ class RecordGroup(ABC):
         :return: The number of records stored in the group
         :rtype: int
         """
-        pass
+        return None
 
     def initialize_display(self):
         """
         Create and store any internal objects needed to initialize the display.
+        The return value of this function will be cached in the display thread
+        and passed to :meth:`update_display` when called.
+        """
+        return None
+    
+    def update_display(self, init_retvals):
+        """
+        Update the display objects. The return value of 
+        :meth:`initialize_display` will be passed in through `init_retvals`.
         """
         pass
     
-    def update_display(self):
-        """
-        Update the display objects 
-        """
-        pass
+class RecordGroupMeta(type):
+    """
+    A metaclass for creating subclasses of RecordGroup. This is necessary so
+    that when :meth:`DataManager.load` attempts to create instances of 
+    various record groups, there is a central database mapping class names
+    to their classes. Normally Python just does this and we could evaluate the
+    class name as a literal in order to construct an object; however, since 
+    these constructors are called inside DataManager methods, any custom
+    constructors will not be in the namespace.
+    """
+    CLASSES = {}
+    
+    def __new__(cls, name, bases, dct):
+        if name in RecordGroupMeta.CLASSES:
+            raise NameError(f"There already exists a class with name {name}")
+        c = super().__new__(cls, name, bases, dct)
+        RecordGroupMeta.CLASSES[name] = c
+        return c
         
-class ArrayRecordGroup(RecordGroup):
+class ArrayRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
     """
     A collection of similarly-shaped array-like records.
     """
@@ -246,15 +270,15 @@ class ArrayRecordGroup(RecordGroup):
             logging.debug(f"Unable to find array data for {filename} in"
                           f" directory {directory}")
             return None
-        else:
-            logging.debug(f"Found file {full_path} ({os.path.getsize(full_path)} bytes)")
+        # else:
+        #     logging.debug(f"Found file {full_path} ({os.path.getsize(full_path)} bytes)")
         
         if filename not in header_data:
             logging.debug(f"No header for {filename} found")
             return None
         
-        logging.debug(f"{'Mapping' if map else 'Loading'} {full_path} with"
-                      f" header {header_data[filename]}")
+        # logging.debug(f"{'Mapping' if map else 'Loading'} {full_path} with"
+        #               f" header {header_data[filename]}")
         
         
         dtype = descr_to_dtype(header_data[filename]["descr"])
@@ -263,8 +287,8 @@ class ArrayRecordGroup(RecordGroup):
         count = reduce(operator.mul, shape)
         size = count*dtype.itemsize
         
-        logging.debug(f"Extracted: dtype {dtype}, order {order}, shape {shape}"
-                      f" ({count} items in {size} bytes)")
+        # logging.debug(f"Extracted: dtype {dtype}, order {order}, shape {shape}"
+        #               f" ({count} items in {size} bytes)")
         
         if map:
             file = open(full_path, "rb")
@@ -351,7 +375,7 @@ class ArrayRecordGroup(RecordGroup):
         """
         return self._record_axes[idx]
     
-class CounterRecordGroup(RecordGroup):
+class CounterRecordGroup(RecordGroup, metaclass=RecordGroupMeta):
     """
     A simple counter.
     """
@@ -397,27 +421,22 @@ class CounterRecordGroup(RecordGroup):
         self._total = v
         
     def initialize_display(self):
-        if isinstance(self._value, int):
-            self._widget = IntProgress(value=self._value, 
-                                        min=0, 
-                                        max=self._total, 
-                                        step=1, 
-                                        **self._widget_kwargs)
-            display(self._widget)
-            
-        elif isinstance(self._value, float):
-            self._widget = FloatProgress(value=self._value, 
-                                        min=0, 
-                                        max=self._total, 
-                                        step=1, 
-                                        **self._widget_kwargs)
-            display(self._widget)
+        if isinstance(self._value, (int, float)):
+            from tqdm.notebook import tqdm
+            bar = tqdm(total=self._total, **self._widget_kwargs)
+            bar.update(self._value)
         else:
             raise TypeError(f"Incompatible type for progress display:"
                             f" {type(self._value)}")
+        return {"bar": bar, "last_value": self._value, "bar_closed": False}
         
-    def update_display(self):
-        self._widget.value = self._value
+    def update_display(self, vals):
+        if not vals["bar_closed"]:
+            vals["bar"].update(self._value - vals["last_value"])
+            vals["last_value"] = self._value
+            if self._value == self._total:
+                vals["bar"].close()
+                vals["bar_closed"] = True
 
 class DataManager:
     """
@@ -521,8 +540,13 @@ class DataManager:
         :param groups: If not `None`, this should be a list of group names to
             load. Otherwise, all groups in the metadata will be loaded.
         :type groups: list of str
-        :param overwrite: If `True`, existing records will be overwritten
-        :type overwrite: bool
+        :param reload: If `True`, existing records will reloaded from files
+        :type reload: bool
+        :param extra_initializers: If not `None`, this should be a dict mapping
+            group class names to functions that produce them. This is primarily
+            useful for adding functions to initialize groups that are not built
+            into the package.
+        :type extra_initializers: dict
         """
         metadata = DataManager.read_metadata(self._directory)
             
@@ -541,7 +565,8 @@ class DataManager:
                         map)
             else:
                 # Create the group new. If we can't, add_group will throw an error
-                group = eval(metadata[group_name]["type"])(group_name)
+                group_class = RecordGroupMeta.CLASSES[metadata[group_name]["type"]]                    
+                group = group_class(group_name)
                 group.load(self._directory, 
                         metadata[group_name]["metadata"], 
                         map)
