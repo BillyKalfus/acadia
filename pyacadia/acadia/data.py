@@ -1,6 +1,5 @@
 import os
 import json
-import numpy as np
 import logging
 import fcntl
 import struct
@@ -10,14 +9,14 @@ import mmap
 from copy import copy
 from functools import reduce
 from itertools import count
-from abc import ABC
 
+import numpy as np
 from numpy.lib.format import header_data_from_array_1_0, descr_to_dtype
-import matplotlib.pyplot as plt
 
 __all__ = ["RecordGroupMeta", 
            "ArrayRecordGroup",
            "CounterRecordGroup",
+           "PlotRecordGroup",
            "DisplayMixin", 
            "DataManager"]
 
@@ -131,7 +130,7 @@ class RecordGroup:
 class DisplayMixin:
     """
     A mixin for :class:`RecordGroup` subclasses that are able to display their
-    data.
+    data visually.
     """
 
     def initialize_display(self):
@@ -146,6 +145,12 @@ class DisplayMixin:
         """
         Update the display objects. The return value of 
         :meth:`initialize_display` will be passed in through `init_retvals`.
+        """
+        pass
+    
+    def close_display(self, init_retvals):
+        """
+        Close any open display objects.
         """
         pass
     
@@ -429,7 +434,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         """
         return self._record_axes[idx]
     
-class CounterRecordGroup(metaclass=RecordGroupMeta):
+class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
     """
     A simple counter.
     """
@@ -482,15 +487,60 @@ class CounterRecordGroup(metaclass=RecordGroupMeta):
         else:
             raise TypeError(f"Incompatible type for progress display:"
                             f" {type(self._value)}")
-        return {"bar": bar, "last_value": self._value, "bar_closed": False}
+        return {"bar": bar, "last_value": self._value}
         
     def update_display(self, vals):
-        if not vals["bar_closed"]:
-            vals["bar"].update(self._value - vals["last_value"])
-            vals["last_value"] = self._value
-            if self._value == self._total:
-                vals["bar"].close()
-                vals["bar_closed"] = True
+        vals["bar"].update(self._value - vals["last_value"])
+        vals["last_value"] = self._value
+            
+    def close_display(self, vals):
+        vals["bar"].close()
+                
+class PlotRecordGroup(ArrayRecordGroup, DisplayMixin):
+    
+    def plot(self, fig):
+        """
+        Create plot objects and return a function that will update them.
+        Calling this function raises `NotImplementedError`, as this is expected
+        to be implemented by the user.
+        
+        :param fig: The live plot 
+        :type fig: matplotlib.Figure
+        :return: A function that accepts the frame number as its sole argument 
+            and sets the data of any updated objects in the figure
+        :rtype: callable
+        """
+        raise NotImplemented(f"No plotting implemented for group {self._name}")
+    
+    def initialize_display(self):
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import Animation
+        
+        fig = plt.figure()
+        update_func = self.plot(fig)
+        
+        def init(anim_self, *args, **kwargs):
+            anim_self._framedata = count()
+            super(anim_self.__class__, anim_self).__init__(*args, **kwargs)
+        
+        test_animation_type = type(f"{self._name}Animation", 
+                                   (Animation, ), 
+                                   {"__init__": init, 
+                                    "_draw_frame": update_func})
+
+        def _dummy(*args, **kwargs):
+            pass
+        
+        DummyEvent = type("DummyEvent", (), {"add_callback": _dummy, "start": _dummy, "stop": _dummy})
+
+        
+        anim = test_animation_type(fig, event_source=DummyEvent)
+        anim._step()
+
+        return anim
+    
+    def update_display(self, anim):        
+        anim._step()
 
 class DataManager:
     """

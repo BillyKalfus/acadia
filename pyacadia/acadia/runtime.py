@@ -9,12 +9,8 @@ import logging
 import pickle
 import json
 
-from ipywidgets import Button
-from IPython.display import display
-import matplotlib.pyplot as plt
-
 from threading import Thread, Event
-from abc import ABC, abstractclassmethod, abstractmethod
+from abc import ABC, abstractclassmethod
 
 import numpy as np
 
@@ -56,9 +52,11 @@ class Runtime(ABC):
             local_temp_directory="/tmp",
             subdirectory_name=None,
             username="root", 
+            display=True,
             upload_timeout=5, 
-            remote_log_level="DEBUG",
-            update_period=0.1):
+            remote_log_level=logging.DEBUG,
+            update_period=0.1,
+            multiplex_ssh=False):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
         target. A base directory must be supplied, within which a subdirectory 
@@ -77,6 +75,19 @@ class Runtime(ABC):
             ``ssh-copy-id username@target``
             
         on the host. This only needs to be done once.  
+        
+        Because SSH is used for performing all remote operations, one can 
+        significantly speed up deployment using SSH multiplexing. To set this
+        up, open a terminal and execute the following:
+
+            ``ssh -o "ControlMaster=yes" -o "ControlPath=~/.ssh/controlmasters/%r@%h:%p" <username>@<target>``
+            
+        This will open a new SSH terminal with the added feature that any new
+        SSH connections will be multiplexed through this existing one, 
+        eliminating the need to reauthenticate every time. 
+        
+        Finally, on the target itself one should set "UsePAM no" in 
+        ``/etc/ssh/sshd_config``.
   
         """         
         time_str = datetime.datetime.now(datetime.timezone.utc).strftime("%m%d%y-%H%M%S")
@@ -91,11 +102,23 @@ class Runtime(ABC):
             
         code += f"\n\n"
         code += f"if __name__ == \"__main__\":\n"
-        code += f"    import logging\n"
-        code += f"    {self.__class__.__name__}.remote_main(\"{directory}\", {remote_server_port}, logging.{remote_log_level})\n"
+        code += f"    {self.__class__.__name__}.remote_main(\"{directory}\", {remote_log_level})\n"
+
+        multiplex_flags = ""
+        if multiplex_ssh:
+            control_masters_path = os.path.expanduser("~/.ssh/controlmasters")
+            if os.path.exists(control_masters_path):
+                multiplex_flags = f"-o \"ControlPath={os.path.join(control_masters_path, '%r@%h:%p')}\""
+                logging.debug("Using SSH multiplexing")
+            else:
+                logging.warning("Connection attempted to use SSH multiplexing"
+                                " but no control master directory found.")
+            
+            
+        ssh_cmd = f"ssh {multiplex_flags} {username}@{target_address}"
 
         logging.info(f"Creating remote directory {directory} and uploading runtime file")
-        cmd = f"ssh {username}@{target_address} \"mkdir {directory}; cat > {remote_runtime_file};\""
+        cmd = f"{ssh_cmd} \"mkdir {directory}; cat > {remote_runtime_file};\""
         logging.debug(f"Executing command {cmd}")
         file_proc = subprocess.Popen(
             cmd, 
@@ -112,11 +135,25 @@ class Runtime(ABC):
                           f"stdout:\n{stdout}\n\nstderr:\n{stderr}\n\n")
             raise Exception("File upload failed")
 
-        logging.info(f"Launching remote process")
-        cmd = f"ssh {username}@{target_address} python3 {remote_runtime_file}"
+        logging.info(f"Launching main remote process")
+        cmd = f"{ssh_cmd} python3 {remote_runtime_file}"
         logging.debug(f"Executing command {cmd}")
         
         self._runtime_proc = subprocess.Popen(
+            cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="ascii",
+            shell=True)
+        
+        logging.info(f"Launching remote server")
+        cmd = (f"{ssh_cmd} \"python3 -c \'"
+            f"from acadia.runtime import RuntimeServer; "
+            f"RuntimeServer.serve(\\\"{directory}\\\", (\\\"\\\", {remote_server_port}), {remote_log_level});\'\"")
+        logging.debug(f"Executing command {cmd}")
+        
+        self._server_proc = subprocess.Popen(
             cmd, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
@@ -127,16 +164,14 @@ class Runtime(ABC):
         def _runtime_monitor():
             stdout,stderr = self._runtime_proc.communicate()
             func = logging.error if stderr != "" else logging.debug
-            func(f"Remote runtime process completed with output:\n"
+            func(f"Main process completed with output:\n"
                  f"stdout:\n{stdout}\n\nstderr:\n{stderr}\n\n")
+            self.stop()
         
         self._runtime_monitor_thread = Thread(target=_runtime_monitor,
                                               name="RuntimeMonitorThread",
                                               daemon=True)
         self._runtime_monitor_thread.start()
-        
-        # Create an event for signalling threads to stop
-        self._display_stop_event = Event()
         
         self._server_address = (target_address, remote_server_port)
         
@@ -144,23 +179,27 @@ class Runtime(ABC):
         logging.debug(f"Creating local temporary directory {temp_directory}")
         os.mkdir(temp_directory)
         
-        # Run the provided file so that we get any custom things defined in it
-        # with open(filename) as f:
-        #     exec(f.read())
+        # Create an event for signalling threads to stop
+        self._display_stop_event = Event()
+        self._display_iteration_event = Event()
         
-        logging.info(f"Starting local display thread")          
-        self._display_thread = Thread(target=Runtime._display, 
-                                     name="DisplayThread",
-                                     args=(self._display_stop_event, 
-                                           self._server_address, 
-                                           update_period, 
-                                           temp_directory),
-                                     daemon=True)
-        self._display_thread.start()
+        if display:
+            logging.info(f"Starting local display thread")          
+            self._display_thread = Thread(target=Runtime._display, 
+                                        name="DisplayThread",
+                                        args=(self._display_stop_event,
+                                            self._display_iteration_event, 
+                                            self._server_address, 
+                                            update_period, 
+                                            temp_directory),
+                                        daemon=True)
+            self._display_thread.start()
         
         self._create_widgets()
         
     def _create_widgets(self):
+        from IPython.display import display
+        from ipywidgets import Button
         
         # Create an overall grid for viewing plots and logs
         # grid = GridspecLayout()
@@ -176,7 +215,7 @@ class Runtime(ABC):
         self._stop_button.on_click(_self_stop)
         display(self._stop_button)
         
-    def stop(self):
+    def stop(self, timeout=0.2):
         """
         Gracefully stop any running process.
         """
@@ -185,79 +224,124 @@ class Runtime(ABC):
             # We never started
             return
         
+        # Allow the display thread to complete one more full iteration
+        # in case the main process finished before the display thread 
+        # could process it
+        # We'll need to await the flag twice; first because we'll clear it in the
+        # middle of an iteration and itll then get set at the end of the iteration
+        # Then, we'll clear it as soon as it's set, and when it's set again, a full
+        # iteration will have passed since entering stop()
+        for i in range(4):
+            self._display_iteration_event.clear()
+            if self._display_iteration_event.wait(timeout=timeout):
+                logging.warning(f"Display thread did set iteration flag on pass {i}")
+            else:
+                logging.error(f"Display thread did not set iteration flag on pass {i}")
+        
         self._display_stop_event.set()
-        self._display_thread.join()
+        try:
+            self._display_thread.join(timeout=timeout)
+        except:
+            logging.error("Display thread did not join")
         
         # Request the server to stop
         RuntimeServer.request_close(self._server_address)
+        try:
+            self._server_proc.wait(timeout=timeout)
+            stdout,stderr = self._server_proc.communicate()
+            func = logging.error if stderr != "" else logging.debug
+            func(f"Server process completed with output:\n"
+                 f"stdout:\n{stdout}\n\nstderr:\n{stderr}\n\n")
+        except:
+            logging.error("Server process did not terminate; killing it")
+            self._server_proc.kill()
+            
+        # Wait for the main process to stop
+        try: 
+            self._runtime_proc.wait(timeout=timeout)
+        except:
+            self._runtime_proc.kill()
         
         self._stop_button.disabled = True
             
     @staticmethod
-    def _display(stop_event, address, update_period, temp_directory):    
+    def _display(stop_event, iteration_event, address, update_period, temp_directory):    
         logging.debug("Display thread started")
 
         mgr = DataManager(temp_directory)   
         initialized_display_retvals = {}  
         while True:
-            if stop_event.is_set():
-                logging.debug("Stopping display thread")
-                return
-            
-            metadata_string = RuntimeServer.request_metadata(address, raw=True)
-            if metadata_string is not None and len(metadata_string) > 0:
-                with open(os.path.join(temp_directory, "metadata.json"), "w") as f:
-                    f.write(metadata_string)
-                
-                metadata = json.loads(metadata_string)
-                filedeltas = mgr.filedeltas(metadata)
-                logging.debug(f"Received deltas {filedeltas}")
-                
-                for filename,(offset,size) in filedeltas.items():
-                    if size == 0:
-                        continue
-                    
-                    file_path = os.path.join(temp_directory, filename)
-                    file_bytes = RuntimeServer.request_file(address, filename, offset, size)
-                    if file_bytes is None:
-                        logging.error(f"File {filename} listed in metadata"
-                                        " but unable to be retrieved from"
-                                        " the server.")
-                        continue
-                    
-                    if len(file_bytes) > 0:
-                        with open(file_path, "wb") as f:
-                            f.seek(offset)
-                            f.write(file_bytes)
-                            
-                mgr.load(reload=True)
-                
-                # logging.debug(f"Manager contains groups {mgr.group_names()}")
-                
-                for group_name in metadata.keys():
-                    if isinstance(mgr[group_name], DisplayMixin):
-                        if group_name in initialized_display_retvals:
+            try:
+                if stop_event.is_set():
+                    logging.debug("Stopping display thread")
+                    for group_name in mgr.group_names():
+                        if isinstance(mgr[group_name], DisplayMixin) and group_name in initialized_display_retvals:
                             try:
-                                mgr[group_name].update_display(initialized_display_retvals[group_name])
+                                mgr[group_name].close_display(initialized_display_retvals[group_name])
                             except:
-                                logging.error(f"Exception in display initialization"
+                                logging.error(f"Exception in display close"
                                             f" for group {group_name}: {traceback.format_exc()}")
-                                stop_event.set()
-                        else:
-                            try:
-                                initialized_display_retvals[group_name] = mgr[group_name].initialize_display()
-                            except:
-                                logging.error(f"Exception in display update for"
-                                            f" group {group_name}: {traceback.format_exc()}")
-                                stop_event.set()
+                    return
+                
+                metadata_string = RuntimeServer.request_metadata(address, raw=True)
+                if metadata_string is not None and len(metadata_string) > 0:
+                    with open(os.path.join(temp_directory, "metadata.json"), "w") as f:
+                        f.write(metadata_string)
+                    
+                    metadata = json.loads(metadata_string)
+                    filedeltas = mgr.filedeltas(metadata)
+                    logging.debug(f"Received deltas {filedeltas}")
+                    
+                    for filename,(offset,size) in filedeltas.items():
+                        if size == 0:
+                            continue
                         
+                        file_path = os.path.join(temp_directory, filename)
+                        file_bytes = RuntimeServer.request_file(address, filename, offset, size)
+                        if file_bytes is None:
+                            logging.error(f"File {filename} listed in metadata"
+                                            " but unable to be retrieved from"
+                                            " the server.")
+                            continue
+                        
+                        if len(file_bytes) > 0:
+                            with open(file_path, "wb") as f:
+                                f.seek(offset)
+                                f.write(file_bytes)
+                                
+                    mgr.load(reload=True)
+                    
+                    # logging.debug(f"Manager contains groups {mgr.group_names()}")
+                    
+                    for group_name in metadata.keys():
+                        if isinstance(mgr[group_name], DisplayMixin):
+                            if group_name in initialized_display_retvals:
+                                try:
+                                    mgr[group_name].update_display(initialized_display_retvals[group_name])
+                                except:
+                                    logging.error(f"Exception in display initialization"
+                                                f" for group {group_name}: {traceback.format_exc()}")
+                                    stop_event.set()
+                            else:
+                                try:
+                                    initialized_display_retvals[group_name] = mgr[group_name].initialize_display()
+                                except:
+                                    logging.error(f"Exception in display update for"
+                                                f" group {group_name}: {traceback.format_exc()}")
+                                    stop_event.set()
+                elif not iteration_event.is_set():
+                    logging.warning(f"Noticed main iteration event cleared; got metadata {metadata_string}")            
+                
+                iteration_event.set()    
+            except:
+                logging.error(f"Exception in display thread: {traceback.format_exc()}")
                 
             time.sleep(update_period)
         
     # ----------------- Functions to be run on the target ----------------- #
 
     @classmethod
-    def remote_main(cls, directory, server_port, log_level):
+    def remote_main(cls, directory, log_level):
         """
         This is the main entry point of the remote process. This should not 
         be called manually.
@@ -267,56 +351,17 @@ class Runtime(ABC):
                     filename=os.path.join(directory, "remote_main.log"), 
                     filemode="w",
                     format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
-
-        
-        from multiprocessing import Process
-                        
-        # Start a RuntimeServer that hosts can use to interact with this target
-        logging.info(f"Launching server")
-        server_proc = Process(target=RuntimeServer.serve, 
-                              args=(directory, ("", server_port)),
-                              name="RuntimeServerProcess",
-                              daemon=True)
-        server_proc.start()
-        
-        # Run the user main program
-        logging.info("Launching main process")
-        main_proc = Process(target=cls._main_process,
-                            args=(directory, log_level),
-                            name="RuntimeMainProcess",
-                            daemon=True)
-        
-        main_proc.start()
-        
-        # Wait until the server process ends before exiting, as this means 
-        # that the host received everything it needed and instructed the server
-        # to close
-        while server_proc.is_alive():
-            # Should there be a delay here? Unclear whether the overhead 
-            # associated with checking a Process' state is negligible here...
-            pass
-                        
-        logging.debug("Server process closed, exiting main loop")
-        if main_proc.is_alive():
-            main_proc.kill()
-            
-    @classmethod
-    def _main_process(cls, directory, log_level):
-        """
-        Perform some setup and call the user-provided main method.
-        """
-        logging.basicConfig(level=log_level, 
-                    filename=os.path.join(directory, "main_process.log"), 
-                    filemode="w",
-                    format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
         
         try:
             from acadia.data import DataManager
             mgr = DataManager(directory=directory)
+            logging.info("Running main method")
             cls.main(directory, mgr)
+            logging.info("Main complete, saving")
             mgr.save()
+            logging.info("Saved")
         except:
-            logging.error(f"Exception in `main`: {traceback.format_exc()}")        
+            logging.error(f"Exception in `main`: {traceback.format_exc()}")         
         
 class RuntimeServer:
     """
@@ -431,7 +476,7 @@ class RuntimeServer:
         s = socket.socket(socket_family, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        s.settimeout(2)
+        s.settimeout(0.1)
         
         try:
             s.connect(address)
@@ -518,12 +563,12 @@ class RuntimeServer:
         return True
       
     @staticmethod
-    def serve(file_directory, address, log_level="DEBUG"):
+    def serve(file_directory, address, log_level=logging.DEBUG):
         """
         A function for running a remote process on the target that can provide 
         progress information and pre-processed data. 
         """
-        logging.basicConfig(level=getattr(logging, log_level), 
+        logging.basicConfig(level=log_level, 
                     filename=os.path.join(file_directory, "server.log"), 
                     filemode="w",
                     format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
@@ -556,7 +601,7 @@ class RuntimeServer:
             try:
                 conn, addr = s.accept()
                 # logging.debug(f"Received connection from {addr}")
-                conn.settimeout(1)
+                conn.settimeout(0.5)
             except socket.timeout:
                 if os.path.exists(stop_file_path):
                     logging.info("Stop file located, stopping")
