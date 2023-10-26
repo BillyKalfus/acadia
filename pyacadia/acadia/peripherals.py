@@ -1182,7 +1182,7 @@ class ZCU216Sensors:
                     offset = 0
 
                 with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_scale", "r") as f:
-                    scale = float(f.read()) * (1e-3 if "temp" in s else 1)
+                    scale = float(f.read()) # * (1e-3 if "temp" in s else 1)
                 with open(f"/sys/bus/iio/devices/iio:device0/in_{s}_raw", "r") as f:
                     raw = float(f.read())
 

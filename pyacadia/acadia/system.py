@@ -3,6 +3,7 @@ __all__ = ["Acadia", "ChannelSynchronizer"]
 import os
 import mmap
 import time
+import logging
 from dataclasses import dataclass
 from functools import wraps
 
@@ -1347,6 +1348,8 @@ class Acadia:
         """
         
         num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
+        logging.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
+        
         sequencer_program = np.empty((num_sequencer_instructions, 16), dtype=np.uint8)
         
         idx = 0
@@ -1356,7 +1359,8 @@ class Acadia:
                 idx += 1
 
         dac_dma_programs = []
-        for dma in self._dac_dmas:
+        for i,dma in enumerate(self._dac_dmas):
+            logging.debug(f"Assembling DAC{i} DMA program with length {len(dma._compiled_program)}")
             dma_program = np.empty((len(dma._compiled_program), 8), dtype=np.uint8)
             for idx,instr in enumerate(dma._compiled_program):
                 dma_program[idx,:] = np.frombuffer(instr.assemble().to_bytes(8, "little"), dtype=np.uint8)
@@ -1364,6 +1368,7 @@ class Acadia:
             
         adc_dma_programs = []
         for dma in self._adc_dmas:
+            logging.debug(f"Assembling ADC{i} DMA program with length {len(dma._compiled_program)}")
             dma_program = np.empty((len(dma._compiled_program), 8), dtype=np.uint8)
             for idx,instr in enumerate(dma._compiled_program):
                 dma_program[idx,:] = np.frombuffer(instr.assemble().to_bytes(8, "little"), dtype=np.uint8)  
@@ -1382,12 +1387,14 @@ class Acadia:
         if dac_dma_programs is not None:
             for idx,program in enumerate(dac_dma_programs):
                 if len(program) > 0:
+                    logging.debug(f"Loading program of length {len(program)} into DAC{idx} descriptor memory")
                     program_reshaped = memoryview(program.reshape((-1,)))
                     memoryview(self._dac_dma_descriptor_memory[idx])[:len(program_reshaped)] = program_reshaped
                 
         if adc_dma_programs is not None:
             for idx,program in enumerate(adc_dma_programs):
                 if len(program) > 0:
+                    logging.debug(f"Loading program of length {len(program)} into ADC{idx} descriptor memory")
                     program_reshaped = memoryview(program.reshape((-1,)))
                     memoryview(self._adc_dma_descriptor_memory[idx])[:len(program_reshaped)] = program_reshaped
         

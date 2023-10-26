@@ -16,7 +16,7 @@ from numpy.lib.format import header_data_from_array_1_0, descr_to_dtype
 __all__ = ["RecordGroupMeta", 
            "ArrayRecordGroup",
            "CounterRecordGroup",
-           "PlotRecordGroup",
+           "PlotMixin",
            "DisplayMixin", 
            "DataManager"]
 
@@ -76,13 +76,11 @@ class RecordGroup:
         """
         pass
     
-    def append(self, record) -> None:
+    def write(self, record) -> None:
         """
-        Append a new record to internal storage. Note that this does not save 
+        Write a new record to internal storage. Note that this does not save 
         the data in any way, and recoverable storage should be created by 
         calling :meth:`save`.
-        
-        :param record: Record to append
         """
         pass
     
@@ -154,6 +152,68 @@ class DisplayMixin:
         """
         pass
     
+class PlotMixin(DisplayMixin):
+    
+    def plot(self, fig):
+        """
+        Create plot objects and return a function that will update them.
+        Calling this function raises `NotImplementedError`, as this is expected
+        to be implemented by the user.
+        
+        :param fig: The live plot 
+        :type fig: matplotlib.Figure
+        :return: A function that accepts the animation object and frame number 
+            as arguments and sets the data of any updated objects in the figure
+        :rtype: callable
+        """
+        raise NotImplemented(f"No plotting implemented for group {self._name}")
+    
+    def initialize_display(self):
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import Animation
+        
+        fig = plt.figure()
+        update_func = self.plot(fig)
+        
+        def init(anim_self, *args, **kwargs):
+            anim_self._framedata = count()
+            super(anim_self.__class__, anim_self).__init__(*args, **kwargs)
+        
+        test_animation_type = type(f"{self._name}Animation", 
+                                   (Animation, ), 
+                                   {"__init__": init, 
+                                    "_draw_frame": update_func})
+
+        def _dummy(*args, **kwargs):
+            pass
+        
+        DummyEvent = type("DummyEvent", (), {"add_callback": _dummy, "start": _dummy, "stop": _dummy})
+
+        
+        anim = test_animation_type(fig, event_source=DummyEvent)
+        anim._step()
+
+        return anim,fig
+    
+    def update_display(self, args):        
+        anim,fig = args
+        anim._step()
+        
+    def close_display(self, args):
+        import io
+        import matplotlib.pyplot as plt
+        from IPython.display import Image, display
+        
+        anim,fig = args
+        
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=400)
+        plt.close("all")
+        
+        buf.seek(0)
+        img = Image(data=buf.read(), format="png", embed=True, width=720)
+        display(img)
+    
 class RecordGroupMeta(type):
     """
     A metaclass for creating subclasses of RecordGroup. This is necessary so
@@ -203,9 +263,11 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         super().__init__(name)
         self._cache = None
         self._cache_count = 0
-        self._cache_size = cache_size
+        self._cache_size = int(cache_size)
         self._cache_full = False
         
+        self._record_shape = None
+        self._record_dtype = None
         self._record_axes = record_axes if record_axes is not None else []
         self._metadata = {}
         self._open_objects = []
@@ -239,7 +301,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             if metadata1 is None or filename not in metadata1:
                 deltas[filename] = (0, size_bytes2)
             else:
-                if metadata1[filename]["descr"] != file_header2["descr"]:
+                if json.dumps(metadata1[filename]["descr"]) != json.dumps(file_header2["descr"]):
                     raise TypeError(f"Descriptor mismatch between metadata for"
                                     f" file {filename}:\n"
                                     f"    metadata1: {metadata1}\n"
@@ -250,18 +312,16 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 
         return deltas
     
-    def allocate_cache(self, 
-                       record_shape: tuple, 
-                       dtype: np.dtype, 
-                       cache_size: int = None, 
-                       order: str = "C"):
+    def allocate_cache(self, record):
         """
         Allocate the internal cache for a given number of records. If the 
         cache has already been allocated, this will overwrite it. A size
         may be provided to overwrite the size that this instance was 
         initialized with.
         
-        :type record_shape: tuple
+        :param record: An example record whose shape and type will be used to
+            allocate cache
+        :type record: numpy.ndarray
         :param cache_size: Size of the cache to allocate in bytes
         :type cache_size: int
         """
@@ -269,13 +329,14 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         self._cache = None
         self._cache_count = None
         
-        self._record_shape = record_shape
-        
-        record_size = reduce(operator.mul, record_shape) * dtype.itemsize
+        self._record_shape = record.shape
+        self._record_dtype = record.dtype
+    
         # Using integer division will round down for us
-        num_records = int(cache_size if cache_size is not None else self._cache_size) // record_size 
-        if num_records > 0:
-            self._cache = np.empty(shape=(num_records, *record_shape), dtype=dtype, order=order)
+        if self._cache_size > record.nbytes:
+            self._cache = np.empty(shape=(self._cache_size // record.nbytes, *record.shape), 
+                                   dtype=record.dtype, 
+                                   order=("F" if np.isfortran(record) else "C"))
             self._cache_count = 0
             self._cache_full = False
         
@@ -392,9 +453,15 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             obj.close()
         self._open_objects = []
     
-    def append(self, record):
-        if self._cache is None:
-            self.allocate_cache(record.shape, record.dtype)
+    def write(self, record):
+        if self._record_shape is None or self._record_dtype is None:
+            self.allocate_cache(record)        
+            
+        elif record.shape != self._record_shape:
+            raise ValueError(f"Incompatible record shape (expected"
+                            f" {self._record_shape}, received {record.shape})")
+        elif record.dtype != self._record_dtype:
+            raise TypeError(f"Incorrect type for record; expected {self._record_dtype}, received {record.dtype}")
             
         if self._cache_full:
             raise MemoryError(f"Attempted to append record to group"
@@ -406,10 +473,6 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             self._cache = record
             self._cache_full = True
         else:    
-            if record.shape != self._record_shape:
-                raise ValueError(f"Incompatible record shape (expected"
-                                f" {self._record_shape}, received {record.shape})")
-                
             self._cache[self._cache_count, ...] = record    
             self._cache_count += 1
             if self._cache_count == self._cache_size:
@@ -433,6 +496,57 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         :type idx: int
         """
         return self._record_axes[idx]
+    
+class NumericTableRecordGroup(ArrayRecordGroup):
+    """
+    A record group for storing data arranged in a table. The underlying data
+    is encoded in a structured numpy array.
+    
+    The record can be specified with one of the following formats, after which
+    the format must be consistent:
+    
+    - A tuple, in which names are not assigned and use the numpy default "f0", "f1", etc. names
+    - A dict, in which names are given by the keys
+    
+    In both cases, the type of the argument is inferred.
+    """
+    
+    def __init__(self, name="Table", cache_size = 10e6, record_axes=None, fields=None):
+        """
+        :param fields: If not `None`, this should be a valid argument to 
+            `numpy.dtype` for constructing the data type of the record 
+            (see https://numpy.org/doc/stable/reference/arrays.dtypes.html#specifying-and-constructing-data-types 
+            for details)
+        """
+        super().__init__(name, cache_size, record_axes)
+        self._fields = fields
+        
+    def write(self, record):
+        if isinstance(record, np.ndarray):
+            # Act like a regular ArrayRecordGroup
+            super().write(record)
+            return 
+        
+        if self._fields is None:
+            if isinstance(record, dict):
+                self._fields = [((k, v.dtype, v.shape) if isinstance(v, np.ndarray) else (k, np.dtype(type(v)))) 
+                                for k,v in record.items()]
+            elif isinstance(record, tuple) or isinstance(record, list):
+                self._fields = [(('', v.dtype, v.shape) if isinstance(v, np.ndarray) else ('', np.dtype(type(v)))) 
+                                for v in record]
+            else:
+                raise TypeError(f"Unable to get fields from type {type(record)}")
+            
+        if isinstance(record, dict):
+            record_data = tuple(record.values())
+        elif isinstance(record, tuple) or isinstance(record, list):
+            record_data = tuple(record)
+        else:
+            raise TypeError(f"Unable to get fields from type {type(record)}")
+        
+        record_ndarray = np.array([record_data], dtype=np.dtype(self._fields))
+        super().write(record_ndarray)
+        
     
 class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
     """
@@ -495,52 +609,6 @@ class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
             
     def close_display(self, vals):
         vals["bar"].close()
-                
-class PlotRecordGroup(ArrayRecordGroup, DisplayMixin):
-    
-    def plot(self, fig):
-        """
-        Create plot objects and return a function that will update them.
-        Calling this function raises `NotImplementedError`, as this is expected
-        to be implemented by the user.
-        
-        :param fig: The live plot 
-        :type fig: matplotlib.Figure
-        :return: A function that accepts the frame number as its sole argument 
-            and sets the data of any updated objects in the figure
-        :rtype: callable
-        """
-        raise NotImplemented(f"No plotting implemented for group {self._name}")
-    
-    def initialize_display(self):
-        import matplotlib.pyplot as plt
-        from matplotlib.animation import Animation
-        
-        fig = plt.figure()
-        update_func = self.plot(fig)
-        
-        def init(anim_self, *args, **kwargs):
-            anim_self._framedata = count()
-            super(anim_self.__class__, anim_self).__init__(*args, **kwargs)
-        
-        test_animation_type = type(f"{self._name}Animation", 
-                                   (Animation, ), 
-                                   {"__init__": init, 
-                                    "_draw_frame": update_func})
-
-        def _dummy(*args, **kwargs):
-            pass
-        
-        DummyEvent = type("DummyEvent", (), {"add_callback": _dummy, "start": _dummy, "stop": _dummy})
-
-        
-        anim = test_animation_type(fig, event_source=DummyEvent)
-        anim._step()
-
-        return anim
-    
-    def update_display(self, anim):        
-        anim._step()
 
 class DataManager:
     """
@@ -569,8 +637,8 @@ class DataManager:
         self._record_count = 0
         self._progress = {}
         
-    def append(self, group_name, record):
-        self._groups[group_name].append(record)
+    def write(self, group_name, record):
+        self._groups[group_name].write(record)
         self._record_count += 1        
         if self._record_count == self._save_count:
             self.save()
@@ -599,10 +667,8 @@ class DataManager:
 
             group.save(self._directory)
                     
-        with open(os.path.join(self._directory, "metadata.json"), "a+") as file:
+        with open(os.path.join(self._directory, "metadata.json"), "w") as file:
             fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))            
-            file.seek(0)
-            file.truncate()
             json.dump(metadata, file)
             fcntl.fcntl(file, fcntl.F_SETLK, copy(UNLCK_STRUCT))
         
@@ -622,7 +688,7 @@ class DataManager:
         if not os.path.exists(metadata_path):
             raise FileNotFoundError(f"Unable to locate metadata")
         
-        with open(metadata_path, "a+") as file:
+        with open(metadata_path, "r+") as file:
             # We're not actually going to write to it, but we'll request a
             # write lock in order to guarantee that it's not currently being
             # written to by something else

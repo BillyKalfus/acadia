@@ -290,7 +290,7 @@ class Runtime(ABC):
                     
                     metadata = json.loads(metadata_string)
                     filedeltas = mgr.filedeltas(metadata)
-                    logging.debug(f"Received deltas {filedeltas}")
+                    # logging.debug(f"Received deltas {filedeltas}")
                     
                     for filename,(offset,size) in filedeltas.items():
                         if size == 0:
@@ -305,9 +305,18 @@ class Runtime(ABC):
                             continue
                         
                         if len(file_bytes) > 0:
-                            with open(file_path, "wb") as f:
-                                f.seek(offset)
-                                f.write(file_bytes)
+                            # logging.debug(f"Writing {len(file_bytes)} bytes")
+                            if os.path.exists(file_path):
+                                with open(file_path, "r+b") as f:
+                                    f.seek(offset)
+                                    f.write(file_bytes)
+                            else:
+                                if offset != 0:
+                                    raise ValueError(f"Attempted to write to"
+                                                     f" non-existent file at"
+                                                     f" offset {offset}")
+                                with open(file_path, "wb") as f:
+                                    f.write(file_bytes)
                                 
                     mgr.load(reload=True)
                     
