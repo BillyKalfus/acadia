@@ -4,6 +4,7 @@ import os
 import mmap
 import time
 import logging
+import struct
 from dataclasses import dataclass
 from functools import wraps
 
@@ -51,8 +52,8 @@ class DMASynchronizer(Synchronizer):
         
         self.dma_mask = 0
 
-        for idx_call,(retval,call) in enumerate(self._calls):
-            function,acadia,args,kwargs = call.values()
+        for idx_call,call in enumerate(self._calls):
+            function,acadia,args,kwargs,retval = call.values()
             
             if self._acadia is None:
                 self._acadia = acadia
@@ -72,7 +73,6 @@ class DMASynchronizer(Synchronizer):
                     
                 self.dma_mask |= acadia.get_dma(kwargs["channel"]).mask
                 descriptor = acadia.channel_dma_stream(**kwargs)
-                retval.assign(descriptor)
                 
             elif function == DMASynchronizer.BARRIER:
                 # We first need to figure out the time in the block at which 
@@ -83,29 +83,34 @@ class DMASynchronizer(Synchronizer):
                         raise TypeError(f"Received invalid length: {length}")
                     if length > barrier_time:
                         barrier_time = length
-                        
+                                                
                 # Then, for every channel that has some action after the 
                 # barrier, we need to add a blank so that the next action 
                 # starts at the right time
                 future_channels = []
-                for idx_future_call in range(idx_call+1, len(self._calls)):
-                    if (self._calls[idx_future_call]["function"] == DMASynchronizer.DMA 
-                            and self._calls[idx_future_call]["kwargs"]["channel"] not in future_channels):
-                        future_channels.append(self._calls[idx_future_call]["kwargs"]["channel"])
+                for call in self._calls[idx_call+1:]:
+                    if (call["function"] == DMASynchronizer.DMA 
+                            and call["kwargs"]["channel"] not in future_channels):
+                        future_channels.append(call["kwargs"]["channel"])
                 
-                descriptors = []
                 for channel in future_channels:
-                    delay_length = barrier_time - (channel_lengths[channel] if channel in channel_lengths else 0)
-                    descriptor = acadia.channel_dma_stream(channel=channel,
-                                              length=delay_length,
-                                              word_address=0,
-                                              blank=True)
-                    descriptors.append(descriptor)
-                retval.assign(descriptors)
+                    channel_length = channel_lengths[channel] if channel in channel_lengths else 0
+                    delay_length = barrier_time - channel_length
+                    if delay_length < 0:
+                        raise ValueError(f"Received negative delay length {delay_length} (barrier time {barrier_time}, channel length {channel_length})")
+                    
+                    if delay_length > 0:
+                        acadia.channel_dma_stream(channel=channel,
+                                                    length=delay_length,
+                                                    word_address=0,
+                                                    blank=True)
                     
                 # Reset channel lengths so that when we hit the next barrier 
                 # (if any) it only adds delays after this one
                 channel_lengths = {}
+            else:
+                raise ValueError(f"Synchronizer called with unrecognized"
+                                 f" function code: {function}")
                 
         if self.dma_mask == 0:
             raise ValueError("Empty synchronizer")
@@ -179,7 +184,7 @@ class RFDCSynchronizer(Synchronizer):
         self._acadia = None
         
         for call in self._calls:
-            retval,(function,acadia,args,kwargs) = call.values()
+            function,acadia,args,kwargs,retval = call.values()
             
             if self._acadia is None:
                 self._acadia = acadia
@@ -451,17 +456,20 @@ class Acadia:
         # Map instruction memory for all of the processors
         self._sequencer_instruction_memory = self._attach_memory(
             address=self._firmware["sequencer_instruction_memory"]["address"],
-            size=self._firmware["sequencer_instruction_memory"]["size_bits"] // 8)  
+            size=self._firmware["sequencer_instruction_memory"]["size_bits"] // 8,
+            return_map=True)  
         
         self._dac_dma_descriptor_memory = [self._attach_memory(
             address=(self._firmware["dac_dma_descriptor_memory"]["address"] 
                     + i*(self._firmware["dac_dma_descriptor_memory"]["size_bits"] // 8)),
-            size=self._firmware["dac_dma_descriptor_memory"]["size_bits"] // 8) for i in range(self._firmware.NUM_DACS)]
+            size=self._firmware["dac_dma_descriptor_memory"]["size_bits"] // 8,
+            return_map=True) for i in range(self._firmware.NUM_DACS)]
                 
         self._adc_dma_descriptor_memory = [self._attach_memory(
             address=(self._firmware["adc_dma_descriptor_memory"]["address"] 
                     + i*(self._firmware["adc_dma_descriptor_memory"]["size_bits"] // 8)),
-            size=self._firmware["adc_dma_descriptor_memory"]["size_bits"] // 8) for i in range(self._firmware.NUM_ADCS)]
+            size=self._firmware["adc_dma_descriptor_memory"]["size_bits"] // 8,
+            return_map=True) for i in range(self._firmware.NUM_ADCS)]
             
         for dac_mem in self.DACArray:
             self._attach_resource(dac_mem)
@@ -998,11 +1006,7 @@ class Acadia:
     @requires_sequencer
     def generate(self, signal):
         """
-        Stream a signal out of a DAC. If `signal` does not have any attribute
-        `_descriptors`, this attribute will be populated with a list of 
-        `Symbol` instances. Each `Symbol` will be assigned by the 
-        `ChannelSynchronizer` when commands are requested for the DMA, and it
-        will be assigned with the return value of :meth:`channel_dma_stream`.
+        Stream a signal out of a DAC. 
         
         :param channel: Channel to stream
         :type channel: :class:`Channel`
@@ -1030,21 +1034,14 @@ class Acadia:
                              " for `generate`")
         
         # Notify the synchronizer, which will add the DMA command for us
-        # Every call to `add` will return a Symbol. When the synchronizer
-        # exits, that symbol will get populated with the return value of
-        # `channel_dma_stream`. This is a `ProcessorInstruction` representing
-        # the descriptor for the DMA
-        descriptors = []
         for params in dma_parameters:
-            r = self.channel_synchronizer.add({
+            self.channel_synchronizer.add({
                 "function": DMASynchronizer.DMA, 
                 "self": self, 
                 "args": (), 
-                "kwargs": params})
-            descriptors.append(r)
-        
-        if not hasattr(signal, "_descriptors"):
-            signal._descriptors = descriptors
+                "kwargs": params,
+                "retval": None})
+            
         
     @requires_sequencer
     def capture(self, configuration, dst):
@@ -1067,7 +1064,8 @@ class Acadia:
                 "channel": configuration.input_source,
                 "length": dst.byte_length() // configuration.input_source.interface_width_bytes,
                 "word_address": 0
-            }})
+            },
+            "retval": None})
         
     @requires_sequencer
     def generate_blank(self, channel, length):
@@ -1097,9 +1095,10 @@ class Acadia:
                 "length": round(length_cycles),
                 "word_address": 0,
                 "blank": True
-            }})
+            },
+            "retval": None})
         
-    @DMASynchronizer.synchronized(None, "channel_synchronizer")
+    @DMASynchronizer.synchronized(DMASynchronizer.BARRIER, "channel_synchronizer")
     def barrier(self):
         """
         Insert a synchronization barrier. When a barrier is inserted in a 
@@ -1157,7 +1156,7 @@ class Acadia:
         if "datamover_controller" in port:
             latency += 1
             
-        elif "dma" in port:
+        elif "_dma" in port:
             # adc<x>_dma or dac<x>_dma
             port_idx = int(port[3:port.index("_")])
             port_idx += 16 if port.startswith("adc") else 0
@@ -1287,6 +1286,17 @@ class Acadia:
                                                       latency=self.get_bus_latency("dma_running_dataport"))
         with self._active_sequencer.repeat_until(dma_running & mask == 0):
             pass
+        
+    @requires_sequencer
+    def dma_reset(self, channel):
+        """
+        Reset the DMAs associated with the provided channel
+        """
+        dma_name = f"{'dac' if channel.is_dac else 'adc'}{channel.num}_dma"
+        dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value() + 1
+        self._active_sequencer.bus_write(address=dma_regs_address,
+                                 data=0x00000001,
+                                 comment=f"Reset DMA {dma_name}")
 
     # -------------- RUNTIME UTILITIES ----------- #
     
@@ -1350,28 +1360,28 @@ class Acadia:
         num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
         logging.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
         
-        sequencer_program = np.empty((num_sequencer_instructions, 16), dtype=np.uint8)
+        sequencer_program = bytearray(num_sequencer_instructions*16)
         
         idx = 0
         for s in self._sequencer_type.instances:
             for instr in s._compiled_program:
-                sequencer_program[idx,:] = np.frombuffer(instr.assemble().to_bytes(16, "little"), dtype=np.uint8)
+                sequencer_program[idx*16 : idx*16 + 16] = instr.assemble()
                 idx += 1
 
         dac_dma_programs = []
         for i,dma in enumerate(self._dac_dmas):
             logging.debug(f"Assembling DAC{i} DMA program with length {len(dma._compiled_program)}")
-            dma_program = np.empty((len(dma._compiled_program), 8), dtype=np.uint8)
+            dma_program = bytearray(len(dma._compiled_program)*8)
             for idx,instr in enumerate(dma._compiled_program):
-                dma_program[idx,:] = np.frombuffer(instr.assemble().to_bytes(8, "little"), dtype=np.uint8)
+                struct.pack_into("<Q", dma_program, idx*8, instr.assemble())
             dac_dma_programs.append(dma_program)
             
         adc_dma_programs = []
-        for dma in self._adc_dmas:
+        for i,dma in enumerate(self._adc_dmas):
             logging.debug(f"Assembling ADC{i} DMA program with length {len(dma._compiled_program)}")
-            dma_program = np.empty((len(dma._compiled_program), 8), dtype=np.uint8)
+            dma_program = bytearray(len(dma._compiled_program)*8)
             for idx,instr in enumerate(dma._compiled_program):
-                dma_program[idx,:] = np.frombuffer(instr.assemble().to_bytes(8, "little"), dtype=np.uint8)  
+                struct.pack_into("<Q", dma_program, idx*8, instr.assemble())  
             adc_dma_programs.append(dma_program)
             
         return sequencer_program, dac_dma_programs, adc_dma_programs
@@ -1381,22 +1391,19 @@ class Acadia:
         Loads assembled data into memory.
         """
         if sequencer_program is not None:
-            program_reshaped = memoryview(sequencer_program.reshape((-1,)))
-            memoryview(self._sequencer_instruction_memory)[:len(program_reshaped)] = program_reshaped
+            self._sequencer_instruction_memory[:len(sequencer_program)] = sequencer_program
             
         if dac_dma_programs is not None:
             for idx,program in enumerate(dac_dma_programs):
                 if len(program) > 0:
                     logging.debug(f"Loading program of length {len(program)} into DAC{idx} descriptor memory")
-                    program_reshaped = memoryview(program.reshape((-1,)))
-                    memoryview(self._dac_dma_descriptor_memory[idx])[:len(program_reshaped)] = program_reshaped
+                    self._dac_dma_descriptor_memory[idx][:len(program)] = program
                 
         if adc_dma_programs is not None:
             for idx,program in enumerate(adc_dma_programs):
                 if len(program) > 0:
                     logging.debug(f"Loading program of length {len(program)} into ADC{idx} descriptor memory")
-                    program_reshaped = memoryview(program.reshape((-1,)))
-                    memoryview(self._adc_dma_descriptor_memory[idx])[:len(program_reshaped)] = program_reshaped
+                    self._adc_dma_descriptor_memory[idx][:len(program)] = program
         
                         
     def assemble_simulation(self):
@@ -1721,7 +1728,7 @@ class Acadia:
                                             count=instance.byte_length()).view(t)
 
         
-    def _attach_memory(self, address, size, dtype=np.uint8):
+    def _attach_memory(self, address, size, dtype=np.uint8, return_map=False):
         """
         Maps a region of memory in the physical address space of the hardware.
         
@@ -1738,6 +1745,9 @@ class Acadia:
             0, 
             address)
         self._mem_maps.append(m)
+        
+        if return_map:
+            return m
         
         return np.frombuffer(m, dtype=dtype)
 

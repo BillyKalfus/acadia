@@ -230,7 +230,6 @@ class ProceduralWaveform(ProceduralArray):
         
         self._time_axis = None
         self._channel = channel
-        self._descriptors = None
         super().__init__(generator, region)
         
         if length is not None:
@@ -285,13 +284,7 @@ class ProceduralWaveform(ProceduralArray):
             "length": self.byte_length() // self._channel.interface_width_bytes,
             "word_address": self.word_address()
         }]
-        
-    def set_descriptors(self, descriptors):
-        """
-        Associate a set of descriptors with this signal.
-        """
-        self._descriptors = descriptors
-        
+              
         
 class ConstantWaveform(ProceduralWaveform):
     """

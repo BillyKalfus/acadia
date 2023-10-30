@@ -1,7 +1,5 @@
-__all__ = ["Sequencer", "DSPConfiguration", "DSP_MODES"]
-
 import re
-from collections import namedtuple
+import struct
 from enum import Enum
 from typing import get_type_hints
 from itertools import permutations
@@ -9,6 +7,8 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 
 from .compiler import ManagedResource, Symbol, Operation, Processor, Operable, ProcessorInstruction
+
+__all__ = ["Sequencer", "DSPConfiguration", "DSP_MODES"]
 
 def is_numeric(obj):
     """
@@ -428,12 +428,12 @@ class STP:
 
         tmp = 0
         # Opcode = 0 for STP
-        tmp |= self.push_return << 104
-        tmp |= self.src1.value() << 96
-        tmp |= self.src2.value() << 88
-        tmp |= self.dest1.value() << 80
-        tmp |= self.dest2.value() << 72
-        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
+        tmp |= self.push_return << (104-64)
+        tmp |= self.src1.value() << (96-64)
+        tmp |= self.src2.value() << (88-64)
+        tmp |= self.dest1.value() << (80-64)
+        tmp |= self.dest2.value() << (72-64)
+        tmp |= ((self.dsp_cep.value() | 0x8) << (64-64)) if self.dsp_cep is not None else 0
 
         imm1_value = self.imm1
         while hasattr(imm1_value, "value") or hasattr(imm1_value, "address"):
@@ -448,8 +448,6 @@ class STP:
                 else:
                     imm1_value = imm1_value.address
 
-        tmp |= imm1_value << 32
-
         imm2_value = self.imm2
         while hasattr(imm2_value, "value") or hasattr(imm2_value, "address"):
             if hasattr(imm2_value, "value"):
@@ -463,9 +461,7 @@ class STP:
                 else:
                     imm2_value = imm2_value.address
             
-        tmp |= imm2_value
-
-        return tmp
+        return struct.pack("<IIQ", imm1_value, imm2_value, tmp)
 
 @dataclass
 class STC:
@@ -582,13 +578,13 @@ class STC:
         """
 
         tmp = 0
-        tmp |= 1 << 112 # Opcode for STC
-        tmp |= self.push_return << 104
-        tmp |= self.src_stval.value() << 96
-        tmp |= self.src_tval.value() << 88
-        tmp |= self.dest_stval.value() << 80
-        tmp |= self.op << 72
-        tmp |= ((self.dsp_cep.value() | 0x8) << 64) if self.dsp_cep is not None else 0
+        tmp |= 1 << (112-64) # Opcode for STC
+        tmp |= self.push_return << (104-64)
+        tmp |= self.src_stval.value() << (96-64)
+        tmp |= self.src_tval.value() << (88-64)
+        tmp |= self.dest_stval.value() << (80-64)
+        tmp |= self.op << (72-64)
+        tmp |= ((self.dsp_cep.value() | 0x8) << (64-64)) if self.dsp_cep is not None else 0
 
         imm_stval_value = self.imm_stval
         while hasattr(imm_stval_value, "value") or hasattr(imm_stval_value, "address"):
@@ -603,8 +599,6 @@ class STC:
                 else:
                     imm_stval_value = imm_stval_value.address
 
-        tmp |= imm_stval_value << 32
-
         imm_tval_value = self.imm_tval
         while hasattr(imm_tval_value, "value") or hasattr(imm_tval_value, "address"):
             if hasattr(imm_tval_value, "value"):
@@ -618,9 +612,8 @@ class STC:
                 else:
                     imm_tval_value = imm_tval_value.address
             
-        tmp |= imm_tval_value
 
-        return tmp
+        return struct.pack("<IIQ", imm_tval_value, imm_stval_value, tmp)
     
 class Sequencer(Processor):
     """

@@ -1054,7 +1054,8 @@ class Synchronizer:
                 getattr(self, synchronizer_name).add({"function": name, 
                                                       "self": self,
                                                       "args": args, 
-                                                      "kwargs": kwargs})
+                                                      "kwargs": kwargs,
+                                                      "retval": retval})
                 return retval
             return synchronized_func
         return make
@@ -1071,19 +1072,16 @@ class Synchronizer:
         self._kwargs = kwargs
         return self
     
-    def add(self, obj):
-        retval = Symbol()
-        
+    def add(self, obj):        
         if self._active:            
-            self._calls.append((retval, obj))
+            self._calls.append(obj)
         elif self._allow_standalone:
-            self._calls = [(retval, obj)]
+            self._calls = [obj]
             self.__exit__(None, None, None)
         else:
             raise ValueError("Attempted call to a synchronized function"
-                             " outside of a synchronization context.")
-        return retval
-    
+                             " outside of a synchronization context.")   
+             
     def __enter__(self):
         if self._active:
             raise ValueError("Synchronizer is already active.")

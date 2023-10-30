@@ -26,6 +26,13 @@ patch -ru /etc/network/interfaces < network.patch
 rm network.patch
 
 # Restart the ethernet link
+ifconfig eth0 down
+sleep 2;
+if [ -n "$MAC" ]; then
+	ifconfig eth0 hw ether $MAC
+fi
+sleep 1;
+
 /etc/init.d/networking restart
 
 # If we supplied an IP address, set it

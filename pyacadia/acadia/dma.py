@@ -29,29 +29,51 @@ class Descriptor:
         tmp = 0
         
         if isinstance(self.trace_length, Symbol) or isinstance(self.trace_length, Operation):
-            tmp |= self.trace_length.value()-1
+            trace_length = self.trace_length.value()-1
+        elif isinstance(self.trace_length, int):
+            trace_length = self.trace_length-1
         else:
-            tmp |= self.trace_length-1
+            raise TypeError(f"Trace length must be an int; received {self.trace_length}")
+            
+        if trace_length & 0xFFFFFFFF != trace_length:
+            raise ValueError(f"Trace length must fit in 32 bits; received {trace_length}")
+            
+        tmp |= trace_length
             
         if isinstance(self.trace_address, Symbol) or isinstance(self.trace_address, Operation):
-            tmp |= self.trace_address.value() << 32
+            trace_address = self.trace_address.value()
+        elif isinstance(self.trace_address, int):
+            trace_address = self.trace_address
         else:
-            tmp |= self.trace_address << 32
+            raise TypeError(f"Trace address must be an int; received {self.trace_address}")
+            
+        if trace_address & 0xFFFF != trace_address:
+            raise ValueError(f"Trace address must fit in 16 bits; received {trace_address}")
+            
+        tmp |= trace_address << 32
             
         if isinstance(self.decimate, Symbol) or isinstance(self.decimate, Operation):
             tmp |= self.decimate.value() << 60
         else:
             tmp |= self.decimate << 60
             
-        if isinstance(self.fixed, Symbol):
+        if isinstance(self.fixed, Symbol) and self.fixed._value_type is bool:
             tmp |= self.fixed.value() << 62
-        else:
+        elif isinstance(self.fixed, bool):
             tmp |= self.fixed << 62
-
-        if isinstance(self.blank, Symbol):
-            tmp |= self.blank.value() << 63
         else:
+            raise TypeError(f"Descriptor parameter `fixed` must either be of"
+                            f" type `bool` or a `Symbol` encapsulating one"
+                            f" (received {self.fixed})")
+
+        if isinstance(self.blank, Symbol) and self.blank._value_type is bool:
+            tmp |= self.blank.value() << 63
+        elif isinstance(self.blank, bool):
             tmp |= self.blank << 63
+        else:
+            raise TypeError(f"Descriptor parameter `blank` must either be of"
+                            f" type `bool` or a `Symbol` encapsulating one"
+                            f" (received {self.blank})")
               
         return tmp
     

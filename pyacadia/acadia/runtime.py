@@ -55,7 +55,7 @@ class Runtime(ABC):
             display=True,
             upload_timeout=5, 
             remote_log_level=logging.DEBUG,
-            update_period=0.1,
+            update_period=0.5,
             multiplex_ssh=False):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
@@ -215,7 +215,7 @@ class Runtime(ABC):
         self._stop_button.on_click(_self_stop)
         display(self._stop_button)
         
-    def stop(self, timeout=0.2):
+    def stop(self, timeout=1):
         """
         Gracefully stop any running process.
         """
@@ -391,7 +391,10 @@ class RuntimeServer:
         """
         i_bytes = b''
         while len(i_bytes) < 8:
-            i_bytes += sock.recv(8 - len(i_bytes))
+            try:
+                i_bytes += sock.recv(8 - len(i_bytes))
+            except socket.timeout:
+                raise TimeoutError(f"Timed out receiving integer (received {len(i_bytes)} bytes of 8)")
         return int.from_bytes(i_bytes, "little")
     
     @staticmethod
@@ -408,8 +411,11 @@ class RuntimeServer:
         dataview = memoryview(data)
         
         while bytes_received < length:
-            bytes_received += sock.recv_into(dataview[bytes_received:], length-bytes_received)
-            
+            try:
+                bytes_received += sock.recv_into(dataview[bytes_received:], length-bytes_received)
+            except socket.timeout:
+                raise TimeoutError(f"Timed out receiving bytes (received {bytes_received} bytes of {length})")
+        
         return data
     
     @staticmethod
@@ -485,7 +491,7 @@ class RuntimeServer:
         s = socket.socket(socket_family, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        s.settimeout(0.1)
+        s.settimeout(1)
         
         try:
             s.connect(address)
@@ -595,7 +601,7 @@ class RuntimeServer:
         s = socket.socket(socket_family, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        s.settimeout(0.2)
+        s.settimeout(1)
         s.bind(address)
         s.listen()
         
@@ -610,7 +616,7 @@ class RuntimeServer:
             try:
                 conn, addr = s.accept()
                 # logging.debug(f"Received connection from {addr}")
-                conn.settimeout(0.5)
+                conn.settimeout(1)
             except socket.timeout:
                 if os.path.exists(stop_file_path):
                     logging.info("Stop file located, stopping")
