@@ -10,7 +10,7 @@ from functools import wraps
 
 import numpy as np
 
-from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
+from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation
 from .sequencer import Sequencer
 from .dma import DMA
 from .channel import Channel

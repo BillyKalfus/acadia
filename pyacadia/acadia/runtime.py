@@ -8,6 +8,7 @@ import datetime
 import logging
 import pickle
 import json
+import signal 
 
 from threading import Thread, Event
 from abc import ABC, abstractclassmethod
@@ -136,33 +137,44 @@ class Runtime(ABC):
             raise Exception("File upload failed")
 
         logging.info(f"Launching main remote process")
-        cmd = f"{ssh_cmd} python3 {remote_runtime_file}"
+        cmd = f"{ssh_cmd} -t -t python3 {remote_runtime_file}"
         logging.debug(f"Executing command {cmd}")
         
         self._runtime_proc = subprocess.Popen(
-            cmd, 
+            "exec " + cmd, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
             text=True,
             encoding="ascii",
-            shell=True)
+            shell=True,
+            preexec_fn=os.setsid)
         
         logging.info(f"Launching remote server")
-        cmd = (f"{ssh_cmd} \"python3 -c \'"
+        cmd = (f"{ssh_cmd} -t -t \"python3 -c \'"
             f"from acadia.runtime import RuntimeServer; "
             f"RuntimeServer.serve(\\\"{directory}\\\", (\\\"\\\", {remote_server_port}), {remote_log_level});\'\"")
         logging.debug(f"Executing command {cmd}")
         
         self._server_proc = subprocess.Popen(
-            cmd, 
+            "exec " + cmd, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
             text=True,
             encoding="ascii",
             shell=True)
+        
+        self._runtime_monitor_stop_flag = Event()
                 
         def _runtime_monitor():
-            stdout,stderr = self._runtime_proc.communicate()
+            while True:
+                if self._runtime_monitor_stop_flag.is_set():
+                    return 
+                try:
+                    stdout,stderr = self._runtime_proc.communicate(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            
             func = logging.error if stderr != "" else logging.debug
             func(f"Main process completed with output:\n"
                  f"stdout:\n{stdout}\n\nstderr:\n{stderr}\n\n")
@@ -194,8 +206,12 @@ class Runtime(ABC):
                                             temp_directory),
                                         daemon=True)
             self._display_thread.start()
+        else:
+            self._display_thread = None
         
         self._create_widgets()
+        
+        return subdirectory
         
     def _create_widgets(self):
         from IPython.display import display
@@ -231,18 +247,19 @@ class Runtime(ABC):
         # middle of an iteration and itll then get set at the end of the iteration
         # Then, we'll clear it as soon as it's set, and when it's set again, a full
         # iteration will have passed since entering stop()
-        for i in range(4):
-            self._display_iteration_event.clear()
-            if self._display_iteration_event.wait(timeout=timeout):
-                logging.warning(f"Display thread did set iteration flag on pass {i}")
-            else:
-                logging.error(f"Display thread did not set iteration flag on pass {i}")
-        
-        self._display_stop_event.set()
-        try:
-            self._display_thread.join(timeout=timeout)
-        except:
-            logging.error("Display thread did not join")
+        if self._display_thread is not None:
+            for i in range(4):
+                self._display_iteration_event.clear()
+                if self._display_iteration_event.wait(timeout=timeout):
+                    logging.warning(f"Display thread did set iteration flag on pass {i}")
+                else:
+                    logging.error(f"Display thread did not set iteration flag on pass {i}")
+            
+            self._display_stop_event.set()
+            try:
+                self._display_thread.join(timeout=timeout)
+            except:
+                logging.error("Display thread did not join")
         
         # Request the server to stop
         RuntimeServer.request_close(self._server_address)
@@ -261,6 +278,13 @@ class Runtime(ABC):
             self._runtime_proc.wait(timeout=timeout)
         except:
             self._runtime_proc.kill()
+            
+        # Stop the runtime monitor thread
+        self._runtime_monitor_stop_flag.set()
+        try:
+            self._runtime_monitor_thread.join(timeout=timeout)
+        except:
+            logging.error("Runtime monitor thread did not join")
         
         self._stop_button.disabled = True
             
