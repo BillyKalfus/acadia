@@ -104,6 +104,9 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";
 
     signal rst_int : std_logic;
+    signal narrow_int : std_logic;
+    signal data_in_d : std_logic_vector(DATA_WIDTH-1 downto 0);
+    signal narrow_idx : std_logic;
 
     -- Run state
     signal running_int      : std_logic;
@@ -135,12 +138,14 @@ begin
     
     rst_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0' or 
-                    (master_bus_addr(0) = '1' 
-                    and master_bus_mosi(0) = '1' 
-                    and master_bus_en = '1' 
-                    and master_bus_we = '1')) then
+            if(nrst = '0') then
                 rst_int <= '1';
+                narrow_int <= '0';
+            elsif(master_bus_addr(0) = '1' 
+                    and master_bus_en = '1' 
+                    and master_bus_we = '1') then
+                rst_int <= master_bus_mosi(0);
+                narrow_int <= master_bus_mosi(1);
             else
                 rst_int <= '0';
             end if;
@@ -230,7 +235,7 @@ begin
     output_proc: process(clk) begin
         if rising_edge(clk) then
             -- Data output gets pipelined so that it's aligned with the handshake signals
-            data_out_tdata <= data_in;
+            data_in_d <= data_in;
 
             -- Update the address outputs depending on whether the descriptor is fixed or not
             if(descriptor_fixed = '1') then                
@@ -246,19 +251,46 @@ begin
             end if;
 
             -- Set the valid outputs depending on run state and decimation mode
-            valid_int <= running_int and decimation_valid;
+            valid_int <= running_int and decimation_valid and (not descriptor_blank);
             
             -- Set the last outputs depending on run state, decimation mode, and descriptor done
-            last_int  <= descriptor_done and running_int and decimation_valid;
+            last_int  <= running_int and decimation_valid and (not descriptor_blank) and descriptor_done;
+            
         end if;
     end process output_proc;
+    
+    output_narrow_proc: process(clk) begin
+        if rising_edge(clk) then
+            if(rst_int = '1' or narrow_int = '0') then
+                narrow_idx <= '0';
+            elsif(narrow_int = '1' and valid_int = '1') then
+                narrow_idx <= not narrow_idx;
+            end if;
+            
+            if(narrow_int = '1') then
+                if narrow_idx = '1' then
+                    data_out_tdata(DATA_WIDTH-1 downto DATA_WIDTH/2) <= data_in_d((DATA_WIDTH/2) - 1 downto 0);
+                else
+                    data_out_tdata((DATA_WIDTH/2) - 1 downto 0) <= data_in_d((DATA_WIDTH/2) - 1 downto 0);
+                end if;
+                
+                data_out_tvalid    <= valid_int and narrow_idx;
+                data_out_tlast     <= last_int and narrow_idx;
+                address_out_tvalid <= valid_int and narrow_idx;
+                address_out_tlast  <= last_int and narrow_idx;
+                data_address_invalid <= not (valid_int and narrow_idx);
+            else
+                data_out_tdata     <= data_in_d;
+                data_out_tvalid    <= valid_int;
+                data_out_tlast     <= last_int;
+                address_out_tvalid <= valid_int;
+                address_out_tlast  <= last_int;
+                data_address_invalid <= not valid_int;
+            end if;
+        end if;
+    end process output_narrow_proc;
 
-    data_out_tvalid    <= valid_int;
-    data_out_tlast     <= last_int;
-    address_out_tvalid <= valid_int;
-    address_out_tlast  <= last_int;
-
-    data_address_invalid <= not valid_int;
+    
 
     bus_miso_proc: process(clk) begin
         if rising_edge(clk) then

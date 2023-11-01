@@ -78,15 +78,6 @@ CONFIG_glibc-dev
 CONFIG_which
 CONFIG_netcat
 CONFIG_tcpdump
-CONFIG_libavahi-client
-CONFIG_libavahi-glib
-CONFIG_avahi-utils
-CONFIG_libavahi-common
-CONFIG_avahi-dnsconfd
-CONFIG_avahi-daemon
-CONFIG_avahi-autoipd
-CONFIG_libavahi-gobject
-CONFIG_libavahi-core
 CONFIG_wpa-supplicant
 CONFIG_wpa-supplicant-passphrase
 CONFIG_wpa-supplicant-cli
@@ -161,4 +152,3 @@ CONFIG_python3-smbus
 CONFIG_python3-spidev
 CONFIG_python3-tqdm
 CONFIG_python3-widgetsnbextension
-CONFIG_python3-pyzmq

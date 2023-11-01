@@ -70,9 +70,11 @@ use xpm.vcomponents.all;
 
 entity acadia_stream_complex32_macc is
     generic (
-        -- Number of quadratures pairs present in the input
-        -- Must be <= 8
-        INPUT_WORDS                               : positive := 4;
+        -- Number of quadratures pairs present in the input must be <= 4
+        INPUT_WORDS                   : positive := 4;
+        DATA_OUTPUT_FIFO_DEPTH        : positive := 1024;
+        DATA_OUTPUT_FIFO_PRIMITIVE    : string   := "auto";
+        DATA_OUTPUT_FIFO_ASYNCHRONOUS : boolean  := true;
 
         -- Kernel memory settings
         KERNEL_MEMORY_DEPTH                       : positive := 2048;
@@ -81,12 +83,7 @@ entity acadia_stream_complex32_macc is
         KERNEL_MEMORY_EXTERNAL_PORT_ADDRESS_WIDTH : positive := 10;
         KERNEL_MEMORY_EXTERNAL_PORT_LATENCY       : positive := 2;
         KERNEL_MEMORY_CLOCK_MODE                  : string := "independent";
-        KERNEL_MEMORY_PRIMITIVE                   : string := "auto";
-
-        -- Output FIFO settings
-        DATA_OUTPUT_FIFO_DEPTH        : positive := 1024;
-        DATA_OUTPUT_FIFO_PRIMITIVE    : string   := "auto";
-        DATA_OUTPUT_FIFO_ASYNCHRONOUS : boolean  := true
+        KERNEL_MEMORY_PRIMITIVE                   : string := "auto"
     );
     port (
         clk             : in  std_logic;
@@ -313,31 +310,17 @@ begin
 
     -- First pipeline stage: sum the individual components of the input signal
     input_narrowing_proc: process(clk) 
-       variable se     : signed(17 downto 0);
        variable sum_re : signed(17 downto 0); 
        variable sum_im : signed(17 downto 0); 
     begin
         if rising_edge(clk) then
             -- Use variables and a loop to sum all the inputs
-            -- We'll use separate loops to do the real and imaginary parts
-            -- There's probably a more elegant way to do this with a nested loop but it's unlikely
-            -- that this would ever need more than two pairs and this way is clearer so I don't
-            -- give a hoot
             sum_re := (others => '0');
-            sum_re_loop: for i in 0 to INPUT_WORDS-1 loop
-                se(15 downto 0)  := signed(data_in_tdata(i*16 + 15 downto i*16));
-                se(17 downto 16) := (others => data_in_tdata(i*16 + 15));
-                
-                sum_re := sum_re + se;
-            end loop sum_re_loop;
-
             sum_im := (others => '0');
-            sum_im_loop: for i in 0 to INPUT_WORDS-1 loop
-                se(15 downto 0)  := signed(data_in_tdata(i*16 + 15 downto i*16));
-                se(17 downto 16) := (others => data_in_tdata(i*16 + 15));
-                
-                sum_im := sum_im + se;
-            end loop sum_im_loop;
+            sum_loop: for i in 0 to INPUT_WORDS-1 loop
+                sum_re := sum_re + resize(signed(data_in_tdata((i*32) + 15 downto (i*32))), 18);
+                sum_im := sum_im + resize(signed(data_in_tdata((i*32) + 31 downto (i*32) + 16)), 18);
+            end loop sum_loop;
 
             -- Now update the outputs with the varables
             a_re   <= sum_re;

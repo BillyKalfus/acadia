@@ -91,8 +91,7 @@ use UNISIM.vcomponents.all;
 
 entity acadia_stream_complex32_dsp is
     generic (
-        -- Number of quadratures pairs present in the input
-        -- Must be <= 8
+        -- Number of quadratures pairs present in the input must be <= 4
         INPUT_WORDS                   : positive := 4; 
         DATA_OUTPUT_FIFO_DEPTH        : positive := 1024;
         DATA_OUTPUT_FIFO_PRIMITIVE    : string := "auto";
@@ -216,6 +215,8 @@ architecture rtl of acadia_stream_complex32_dsp is
     signal dsp_output_last_ppp : std_logic;
 
 begin
+
+    data_in_tready <= '1';
 
     input_narrowing_proc: process(clk) 
        variable se     : signed(18 downto 0);

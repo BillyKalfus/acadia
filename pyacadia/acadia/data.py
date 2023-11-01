@@ -247,7 +247,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
     A collection of similarly-shaped array-like records.
     """
     
-    def __init__(self, name, cache_size = 10e6, record_axes=None):
+    def __init__(self, name, cache_size = 10e6, record_axes=None, append_records=True):
         """
         :param cache_size: The maximum size of an internal record cache in 
             bytes. This cache will be flushed either when :meth:`save` is
@@ -259,12 +259,15 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             the record group's metadata. This should be a list of 1D arrays, 
             with each 1D array corresponding to a particular dimension of the
             record.
+        :param append_records: If `True`, new records will be appended to the
+            complete record; otherwise, they will overwrite it.
         """
         super().__init__(name)
         self._cache = None
-        self._cache_count = 0
-        self._cache_size = int(cache_size)
+        self._cache_count = None
+        self._cache_size = int(cache_size) if append_records else 0
         self._cache_full = False
+        self._append_records = append_records
         
         self._record_shape = None
         self._record_dtype = None
@@ -298,7 +301,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             dtype = descr_to_dtype(file_header2["descr"])
             size_bytes2 = dtype.itemsize*reduce(operator.mul, file_header2["shape"])
             
-            if metadata1 is None or filename not in metadata1:
+            if metadata1 is None or filename not in metadata1 or (not metadata1[filename]["appending"]):
                 deltas[filename] = (0, size_bytes2)
             else:
                 if json.dumps(metadata1[filename]["descr"]) != json.dumps(file_header2["descr"]):
@@ -353,13 +356,14 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 with open(full_path, "wb") as f:
                     axis.tofile(f)
                 self._metadata[filename] = header_data_from_array_1_0(axis)
+                self._metadata[filename]["appending"] = True
         if self._cache is None:
             logging.info(f"`save` called with no saveable data")
             
         filename = f"{self._name}_records.bin"
         header = header_data_from_array_1_0(self._cache)
         
-        if filename in self._metadata:
+        if filename in self._metadata and self._append_records:
             # Extend the existing number of records by an amount equal to 
             # what's in the cache
             incr = self._cache_count if self._cache_count is not None else 1
@@ -371,6 +375,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             # We'll copy all the header information from the cache, but depending
             # on whether we have a cache, we may need to add a dimension to the shape
             self._metadata[filename] = header
+            self._metadata[filename]["appending"] = self._append_records
             if self._cache_count is None:
                 # No cache, add a dimension for number of records
                 self._metadata[filename]["shape"] = (1, *self._metadata[filename]["shape"])
@@ -379,7 +384,8 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 # the header will contain the max cache size for this axis
                 self._metadata[filename]["shape"] = (self._cache_count, *self._metadata[filename]["shape"][1:])
             
-        with open(os.path.join(directory, filename), "ab") as f:
+        with open(os.path.join(directory, filename), 
+                  ("ab" if self._append_records else "wb")) as f:
             if self._cache_count is not None:
                 self._cache[:self._cache_count].tofile(f)
                 self._cache_count = 0
@@ -433,10 +439,12 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         """
         records_filename = f"{self._name}_records.bin"
         self._cache = self._load_array(records_filename, 
-                                               directory, 
-                                               metadata, 
-                                               map)
+                                        directory, 
+                                        metadata, 
+                                        map)
+        
         self._metadata[records_filename] = header_data_from_array_1_0(self._cache)
+        self._metadata[records_filename]["appending"] = metadata[records_filename]["appending"]
         
         self._record_axes = []
         for axis_idx in count():
@@ -445,6 +453,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 axis = self._load_array(axis_filename, directory, metadata, map)
                 self._record_axes.append(axis)
                 self._metadata[axis_filename] = header_data_from_array_1_0(axis)
+                self._metadata[axis_filename] = metadata[axis_filename]["appending"]
             else:
                 break
             

@@ -461,7 +461,7 @@ class STP:
                 else:
                     imm2_value = imm2_value.address
             
-        return struct.pack("<IIQ", imm1_value, imm2_value, tmp)
+        return struct.pack("<IIQ", imm2_value, imm1_value, tmp)
 
 @dataclass
 class STC:
@@ -612,7 +612,6 @@ class STC:
                 else:
                     imm_tval_value = imm_tval_value.address
             
-
         return struct.pack("<IIQ", imm_tval_value, imm_stval_value, tmp)
     
 class Sequencer(Processor):

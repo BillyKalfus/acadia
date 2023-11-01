@@ -38,6 +38,25 @@ do
     echo "$line"=y >> project-spec/configs/rootfs_config
 done
 
+# Set OpenSSH as the SSH server
+# We first need to disable dropbear
+sed -i -e 's/CONFIG_packagegroup-core-ssh-dropbear/#CONFIG_packagegroup-core-ssh-dropbear/g' -e 's/CONFIG_imagefeature-ssh-server-dropbear/#CONFIG_imagefeature-ssh-server-dropbear/g' project-spec/configs/rootfs_config
+
+# Now add everything for openssh
+echo CONFIG_openssh=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-ssh=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-sftp=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-keygen=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-dbg=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-dev=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-misc=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-sshd=y >> project-spec/configs/rootfs_config
+echo CONFIG_openssh-scp=y >> project-spec/configs/rootfs_config
+echo CONFIG_imagefeature-ssh-server-openssh=y >> project-spec/configs/rootfs_config
+
+# Disable tcf-agent (for some reason this consistently fails to build)
+sed -i -e 's/CONFIG_tcf-agent/#CONFIG_tcf-agent/g' project-spec/configs/rootfs_config
+
 # Download the scipy layer
 # https://support.xilinx.com/s/question/0D52E00007G0ubzSAB/python-scipy-install-with-petalinux-20202-for-the-zynq7000?language=en_US
 cd project-spec

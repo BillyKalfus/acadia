@@ -1161,15 +1161,12 @@ class Acadia:
             port_idx = int(port[3:port.index("_")])
             port_idx += 16 if port.startswith("adc") else 0
             latency += 1 if self._firmware["sequencer_bus"]["dma_pipeline"][port_idx] else 0
-
         elif port == "cache":
             # One additional cycle minimum because the memory has a read latency of 1
             # even before any pipelining because it's a synchronous memory
             latency += 1 
             latency += self._firmware["sequencer_cache_memory"]["bus_port_input_pipeline"]
             latency += self._firmware["sequencer_cache_memory"]["bus_port_output_pipeline"]
-        elif "ps_gpio" in port:
-            latency += self._firmware[port]["bus_pipeline"]
         elif self._firmware["sequencer_bus"][port]["bus_pipeline"]:
             latency += 1
 
@@ -1391,18 +1388,19 @@ class Acadia:
         Loads assembled data into memory.
         """
         if sequencer_program is not None:
+            logging.debug(f"Loading sequencer instruction memory ({len(sequencer_program)} bytes)")
             self._sequencer_instruction_memory[:len(sequencer_program)] = sequencer_program
             
         if dac_dma_programs is not None:
             for idx,program in enumerate(dac_dma_programs):
                 if len(program) > 0:
-                    logging.debug(f"Loading program of length {len(program)} into DAC{idx} descriptor memory")
+                    logging.debug(f"Loading DAC{idx} descriptor memory ({len(program)} bytes)")
                     self._dac_dma_descriptor_memory[idx][:len(program)] = program
                 
         if adc_dma_programs is not None:
             for idx,program in enumerate(adc_dma_programs):
                 if len(program) > 0:
-                    logging.debug(f"Loading program of length {len(program)} into ADC{idx} descriptor memory")
+                    logging.debug(f"Loading DAC{idx} descriptor memory ({len(program)} bytes)")
                     self._adc_dma_descriptor_memory[idx][:len(program)] = program
         
                         
