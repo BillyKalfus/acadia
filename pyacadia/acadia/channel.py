@@ -478,14 +478,14 @@ class Channel:
         
         # Move the desired NCO frequency into the proper Nyquist zone
         # while word > 0.5:
-        #     word -= 0.5
+        #     word -= 1
         # while word < -0.5:
-        #     word += 0.5
+        #     word += 1
         
         # We can just mask the appropriate bits of the word after multiplying    
-        return round(word * (2**48)) & ((1 << 48)-1)
+        return int(round(word * (2**48))) & ((1 << 48)-1)
         
-    def update_nco_frequency_registers(self, frequency, low=True, mid=True, high=True):
+    def update_nco_frequency_registers(self, frequency_word, low=True, mid=True, high=True):
         """
         Configure some or all NCO settings. The three 16-bit registers for
         the frequency tuning word may be individually updated, allowing
@@ -503,8 +503,6 @@ class Channel:
             word are to be updated
         :type high: bool, optional
         """   
-
-        frequency_word = self.frequency_to_nco_tuning_word(frequency)
         
         if low:
             self.RFDC_call("WriteReg16Wrapper", 
@@ -521,6 +519,51 @@ class Channel:
                             self.register_base_address(), 
                             self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET"),
                             (frequency_word >> 32) & 0xFFFF)
+            
+    def read_nco_frequency_registers(self):
+        """
+        Read the current setting in the NCO frequency registers
+        """
+        low = self.RFDC_call("ReadReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_ADC_NCO_FQWD_LOW_OFFSET")) & 0xFFFF
+        mid = self.RFDC_call("ReadReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_ADC_NCO_FQWD_MID_OFFSET")) & 0xFFFF
+        high = self.RFDC_call("ReadReg16Wrapper", 
+                            self.register_base_address(), 
+                            self.RFDC_def("XRFDC_ADC_NCO_FQWD_UPP_OFFSET")) & 0xFFFF
+        
+        return (high << 32) | (mid << 16) | low
+    
+    def set_nco_update_source(self, source_string):
+        if (source_string is not None 
+              and source_string.upper() not in ["IMMEDIATE", "SLICE", "TILE", "SYSREF", "PL", "MARKER"]):
+            raise ValueError(f"Invalid source {source_string}.")
+        
+        self.RFDC_call("ClrSetReg",
+                        self.register_base_address(), 
+                        self.RFDC_def("XRFDC_NCO_UPDT_OFFSET"), 
+                        self.RFDC_def("XRFDC_NCO_UPDT_MODE_MASK"),
+                        self.RFDC_def(f"XRFDC_EVNT_SRC_{source_string.upper()}"))
+    
+    def get_nco_update_source(self):
+        EventSource = self.RFDC_call("RDReg", 
+                                     self.register_base_address(), 
+                                     self.RFDC_def("XRFDC_NCO_UPDT_OFFSET"), 
+                                     self.RFDC_def("XRFDC_NCO_UPDT_MODE_MASK"))
+        for source_string in ["IMMEDIATE", "SLICE", "TILE", "SYSREF", "MARKER", "PL"]:
+            if EventSource == self.RFDC_def(f"XRFDC_EVNT_SRC_{source_string}"):
+                return source_string.lower()
+            
+        raise ValueError(f"Invalid event source {EventSource}")
+    
+    def trigger_immediate_nco_update(self):
+        self.RFDC_call("ClrSetReg",
+                        self.register_base_address(), 
+                        self.RFDC_def(f"XRFDC_{'DAC' if self.is_dac else 'ADC'}_UPDATE_DYN_OFFSET"), 
+                        self.RFDC_def("XRFDC_UPDT_EVNT_MASK"),
+                        self.RFDC_def("XRFDC_UPDT_EVNT_NCO_MASK"))
                 
     def update_nco_phase_registers(self, phase, low=True, high=True):
         """
@@ -545,6 +588,8 @@ class Channel:
                             self.register_base_address(), 
                             self.RFDC_def("XRFDC_NCO_PHASE_UPP_OFFSET"),
                             (phase >> 16) & 0x3)
+            
+            
         
     def reset_nco_phase(self):
         """

@@ -10,9 +10,10 @@ PACKAGE_DIR = "/usr/lib/python3.7/site-packages"
 
 HEADERS = {"rfdc": '#include "xrfdc.h"\n'
                     '#include <metal/sys.h>\n'
-                    'u32 metal_init_METAL_INIT_DEFAULTS() { struct metal_init_params init_param = METAL_INIT_DEFAULTS; init_param.log_level = METAL_LOG_DEBUG; return metal_init(&init_param); }\n'
+                    'u32 metal_init_METAL_INIT_DEFAULTS() { struct metal_init_params init_param = METAL_INIT_DEFAULTS; init_param.log_level = METAL_LOG_INFO; return metal_init(&init_param); }\n'
                     'u32 def_XRFDC_BLOCK_BASE(u32 type, u32 tile, u32 block) { return XRFDC_BLOCK_BASE(type, tile, block); }\n'
-                    'void XRFdc_WriteReg16Wrapper(XRFdc* InstancePtr, u32 BaseAddress, u32 RegOffset, u32 RegisterValue) { XRFdc_WriteReg16(InstancePtr, BaseAddress, RegOffset, RegisterValue); }',
+                    'void XRFdc_WriteReg16Wrapper(XRFdc* InstancePtr, u32 BaseAddress, u32 RegOffset, u32 RegisterValue) { XRFdc_WriteReg16(InstancePtr, BaseAddress, RegOffset, RegisterValue); }'
+                    'u16 XRFdc_ReadReg16Wrapper(XRFdc* InstancePtr, u32 BaseAddress, u32 RegOffset) { return XRFdc_ReadReg16(InstancePtr, BaseAddress, RegOffset); }',
             "rfclk": '#include "xrfclk.h"\n'}
 
 user_options = []

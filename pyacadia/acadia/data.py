@@ -353,6 +353,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             filename = f"{self._name}_axis{i}.bin"
             full_path = os.path.join(directory, filename)
             if not os.path.exists(full_path):
+                logging.debug(f"Saving {filename}")
                 with open(full_path, "wb") as f:
                     axis.tofile(f)
                 self._metadata[filename] = header_data_from_array_1_0(axis)
@@ -386,6 +387,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             
         with open(os.path.join(directory, filename), 
                   ("ab" if self._append_records else "wb")) as f:
+            logging.debug(f"Saving {filename}")
             if self._cache_count is not None:
                 self._cache[:self._cache_count].tofile(f)
                 self._cache_count = 0
@@ -664,8 +666,15 @@ class DataManager:
         :type groups: list of str
         """   
         # logging.debug("Saving records...")
-        
-        metadata = {}
+        metadata_path = os.path.join(self._directory, "metadata.json")
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r+") as file:
+                fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))            
+                metadata = json.load(file)
+                fcntl.fcntl(file, fcntl.F_SETLK, copy(UNLCK_STRUCT))
+        else:
+            metadata = {}
+                
         for name in (groups if groups is not None else self._groups.keys()):   
             group = self._groups[name]                 
             metadata[name] =  {
@@ -676,6 +685,7 @@ class DataManager:
 
             group.save(self._directory)
                     
+        logging.debug(f"Saving metadata for groups {list(metadata.keys())}")
         with open(os.path.join(self._directory, "metadata.json"), "w") as file:
             fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))            
             json.dump(metadata, file)

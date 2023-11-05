@@ -1,4 +1,4 @@
-__all__ = ["Firmware", "DEFAULT_CONFIG"]
+__all__ = ["Firmware"]
 
 import os
 import json

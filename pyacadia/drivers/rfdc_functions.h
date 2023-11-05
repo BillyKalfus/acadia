@@ -2968,6 +2968,7 @@ enum metal_log_level {
 u32 metal_init_METAL_INIT_DEFAULTS(void);
 u32 def_XRFDC_BLOCK_BASE(u32, u32, u32);
 void XRFdc_WriteReg16Wrapper(XRFdc*, u32, u32, u32);
+u16 XRFdc_ReadReg16Wrapper(XRFdc*, u32, u32);
 void metal_set_log_level(enum metal_log_level);
 
 XRFdc_Config *XRFdc_LookupConfig(u16 DeviceId);
