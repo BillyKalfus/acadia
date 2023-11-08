@@ -4,7 +4,11 @@ import numpy as np
 from .channel import Channel
 from .compiler import ManagedMemory
 
-__all__ = ["Array", "ProceduralArray", "ProceduralWaveform"]
+__all__ = ["Array", 
+           "ProceduralArrayMixin", 
+           "Waveform", 
+           "ProceduralWaveform", 
+           "ConstantWaveform"]
 
 class Array:
     """
@@ -18,7 +22,7 @@ class Array:
     references to it enclosed within other objects).
     """
     
-    def __init__(self, region=None):
+    def __init__(self, dtype, size=None, region=None):
         """
         Create an empty reference to an array.
         
@@ -50,7 +54,12 @@ class Array:
         # The actual underlying memory resource will be stored here
         self._resource = None
         
-    def allocate(self, size, dtype=np.uint8):
+        self._dtype = dtype
+        
+        if size is not None:
+            self.allocate(size)
+        
+    def allocate(self, size: int):
         """
         Create an instance of the underlying memory type, thereby reserving a
         resource ID for that type and notifying the compiler to reserve memory
@@ -63,16 +72,17 @@ class Array:
         :type dtype: np.dtype
         """
         self._size = size
-        self._dtype = dtype
         
         if self.allocated():
             raise ValueError("Attempted re-allocation of non-free memory")
                 
         if self._class is None:
-            self._resource = np.empty(shape=(size // dtype(0).nbytes,), 
-                                      dtype=dtype)
+            self._resource = np.empty(shape=(self._size // self._dtype(0).nbytes,), 
+                                      dtype=self._dtype)
         else:
-            self._resource = self._class(size=self._size, dtype=dtype)
+            self._resource = self._class(size=self._size, dtype=self._dtype)
+            
+        self._axis = np.arange(self._size)
             
     def allocated(self):
         """
@@ -87,6 +97,15 @@ class Array:
         reallocation.
         """
         self._resource = None
+        
+    def axis(self):
+        if not self.allocated():
+            raise ValueError(f"Unable to retrieve axis of unallocated array.")
+        
+        return self._axis
+    
+    def dtype(self):
+        return self._dtype
                 
     def __getitem__(self, k):
         if not self.allocated():
@@ -111,11 +130,19 @@ class Array:
         return self._size
     
     def memory(self):
+        """
+        Retrieve a reference to the underlying resource memory, if present.
+        
+        :raises: ``ValueError`` if the memory has not been allocated
+        :raises: ``AttributeError`` if the memory is not mapped, determined
+            by checking whether the underlying resource has a memory attribute.
+        
+        """
         if not self.allocated():
             raise ValueError("Attempted access of unallocated array")
         
         if not hasattr(self._resource, "memory"):
-            raise ValueError("Attempted access of unmapped memory.")
+            raise AttributeError("Attempted access of unmapped memory.")
         
         return self._resource.memory
     
@@ -142,62 +169,57 @@ class Array:
             raise ValueError("Attempted length access of unallocated array")
         
         return self._resource.byte_length()
+
         
-        
-class ProceduralArray(Array):
+class ProceduralArrayMixin:
     """
-    A wrapper for hardware arrays with efficient 
-    routines for dynamically populating them.
+    A mixin class for hardware arrays with efficient routines for dynamically
+    populating them.
     """
-    def __init__(self, generator, region=None):
+    
+    @property
+    def generator(self):
+        return self._generator
+    
+    @generator.setter
+    def generator(self, generator):
         """
-        Create an empty reference to an array.
+        Assign a generator.
         
         :param generator: A function that can be used to populate the array.
             This should be a callable that accepts a numpy array as the first
             argument, which is understood to be a mapped array encapsulating
-            the underlying memory. The function may accept any other positional
+            the underlying memory. The function must accept another numpy array
+            as its second argument, which is understood to be the axis values 
+            for the output array.The function may accept any other positional
             or keyword arguments, which will be able to passed in when the 
             array is populated.
-        :param region: The memory region in which to create the array. If an
-            instance of :class:`Channel`, the type of the underlying memory 
-            will be determined by the instance's ``memory_type`` attribute.
-            Otherwise, one may pass a subclass of ``type`` which will be
-            directly used to instantiate the array when allocated.
-        :type region: :class:`Channel` or :class:`ManagedMemory`
-        """
-        
+        :type generator: callable
+        """        
         self._generator = generator
-        super().__init__(region)
         
     def populate(self, *args, **kwargs):
         """
         Populate the underlying array resource, passing any arguments to the
-        encapsulated generator function.
+        encapsulated generator function. The object instance must implement
+        the method ``memory`` with a similar signature to ``Array.memory``.
         
-        :raises: ``AttributeError`` if the memory is not mapped, determined
-            by checking whether the underlying resource has a memory attribute.
         :raises: ``ValueError`` if the array does not have a generator
         """    
-        if not self.allocated():
-            raise ValueError("Attempted to populate non-allocated array")
-            
-        if not hasattr(self._resource, "memory"):
-            raise AttributeError(f"Attempted to populate non-mapped array")
         
         if self._generator is None:
             raise ValueError("Attempted to populate array without generator")
         
-        self._generator(self._resource.memory, *args, **kwargs)
+        self._generator(self.memory(), self.axis(), *args, **kwargs)
         
-
-class ProceduralWaveform(ProceduralArray):
+        
+class Waveform(Array):
     """
-    An extension of :class:`ProceduralArray` that is intended to sample 
+    An extension of :class:`Array` that is intended to sample 
     functions of time using parameters extracted from :class:`Channel` objects.
     """
     
-    def __init__(self, channel, generator, region=None, length=None):
+    def __init__(self, channel, length=None, region=None):
         """
         Create an empty reference to an array.
         
@@ -205,15 +227,6 @@ class ProceduralWaveform(ProceduralArray):
             procedurally populating the memory can be derived.
             
         :type channel: :class:`Channel`
-        
-        :param generator: A function that can be used to populate the array.
-            This should be a callable that accepts a numpy array as the first
-            argument, which is understood to be a mapped array encapsulating
-            the underlying memory. The second argument will be a numpy array 
-            of floats, which are understood to be the time values for the 
-            corresponding entries in the output array. The function may accept
-            any other positional or keyword arguments, which will be able to 
-            passed in when the array is populated.
         
         :param region: The memory region in which to create the array. If an
             instance of :class:`Channel`, the type of the underlying memory 
@@ -226,14 +239,10 @@ class ProceduralWaveform(ProceduralArray):
         :param length: The length of the waveform in seconds. If omitted,
             :meth:`allocate` must be called manually.
         
-        """
-        
-        self._time_axis = None
+        """        
         self._channel = channel
-        super().__init__(generator, region)
-        
-        if length is not None:
-            self.allocate(length)
+        self._length = length
+        super().__init__(np.int16, length, region)
         
     def allocate(self, length):
         """
@@ -244,36 +253,20 @@ class ProceduralWaveform(ProceduralArray):
         :param length: Waveform length in seconds
         :type length: float
         """
+        super().allocate(self._channel.seconds_to_bytes(length))
         
-        samples = self._channel.seconds_to_samples(length)
-        bytes_per_sample = 2*2 # factor of two because two quadratures
-        super().allocate(samples*bytes_per_sample, np.int16)
+        # Scale the element axis by the sample time
+        sample_times = np.arange(self._channel.seconds_to_samples(length))*self._channel.samples_to_seconds(1)
         
-        # Cache an array of time points for evaluating the generator
-        self._time_axis = np.arange(0, length, self._channel.samples_to_seconds(1))
+        # The sample times must be repeated because of the two quadratures
+        self._axis = np.repeat(sample_times, 2)
         
     def __len__(self):
         """
         :return: The length of the waveform in samples
         :rtype: int
         """
-        return self.byte_length() // 4
-        
-    def populate(self, *args, **kwargs):
-        """
-        Populate the underlying array resource, passing any arguments to the
-        encapsulated generator function.
-        
-        :raises: ``AttributeError`` if the memory is not mapped, determined
-            by checking whether the underlying resource has a memory attribute.
-        :raises: ``ValueError`` if the array does not have a generator
-        """    
-        super().populate(self._time_axis, *args, **kwargs)
-        
-    def axis(self):
-        if not self.allocated():
-            raise ValueError(f"Attempted axis access of unallocated waveform.")
-        return self._time_axis
+        return self._channel.bytes_to_samples(self.byte_length())
     
     def dma_parameters(self):
         """
@@ -284,9 +277,11 @@ class ProceduralWaveform(ProceduralArray):
             "length": self.byte_length() // self._channel.interface_width_bytes,
             "word_address": self.word_address()
         }]
-              
         
-class ConstantWaveform(ProceduralWaveform):
+class ProceduralWaveform(Waveform, ProceduralArrayMixin):
+    pass
+        
+class ConstantWaveform(Waveform):
     """
     A waveform with a constant value.
     """
@@ -298,38 +293,33 @@ class ConstantWaveform(ProceduralWaveform):
         :param length: Length of the constant in seconds
         :type length: float
         """
-        self._samples_per_cycle = channel.interface_width_bytes // 4
-        self._seconds_per_cycle = channel.samples_to_seconds(self._samples_per_cycle)
+        super().__init__(channel, length, channel.memory_type)
+        
+    def allocate(self, length):
+        # Allocate only a single cycle but store the length in time for later
         self._length = length
-        super().__init__(channel, None, channel.memory_type, self._seconds_per_cycle)
+        super().allocate(self._channel.bytes_to_seconds(self._channel.interface_width_bytes))
         
     def populate(self, value):
         """
-        Set the constant complex value and/or length of the waveform.
+        Set the complex amplitude of the constant.
         
         :param value: Waveform value
         :type value: complex
         
         """
         # Load the DAC memory with the new amplitude
-        arr = np.empty(self._channel.interface_width_bytes // 4, np.complex64)
+        arr = np.empty(self._channel.bytes_to_samples(self._channel.interface_width_bytes), np.complex64)
         arr.fill(value)
-        Channel.to_samples(arr, out=self._resource.memory)
-            
+        Channel.to_samples(arr, out=self.memory())
+        
     def dma_parameters(self):
         """
         Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
         """            
-        length_cycles = self._length / self._seconds_per_cycle
-        
-        if round(length_cycles, 5) != round(length_cycles):
-            raise ValueError(f"Received length corresponding to fractional"
-                                f" cycles: {self._length} s = {length_cycles}"
-                                " cycles")
-                
         return [{
             "channel": self._channel,
-            "length": round(length_cycles),
+            "length": self._channel.seconds_to_bytes(self._length) // self._channel.interface_width_bytes,
             "word_address": self.word_address(),
             "fixed": True
         }]

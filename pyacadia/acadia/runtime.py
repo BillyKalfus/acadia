@@ -8,7 +8,6 @@ import datetime
 import logging
 import pickle
 import json
-import signal 
 
 from threading import Thread, Event
 from abc import ABC, abstractclassmethod
@@ -27,13 +26,13 @@ class Runtime(ABC):
     
     # ---------------- Functions to be implemented or overridden by the user ------------- #
     @abstractclassmethod
-    def main(cls, directory, datamanager):
+    def main(cls, directory: str, datamanager: DataManager, kwargs: dict):
         """
         A function that will be run on the target upon deployment. 
         """
         pass
     
-    def plot(self):
+    def plot(self, fig):
         """
         This function should initialize any figures or other graphical objects
         and return a function that will update them along with the primary
@@ -45,19 +44,27 @@ class Runtime(ABC):
     
     # ---------------- Functions to be run on the host ---------------- #
     
+    def __init__(self, kwargs):
+        """
+        Create a local instance of the runtime
+        """
+        self._kwargs_json = json.dumps(kwargs)
+    
     def run(self, 
-            filename, 
             target_address, 
+            filename=None,
             remote_server_port=6672,
             remote_base_directory="/home/root", 
-            local_temp_directory="/tmp",
+            local_download_directory="/tmp",
             subdirectory_name=None,
             username="root", 
             display=True,
             upload_timeout=5, 
-            remote_log_level=logging.DEBUG,
+            log_level=logging.DEBUG,
             update_period=0.5,
-            multiplex_ssh=False):
+            multiplex_ssh=False,
+            remove_remote_directory=True,
+            copy_to_local=True):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
         target. A base directory must be supplied, within which a subdirectory 
@@ -90,20 +97,43 @@ class Runtime(ABC):
         Finally, on the target itself one should set "UsePAM no" in 
         ``/etc/ssh/sshd_config``.
   
-        """         
+        """      
         time_str = datetime.datetime.now(datetime.timezone.utc).strftime("%m%d%y-%H%M%S")
         subdirectory = subdirectory_name if subdirectory_name is not None else time_str
-        directory = os.path.join(remote_base_directory, subdirectory)
-        temp_directory = os.path.join(local_temp_directory, subdirectory)
-        remote_runtime_file = os.path.join(directory, filename)
+        self.remote_directory = os.path.join(remote_base_directory, subdirectory)
+        self.local_directory = os.path.join(local_download_directory, subdirectory)
+        
+        self._username = username
+        self._target_address = target_address
+        self._copy_to_local = copy_to_local
+        self._remove_remote_directory = remove_remote_directory
+        
+        os.mkdir(self.local_directory)
+        
+        logging.basicConfig(level=log_level, 
+                    filename=os.path.join(self.local_directory, "runtime.log"), 
+                    filemode="w",
+                    format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
+        
+        if filename is not None:
+            local_filepath = filename
+        elif hasattr(self, "FILENAME"):
+            local_filepath = self.FILENAME
+        else:
+            raise ValueError("Unable to identify file path for deployment")
+        
+        remote_runtime_file = os.path.join(self.remote_directory, 
+                                           os.path.basename(local_filepath))
         
         # Load the code to deploy        
-        with open(filename, "r") as file:
+        with open(local_filepath, "r") as file:
             code = file.read()
             
         code += f"\n\n"
         code += f"if __name__ == \"__main__\":\n"
-        code += f"    {self.__class__.__name__}.remote_main(\"{directory}\", {remote_log_level})\n"
+        code += f"    import json\n"
+        code += f"    kwargs = json.loads('{self._kwargs_json}')\n"
+        code += f"    {self.__class__.__name__}.remote_main(\"{self.remote_directory}\", {log_level}, kwargs)\n"
 
         multiplex_flags = ""
         if multiplex_ssh:
@@ -118,8 +148,8 @@ class Runtime(ABC):
             
         ssh_cmd = f"ssh {multiplex_flags} {username}@{target_address}"
 
-        logging.info(f"Creating remote directory {directory} and uploading runtime file")
-        cmd = f"{ssh_cmd} \"mkdir {directory}; cat > {remote_runtime_file};\""
+        logging.info(f"Creating remote directory {self.remote_directory} and uploading runtime file")
+        cmd = f"{ssh_cmd} \"mkdir {self.remote_directory}; cat > {remote_runtime_file};\""
         logging.debug(f"Executing command {cmd}")
         file_proc = subprocess.Popen(
             cmd, 
@@ -152,7 +182,7 @@ class Runtime(ABC):
         logging.info(f"Launching remote server")
         cmd = (f"{ssh_cmd} -t -t \"python3 -c \'"
             f"from acadia.runtime import RuntimeServer; "
-            f"RuntimeServer.serve(\\\"{directory}\\\", (\\\"\\\", {remote_server_port}), {remote_log_level});\'\"")
+            f"RuntimeServer.serve(\\\"{self.remote_directory}\\\", (\\\"\\\", {remote_server_port}), {log_level});\'\"")
         logging.debug(f"Executing command {cmd}")
         
         self._server_proc = subprocess.Popen(
@@ -188,9 +218,6 @@ class Runtime(ABC):
         self._server_address = (target_address, remote_server_port)
         
         # Create a new thread for keeping track of display elements and rendering
-        logging.debug(f"Creating local temporary directory {temp_directory}")
-        os.mkdir(temp_directory)
-        
         # Create an event for signalling threads to stop
         self._display_stop_event = Event()
         self._display_iteration_event = Event()
@@ -203,7 +230,7 @@ class Runtime(ABC):
                                             self._display_iteration_event, 
                                             self._server_address, 
                                             update_period, 
-                                            temp_directory),
+                                            self.local_directory),
                                         daemon=True)
             self._display_thread.start()
         else:
@@ -285,6 +312,15 @@ class Runtime(ABC):
             self._runtime_monitor_thread.join(timeout=timeout)
         except:
             logging.error("Runtime monitor thread did not join")
+            
+        # Copy the remote directory locally
+        if self._copy_to_local:
+            logging.debug(f"Copying data from {self.remote_directory} to {self.local_directory}")
+            os.system(f"scp {self._username}@{self._target_address}:{self.remote_directory}/* {self.local_directory}")
+            logging.debug(f"Copied")
+            
+        if self._remove_remote_directory:
+            os.system(f"ssh {self._username}@{self._target_address} rm -rf {self.remote_directory}")
         
         self._stop_button.disabled = True
             
@@ -374,7 +410,7 @@ class Runtime(ABC):
     # ----------------- Functions to be run on the target ----------------- #
 
     @classmethod
-    def remote_main(cls, directory, log_level):
+    def remote_main(cls, directory, log_level, kwargs):
         """
         This is the main entry point of the remote process. This should not 
         be called manually.
@@ -389,7 +425,7 @@ class Runtime(ABC):
             from acadia.data import DataManager
             mgr = DataManager(directory=directory)
             logging.info("Running main method")
-            cls.main(directory, mgr)
+            cls.main(directory, mgr, kwargs)
             logging.info("Main complete, saving")
             mgr.save()
             logging.info("Saved")

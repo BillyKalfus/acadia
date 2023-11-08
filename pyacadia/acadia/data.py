@@ -96,6 +96,13 @@ class RecordGroup:
         """
         return {}
     
+    def add_metadata(self, key, value):
+        """
+        Add an arbitrary piece of metadata to the group to be saved alongside 
+        it.
+        """
+        raise NotImplemented
+    
     def files(self) -> list:
         """
         :return: Lists files created by the group
@@ -213,6 +220,29 @@ class PlotMixin(DisplayMixin):
         buf.seek(0)
         img = Image(data=buf.read(), format="png", embed=True, width=720)
         display(img)
+        
+    @staticmethod
+    def update_line(plot_retval, xdata, ydata):
+        """
+        Update the data contained in a line created by calling `Axis.plot`. 
+        
+        :param plot_retval: Value returned by `plot`
+        :type plot_retval: tuple
+        """
+        plot_retval[0].set_data(xdata, ydata)
+        
+    @staticmethod
+    def update_yerrorbar(errorbar_retval, xdata, ydata, yerr):
+        """
+        Update the curve and error data on an errorbar.
+        """
+        ln,err,bars = errorbar_retval
+        ln.set_data(xdata, ydata)
+        
+        new_errorbars = [[[x,ydata[i]-yerr[i]],
+                          [x,ydata[i]+yerr[i]]] for i,x in enumerate(xdata)]
+        
+        bars[0].set_segments([np.array(points) for points in new_errorbars])
     
 class RecordGroupMeta(type):
     """
@@ -247,7 +277,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
     A collection of similarly-shaped array-like records.
     """
     
-    def __init__(self, name, cache_size = 10e6, record_axes=None, append_records=True):
+    def __init__(self, name, record_shape=None, dtype=None, record_axes=None, cache_size=10e6, append_records=True):
         """
         :param cache_size: The maximum size of an internal record cache in 
             bytes. This cache will be flushed either when :meth:`save` is
@@ -269,25 +299,41 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         self._cache_full = False
         self._append_records = append_records
         
-        self._record_shape = None
-        self._record_dtype = None
-        self._record_axes = record_axes if record_axes is not None else []
-        self._metadata = {}
+        if record_shape is not None:
+            self._record_shape = record_shape
+            if record_axes is not None:
+                if len(record_axes) != len(self._record_shape):
+                    raise ValueError(f"Received shape with"
+                                     f" {len(self._record_shape)} dimensions"
+                                     f" but {len(record_axes)} axes.")
+                self._record_axes = record_axes
+            else:
+                self._record_axes = []
+        else:
+            if record_axes is not None:
+                self._record_axes = record_axes
+                self._record_shape = tuple(len(axis) for axis in self._record_axes)
+            else:
+                self._record_axes = []
+                self._record_shape = None
+            
+        self._record_dtype = dtype 
+        self._metadata = {"files": {}}
         self._open_objects = []
             
     def metadata(self):
         """
         Retrieve metadata for all record files in the group. 
         
-        :return: A `dict` whose keys are file names and whose values are the
-            return values of `numpy.lib.format.header_data_from_array_1_0` for
-            the arrays backing those files.
         :rtype: dict
         """
         return self._metadata
     
     def files(self):
-        return list(self._metadata.keys())
+        return list(self._metadata["files"].keys())
+    
+    def add_metadata(self, key, value):
+        self._metadata[key] = value
     
     @staticmethod
     def filedeltas(metadata1, metadata2):
@@ -297,22 +343,25 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         # return the full size of the file at offset 0. Otherwise, return an
         # offset given by the size of file 1 and a size given by the difference
         # in file sizes
-        for filename,file_header2 in metadata2.items():
+        for filename,file_header2 in metadata2["files"].items():
             dtype = descr_to_dtype(file_header2["descr"])
             size_bytes2 = dtype.itemsize*reduce(operator.mul, file_header2["shape"])
             
-            if metadata1 is None or filename not in metadata1 or (not metadata1[filename]["appending"]):
+            if (metadata1 is None 
+                    or "files" not in metadata1
+                    or filename not in metadata1["files"] 
+                    or (not metadata1["files"][filename]["appending"])):
                 deltas[filename] = (0, size_bytes2)
             else:
-                if json.dumps(metadata1[filename]["descr"]) != json.dumps(file_header2["descr"]):
+                if json.dumps(metadata1["files"][filename]["descr"]) != json.dumps(file_header2["descr"]):
                     raise TypeError(f"Descriptor mismatch between metadata for"
                                     f" file {filename}:\n"
                                     f"    metadata1: {metadata1}\n"
                                     f"    metadata2: {metadata2}")
                     
-                size_bytes1 = dtype.itemsize*reduce(operator.mul, metadata1[filename]["shape"])
+                size_bytes1 = dtype.itemsize*reduce(operator.mul, metadata1["files"][filename]["shape"])
                 deltas[filename] = (size_bytes1, size_bytes2-size_bytes1)
-                
+
         return deltas
     
     def allocate_cache(self, record):
@@ -332,8 +381,11 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         self._cache = None
         self._cache_count = None
         
-        self._record_shape = record.shape
-        self._record_dtype = record.dtype
+        if self._record_shape is None:
+            self._record_shape = record.shape
+            
+        if self._record_dtype is None:
+            self._record_dtype = record.dtype
     
         # Using integer division will round down for us
         if self._cache_size > record.nbytes:
@@ -356,8 +408,8 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 logging.debug(f"Saving {filename}")
                 with open(full_path, "wb") as f:
                     axis.tofile(f)
-                self._metadata[filename] = header_data_from_array_1_0(axis)
-                self._metadata[filename]["appending"] = True
+                self._metadata["files"][filename] = header_data_from_array_1_0(axis)
+                self._metadata["files"][filename]["appending"] = True
         if self._cache is None:
             logging.info(f"`save` called with no saveable data")
             
@@ -368,22 +420,22 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             # Extend the existing number of records by an amount equal to 
             # what's in the cache
             incr = self._cache_count if self._cache_count is not None else 1
-            self._metadata[filename]["shape"] = (self._metadata[filename]["shape"][0] + incr, 
-                                                *self._metadata[filename]["shape"][1:])
+            self._metadata["files"][filename]["shape"] = (self._metadata["files"][filename]["shape"][0] + incr, 
+                                                *self._metadata["files"][filename]["shape"][1:])
             
         else:
             # Create a new entry in the metadata
             # We'll copy all the header information from the cache, but depending
             # on whether we have a cache, we may need to add a dimension to the shape
-            self._metadata[filename] = header
-            self._metadata[filename]["appending"] = self._append_records
+            self._metadata["files"][filename] = header
+            self._metadata["files"][filename]["appending"] = self._append_records
             if self._cache_count is None:
                 # No cache, add a dimension for number of records
-                self._metadata[filename]["shape"] = (1, *self._metadata[filename]["shape"])
+                self._metadata["files"][filename]["shape"] = (1, *self._metadata["files"][filename]["shape"])
             else:
                 # Even though the header has an axis for record number,
                 # the header will contain the max cache size for this axis
-                self._metadata[filename]["shape"] = (self._cache_count, *self._metadata[filename]["shape"][1:])
+                self._metadata["files"][filename]["shape"] = (self._cache_count, *self._metadata["files"][filename]["shape"][1:])
             
         with open(os.path.join(directory, filename), 
                   ("ab" if self._append_records else "wb")) as f:
@@ -393,6 +445,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 self._cache_count = 0
             else:
                 self._cache.tofile(f)
+                self._cache = None
                 
         self._cache_full = False
             
@@ -404,13 +457,17 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                           f" directory {directory}")
             return None
         
-        if filename not in header_data:
+        if "files" not in header_data:
+            logging.debug(f"Incorrect header data format (not 'files' entry found)")
+            return None
+        
+        if filename not in header_data["files"]:
             logging.debug(f"No header for {filename} found")
             return None
         
-        dtype = descr_to_dtype(header_data[filename]["descr"])
-        order = 'F' if header_data[filename]["fortran_order"] else 'C'
-        shape = tuple(header_data[filename]["shape"])
+        dtype = descr_to_dtype(header_data["files"][filename]["descr"])
+        order = 'F' if header_data["files"][filename]["fortran_order"] else 'C'
+        shape = tuple(header_data["files"][filename]["shape"])
         count = reduce(operator.mul, shape)
         size = count*dtype.itemsize
         
@@ -445,8 +502,8 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                                         metadata, 
                                         map)
         
-        self._metadata[records_filename] = header_data_from_array_1_0(self._cache)
-        self._metadata[records_filename]["appending"] = metadata[records_filename]["appending"]
+        self._metadata["files"][records_filename] = header_data_from_array_1_0(self._cache)
+        self._metadata["files"][records_filename]["appending"] = metadata["files"][records_filename]["appending"]
         
         self._record_axes = []
         for axis_idx in count():
@@ -454,10 +511,15 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             if os.path.exists(os.path.join(directory, axis_filename)):
                 axis = self._load_array(axis_filename, directory, metadata, map)
                 self._record_axes.append(axis)
-                self._metadata[axis_filename] = header_data_from_array_1_0(axis)
-                self._metadata[axis_filename] = metadata[axis_filename]["appending"]
+                self._metadata["files"][axis_filename] = header_data_from_array_1_0(axis)
+                self._metadata["files"][axis_filename]["appending"] = metadata["files"][axis_filename]["appending"]
             else:
                 break
+            
+        # Load any other miscellaneous keys
+        for k,v in metadata.items():
+            if k != "files":
+                self._metadata[k] = v
             
     def close(self):
         for obj in self._open_objects:
@@ -465,18 +527,19 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         self._open_objects = []
     
     def write(self, record):
-        if self._record_shape is None or self._record_dtype is None:
-            self.allocate_cache(record)        
-            
-        elif record.shape != self._record_shape:
+        if self._record_shape is not None and record.shape != self._record_shape:
             raise ValueError(f"Incompatible record shape (expected"
                             f" {self._record_shape}, received {record.shape})")
-        elif record.dtype != self._record_dtype:
-            raise TypeError(f"Incorrect type for record; expected {self._record_dtype}, received {record.dtype}")
+            
+        if self._record_dtype is not None and record.dtype != self._record_dtype:
+            raise TypeError(f"Incorrect type for record; expected {self._record_dtype}, received {record.dtype}")     
             
         if self._cache_full:
             raise MemoryError(f"Attempted to append record to group"
                               f" {self._name} with full cache.")
+            
+        if self._cache_count is None:
+            self.allocate_cache(record)   
         
         # If the cache is still None, then it was determined that a cache 
         # will be unable to hold a single record
@@ -489,6 +552,14 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             if self._cache_count == self._cache_size:
                 self._cache_full = True
                 
+    def empty_record(self):
+        if self._record_shape is None:
+            raise ValueError("Unable to create a blank record without knowledge of size")
+        
+        if self._record_dtype is None:
+            raise ValueError("Unable to create a blank record without knowledge of type")
+        
+        return np.empty(shape=self._record_shape, dtype=self._record_dtype)
             
     def __len__(self):
         return self._cache_count
@@ -507,6 +578,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         :type idx: int
         """
         return self._record_axes[idx]
+
     
 class NumericTableRecordGroup(ArrayRecordGroup):
     """
@@ -522,7 +594,7 @@ class NumericTableRecordGroup(ArrayRecordGroup):
     In both cases, the type of the argument is inferred.
     """
     
-    def __init__(self, name="Table", cache_size = 10e6, record_axes=None, fields=None):
+    def __init__(self, name="Table", cache_size=10e6, record_axes=None, fields=None):
         """
         :param fields: If not `None`, this should be a valid argument to 
             `numpy.dtype` for constructing the data type of the record 
@@ -607,7 +679,7 @@ class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
     def initialize_display(self):
         if isinstance(self._value, (int, float)):
             from tqdm.notebook import tqdm
-            bar = tqdm(total=self._total, **self._widget_kwargs)
+            bar = tqdm(total=self._total, desc=self._name, **self._widget_kwargs)
             bar.update(self._value)
         else:
             raise TypeError(f"Incompatible type for progress display:"
@@ -646,7 +718,6 @@ class DataManager:
         self._save_count = save_count
         self._groups = {}
         self._record_count = 0
-        self._progress = {}
         
     def write(self, group_name, record):
         self._groups[group_name].write(record)
