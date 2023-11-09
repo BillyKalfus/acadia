@@ -128,7 +128,7 @@ class DMASynchronizer(Synchronizer):
             # Wait until all the DMAs in the mask have completed
             dma_running_device = self._acadia._firmware.sequencer_bus_decoder["dma_running"]
             bus_op = proc.bus_read(dma_running_device.address().value(),
-                        latency=self._acadia.get_bus_latency("dma_running_dataport"))
+                        latency=self._acadia._bus_latency("dma_running_dataport"))
             with proc.repeat_until(bus_op & self.dma_mask == 0):
                 pass
 
@@ -368,6 +368,24 @@ class RFDCSynchronizer(Synchronizer):
                             comment="Write TDD mode clear register")
             
         super().__exit__(exc_type, exc_val, exc_tb)
+        
+@dataclass
+class StreamConfiguration:
+    """
+    An abstraction for configurations of the stream processing path.
+    """
+    
+    input_source: object
+    module: str 
+    input_resource: object
+    module_resource: object
+    adc_switch_master: int
+    adc_switch_slave: int
+    input_switch_master: int
+    input_switch_slave: int
+    
+    def output_datamover(self):
+        return f"module{self.input_switch_slave}_s2mm_datamover"
     
 class Acadia:
     """
@@ -414,6 +432,8 @@ class Acadia:
                                                             "switch_port": module_switch_port}, 
                                                            allocation_limit=len(v)) 
                                         for k,v in self._firmware.stream_modules().items()}
+        
+        self._stream_configurations = []
         
         # Create various Processors
         # Note that the Processors cannot be ManagedMemory (and therefore, have the
@@ -568,7 +588,7 @@ class Acadia:
     
     def sequence(self, func):
         """
-        Compiles a Python functiond as a sequence for the Acadia sequencer. 
+        Compiles a Python function as a sequence for the Acadia sequencer. 
         The wrapped function should accept an instance of :class:`Acadia` as
         its sole argument.
         
@@ -583,6 +603,8 @@ class Acadia:
         
         # Drive the sequencer done pin low
         s.bus_write(address=self._firmware.sequencer_bus_decoder["ps_gpio5"].address(), data=0)
+        
+        # Reset all the stream modules
         
         # Store this particular Sequencer instance as an instance member of the 
         # Acadia object so that helper functions of the Acadia object know to 
@@ -1044,15 +1066,18 @@ class Acadia:
             
         
     @requires_sequencer
-    def capture(self, configuration, dst):
+    def capture(self, channel, dst):
         """
-        Capture a waveform on an ADC.
+        Capture a waveform on an ADC into memory.
         
-        :param configuration:
+        :param channel: ADC channel to stream from
+        :type channel: :class:`Channel`
         """
+        cfg = self._request_stream_configuration(channel, "memory")
+        
         # We only need to command the datamover and notify the synchronizer,
         # which will then add the DMA command for us
-        self._sequencer_command_datamover(f"module{configuration._input_switch_slave}_s2mm_datamover", 
+        self._command_datamover(cfg.output_datamover(), 
                                    dst.byte_address(),
                                    dst.byte_length())
         
@@ -1061,8 +1086,8 @@ class Acadia:
             "self": self, 
             "args": (), 
             "kwargs": {
-                "channel": configuration.input_source,
-                "length": dst.byte_length() // configuration.input_source.interface_width_bytes,
+                "channel": channel,
+                "length": dst.byte_length() // channel.interface_width_bytes,
                 "word_address": 0
             },
             "retval": None})
@@ -1111,7 +1136,7 @@ class Acadia:
         pass
         
     @requires_sequencer
-    def memcpy(self, configuration, src, dst):
+    def memcpy(self, configuration: StreamConfiguration, src, dst):
         """
         Carry out a memory transfer using the stream processing path.
         
@@ -1126,51 +1151,108 @@ class Acadia:
         # TODO: Add some checks to make sure that data from src can get to dst
         # using the provided configuration
         
-        self._sequencer_command_datamover(f"module{configuration._input_switch_slave}_s2mm_datamover", 
+        self._command_datamover(configuration.output_datamover(), 
                                    dst.byte_address(),
                                    src.byte_length())
-        self._sequencer_command_datamover(f"input{configuration._input_switch_master}_datamover", 
+        self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
                                    src.byte_address(),
                                    src.byte_length())
 
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
-
-    def get_bus_latency(self, port):
+        
+    @requires_sequencer
+    def stream_reset(self, configuration: StreamConfiguration):
         """
-        Get the latency for a port on the sequencer's bus, taking into account
-        any pipelining configured in the firmware.
-
-        :param port: Bus port name. Must either be a key in the 
-            ``SEQUENCER_BUS``  section of the firmware configuration, or
-            ``cache``\.
-        :type port: str
+        Reset the datamover controller, module, and any associated FIFOs.
         """
-        # One cycle to load the bus registers in the sequencer
-        latency = 1 
+        # Reset the DataMover controller
+        address = self._firmware.sequencer_bus_decoder[f"{configuration.output_datamover()}_controller"].address().value()
+        self.sequencer().bus_write(address=address+3, data=0)
+        
+        # Reset the module
+        if configuration.module_resource.kind == "adder":
+            address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
+            self.sequencer().bus_write(address=address, data=(1 << 2))
+        elif configuration.module_resource.kind == "dsp":
+            address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
+            self.sequencer().bus_write(address=address, data=(1 << 4))
+        elif configuration.module_resource.kind == "cmacc":
+            address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value() + 2
+            self.sequencer().bus_write(address=address, data=(1 << 24))
 
-        if self._firmware["sequencer_bus"]["decoder_pipeline_miso"]:
-            latency += 1
+    @requires_sequencer
+    def stream_count(self, configuration: StreamConfiguration):
+        """
+        Retrieve the number of status words produced for the DataMover in the 
+        provided stream configuration.
 
-        # Datamover controllers have a read latency of 1 because its MISO is driven
-        # in a synchronous process
-        if "datamover_controller" in port:
-            latency += 1
+        :param configuration: Configuration to check
+        :type configuration: :class:`StreamConfiguration`
+        """
+        datamover_name = configuration.output_datamover() + "_controller"
+        address = self._firmware.sequencer_bus_decoder[datamover_name] + 1
+        return self._active_sequencer.bus_read(address, 
+                                        comment=f"Writing bus address register to"
+                                                f" retrieve status count for {datamover_name}",
+                                        latency=self._bus_latency(datamover_name))
+    
+    @requires_sequencer
+    def stream_total_bytes_transferred(self, configuration: StreamConfiguration):
+        """
+        Retrieve the number of status words produced for the DataMover in the 
+        provided stream configuration.
+
+        :param configuration: Configuration to check
+        :type configuration: :class:`StreamConfiguration`
+        """
+        datamover_name = configuration.output_datamover() + "_controller"
+        address = self._firmware.sequencer_bus_decoder[datamover_name] + 2
+        return self.sequencer().bus_read(address, 
+                                        comment=f"Writing bus address register to"
+                                                f" retrieve status count for {datamover_name}",
+                                        latency=self._bus_latency(datamover_name))  
             
-        elif "_dma" in port:
-            # adc<x>_dma or dac<x>_dma
-            port_idx = int(port[3:port.index("_")])
-            port_idx += 16 if port.startswith("adc") else 0
-            latency += 1 if self._firmware["sequencer_bus"]["dma_pipeline"][port_idx] else 0
-        elif port == "cache":
-            # One additional cycle minimum because the memory has a read latency of 1
-            # even before any pipelining because it's a synchronous memory
-            latency += 1 
-            latency += self._firmware["sequencer_cache_memory"]["bus_port_input_pipeline"]
-            latency += self._firmware["sequencer_cache_memory"]["bus_port_output_pipeline"]
-        elif self._firmware["sequencer_bus"][port]["bus_pipeline"]:
-            latency += 1
+    @requires_sequencer
+    def dma_trigger(self, *channels):
+        """
+        Trigger the DMAs associated with the provided channels.
 
-        return latency
+        :param channels: List of channels
+        """
+        mask = 0
+        for channel in channels:
+            mask |= self.get_dma(channel).mask
+
+        dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
+        self.sequencer().bus_write(address=dma_trigger_device.address().value(),
+                                 data=mask,
+                                 comment="DMA trigger")
+        
+    @requires_sequencer
+    def dma_block(self, *channels):
+        """
+        Wait until the DMAs for the specified channels are not running.
+        """
+        mask = 0
+        for channel in channels:
+            mask |= self.get_dma(channel).mask
+
+        dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
+        dma_running = self.sequencer().bus_read(address=dma_running_device.address().value(),
+                                                      latency=self._bus_latency("dma_running_dataport"))
+        with self.sequencer().repeat_until(dma_running & mask == 0):
+            pass
+        
+    @requires_sequencer
+    def dma_reset(self, channel):
+        """
+        Reset the DMAs associated with the provided channel
+        """
+        dma_name = f"{'dac' if channel.is_dac else 'adc'}{channel.num}_dma"
+        dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value() + 1
+        self.sequencer().bus_write(address=dma_regs_address,
+                                 data=0x00000001,
+                                 comment=f"Reset DMA {dma_name}")
         
     @requires_sequencer
     def dma_fifo_occupancy(self, channel):
@@ -1184,8 +1266,8 @@ class Acadia:
         dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num}_dma'
         device = self._firmware.sequencer_bus_decoder[dev_name]
 
-        bus_op = self._active_sequencer.bus_read(device.address().value(), 
-                                                 latency=self.get_bus_latency(dev_name))
+        bus_op = self.sequencer().bus_read(device.address().value(), 
+                                                 latency=self._bus_latency(dev_name))
         # Mask away the running bit
         return bus_op & 0b1111 != 0
     
@@ -1205,99 +1287,12 @@ class Acadia:
         
         bus_address = self._firmware.dma_running.address().value()
 
-        return self._active_sequencer.bus_read(bus_address, 
-                                               latency=self.get_bus_latency("dma_running_dataport"))
-
-    @requires_sequencer
-    def stream_count(self, configuration):
-        """
-        Retrieve the number of status words produced for the DataMover in the 
-        provided stream configuration.
-
-        :param configuration: Configuration to check
-        :type configuration: :class:`StreamConfiguration`
-        """
-        datamover_name = f"module{configuration._input_switch_slave}_s2mm_datamover_controller"
-        address = self._firmware.sequencer_bus_decoder[datamover_name] + 1
-        return self._active_sequencer.bus_read(address, 
-                                        comment=f"Writing bus address register to"
-                                                f" retrieve status count for {datamover_name}",
-                                        latency=self.get_bus_latency(datamover_name))
-    
-    @requires_sequencer
-    def stream_total_bytes_transferred(self, configuration):
-        """
-        Retrieve the number of status words produced for the DataMover in the 
-        provided stream configuration.
-
-        :param configuration: Configuration to check
-        :type configuration: :class:`StreamConfiguration`
-        """
-        datamover_name = f"module{configuration._input_switch_slave}_s2mm_datamover_controller"
-        address = self._firmware.sequencer_bus_decoder[datamover_name] + 2
-        return self._active_sequencer.bus_read(address, 
-                                        comment=f"Writing bus address register to"
-                                                f" retrieve status count for {datamover_name}",
-                                        latency=self.get_bus_latency(datamover_name))  
-
-    @requires_sequencer     
-    def stream_reset(self, configuration):
-        """
-        Resets the stream datamover controllers and modules.
-        
-        :param configuration: Configuration to reset
-        :type configuration: :class:`StreamConfiguration`
-        """
-
-        module = configuration._input_switch_slave
-        address = self._firmware.sequencer_bus_decoder[f"module{module}_s2mm_datamover_controller"].address().value() + 3
-        self._active_sequencer.bus_write(address=address, data=0xFFFFFFFF)
-            
-    @requires_sequencer
-    def dma_trigger(self, *channels):
-        """
-        Trigger the DMAs associated with the provided channels.
-
-        :param channels: List of channels
-        """
-        mask = 0
-        for channel in channels:
-            mask |= self.get_dma(channel).mask
-
-        dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
-        self._active_sequencer.bus_write(address=dma_trigger_device.address().value(),
-                                 data=mask,
-                                 comment="DMA trigger")
-        
-    @requires_sequencer
-    def dma_block(self, *channels):
-        """
-        Wait until the DMAs for the specified channels are not running.
-        """
-        mask = 0
-        for channel in channels:
-            mask |= self.get_dma(channel).mask
-
-        dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
-        dma_running = self._active_sequencer.bus_read(address=dma_running_device.address().value(),
-                                                      latency=self.get_bus_latency("dma_running_dataport"))
-        with self._active_sequencer.repeat_until(dma_running & mask == 0):
-            pass
-        
-    @requires_sequencer
-    def dma_reset(self, channel):
-        """
-        Reset the DMAs associated with the provided channel
-        """
-        dma_name = f"{'dac' if channel.is_dac else 'adc'}{channel.num}_dma"
-        dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value() + 1
-        self._active_sequencer.bus_write(address=dma_regs_address,
-                                 data=0x00000001,
-                                 comment=f"Reset DMA {dma_name}")
+        return self.sequencer().bus_read(bus_address, 
+                                               latency=self._bus_latency("dma_running_dataport"))
 
     # -------------- RUNTIME UTILITIES ----------- #
     
-    def run(self, assemble=True, block=True):
+    def run(self, assemble=True, configure_streams=True, block=True):
         """
         Assemble, load, and run a sequence on Acadia hardware.
         Significant speedups may be achieved if reassembly is not
@@ -1308,6 +1303,9 @@ class Acadia:
         """
         if assemble:
             self.load(*self.assemble())
+        if configure_streams:
+            for cfg in self._stream_configurations:
+                self.configure_stream(cfg)
         self.sequencer_reset()
         self.sequencer_run()
         
@@ -1321,19 +1319,19 @@ class Acadia:
         """
         return PSGPIO.sysfs_read(self._sequencer_done)
 
-    def configure_stream(self, stream):
+    def configure_stream(self, configuration: StreamConfiguration):
         """
         Configure the stream processing path according to a stream description.
         
         :param stream: Stream configuration to apply
         :type stream: :class:`StreamConfiguration`
         """
-        self._stream_processing_path_input_switch.connect(stream._input_switch_slave, 
-                                                          stream._input_switch_master)
+        self._stream_processing_path_input_switch.connect(configuration.input_switch_slave, 
+                                                          configuration.input_switch_master)
         
-        if stream._adc_switch_master is not None:
-            self._ADC_input_switch.connect(stream._adc_switch_slave, 
-                                           stream._adc_switch_master)
+        if configuration.adc_switch_master is not None:
+            self._ADC_input_switch.connect(configuration.adc_switch_slave, 
+                                           configuration.adc_switch_master)
         
     def compile(self, sequence, overwrite=False):
         """
@@ -1527,7 +1525,7 @@ class Acadia:
             return self._psgpio_mem[(PSGPIO.PSGPIO3_IN_PSREG >> 2) + port - 3]
         elif isinstance(proc, Sequencer):
             addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
-            return proc.bus_read(addr, latency=self.get_bus_latency(f"ps_gpio{port}"))
+            return proc.bus_read(addr, latency=self._bus_latency(f"ps_gpio{port}"))
         else:
             raise TypeError(f"Unable to access GPIO on processor {proc}.")
         
@@ -1582,7 +1580,7 @@ class Acadia:
                 return cache_self.memory[key]
             elif isinstance(proc, Sequencer):
                 return proc.bus_read(cache_self.word_address() + key, 
-                                     latency=self.get_bus_latency("cache"))
+                                     latency=self._bus_latency("cache"))
             return Operation("getitem", cache_self, key)
             
         def _cache_setitem(cache_self, key, value):
@@ -1749,7 +1747,7 @@ class Acadia:
         
         return np.frombuffer(m, dtype=dtype)
 
-    def _sequencer_command_datamover(self, datamover_name, address, size, tag=0xA, incr=True, address_base=None):
+    def _command_datamover(self, datamover_name, address, size, tag=0xA, incr=True, address_base=None):
         """
         Configure a DataMover (either MM2S or S2MM).
 
@@ -1812,96 +1810,120 @@ class Acadia:
                             data=size)
         self._active_sequencer.bus_write(address=bus_address_base, 
                             data=addr_reg)
+               
+    def _bus_latency(self, port):
+        """
+        Get the latency for a port on the sequencer's bus, taking into account
+        any pipelining configured in the firmware.
+
+        :param port: Bus port name. Must either be a key in the 
+            ``SEQUENCER_BUS``  section of the firmware configuration, or
+            ``cache``\.
+        :type port: str
+        """
+        # One cycle to load the bus registers in the sequencer
+        latency = 1 
+
+        if self._firmware["sequencer_bus"]["decoder_pipeline_miso"]:
+            latency += 1
+
+        # Datamover controllers have a read latency of 1 because its MISO is driven
+        # in a synchronous process
+        if "datamover_controller" in port:
+            latency += 1
             
-@dataclass
-class StreamConfiguration:
-    """
-    An abstraction for configurations of the stream processing path.
+        elif "_dma" in port:
+            # adc<x>_dma or dac<x>_dma
+            port_idx = int(port[3:port.index("_")])
+            port_idx += 16 if port.startswith("adc") else 0
+            latency += 1 if self._firmware["sequencer_bus"]["dma_pipeline"][port_idx] else 0
+        elif port == "cache":
+            # One additional cycle minimum because the memory has a read latency of 1
+            # even before any pipelining because it's a synchronous memory
+            latency += 1 
+            latency += self._firmware["sequencer_cache_memory"]["bus_port_input_pipeline"]
+            latency += self._firmware["sequencer_cache_memory"]["bus_port_output_pipeline"]
+        elif self._firmware["sequencer_bus"][port]["bus_pipeline"]:
+            latency += 1
+
+        return latency
     
-    The ``input_source`` field defines the source of data driving the stream. 
-    If ``input_source`` is a 
-    :class:`Channel` object (which must be an ADC), then the default behavior 
-    will depend on whether the specified ADC is directly connected to the input
-    switch. If ``input_source`` is a string, it is understood to specify the 
-    kind of input to request.
-    
-    The ``module`` field indicates which kind of stream processing module to 
-    use.
-    """
-    
-    input_source: object
-    acadia: Acadia 
-    module: str = "memory"
-    adc_switch_output_num : int = None
-    
-    def __post_init__(self):
+    def _request_stream_configuration(self, input_source, module) -> StreamConfiguration:
+        """
+        Request configuration parameters for a stream. Streams are uniquely 
+        determined by their input source and by the module that processes them.
+        The :class:`Acadia` object will store an internal list of all 
+        :class:`StreamConfiguration` objects created with this method and will
+        reuse them when an identical configuration is requested.
         
+        :param input_source: The source of data driving the stream. If this is 
+            a :class:`Channel` object (which must be an ADC), then the default
+            behavior will depend on whether the specified ADC is directly 
+            connected to the input switch. If a string, it is understood to
+            specify the kind of input to request.
+        :type input_source: :class:`Channel` or str
+        :param module: The kind of stream processing module to use. Must be one
+            of "adder", "dsp", or "memory".
+        :type module: str
+        """
+        for cfg in self._stream_configurations:
+            if cfg.input_source == input_source and cfg.module == module:
+                return cfg
+            
         # Establish some hidden fields for mapping requested inputs and 
         # modules to internal switch port numbers
-        self._input_resource = None
-        self._module_resource = None
-        self._adc_switch_master = None
-        self._adc_switch_slave = None
+        input_resource = None
+        module_resource = None
+        adc_switch_master = None
+        adc_switch_slave = None
         
-        if isinstance(self.input_source, Channel):
-            if self.input_source.is_dac:
+        if isinstance(input_source, Channel):
+            if input_source.is_dac:
                 raise ValueError("Input source channels must be ADCs.")
             
             # We now need to determine which switch input port to use
             # First, check if the ADC is directly connected to the input switch
-            name = f"ADC{self.input_source.num}"
-            if name in self.acadia._stream_input_resources:
-                self._input_resource = self.acadia._stream_input_resources[name]()
+            name = f"ADC{input_source.num}"
+            if name in self._stream_input_resources:
+                input_resource = self._stream_input_resources[name]()
             else:
-                self._input_resource = self.acadia._stream_input_resources["ADC_switch"]()                
-                self._adc_switch_slave = self._input_resource._resource_id
+                input_resource = self._stream_input_resources["ADC_switch"]()                
+                adc_switch_slave = input_resource._resource_id
                 
                 # Figure out which master for the ADC switch it is
-                adc_switch_inputs = list(range(self.acadia._firmware.NUM_ADCS))
-                for inp in self.acadia._firmware["stream_processing_path"]["inputs"]:
+                adc_switch_inputs = list(range(self._firmware.NUM_ADCS))
+                for inp in self._firmware["stream_processing_path"]["inputs"]:
                     if inp["kind"] == "ADC":
                         adc_switch_inputs.remove(inp["channel"])
                 
                 # This will raise an exception if it's not in the list
-                self._adc_switch_master = adc_switch_inputs.index(self.input_source.num)
+                adc_switch_master = adc_switch_inputs.index(input_source.num)
             
         elif isinstance(self.input_source, str):
-            self._input_resource = self.acadia._stream_input_resources[self.input_source]()
+            input_resource = self._stream_input_resources[input_source]()
             
         else:
-            raise TypeError(f"Invalid type of input source ({type(self.input_source)})")
+            raise TypeError(f"Invalid type of input source ({type(input_source)})")
         
-        self._input_switch_master = self._input_resource.switch_port()
+        input_switch_master = input_resource.switch_port()
         
         # Now determine which module to use
-        if not isinstance(self.module, str):            
-            raise TypeError(f"Invalid type for specifying module: {type(self.input_source)}")
+        if not isinstance(module, str):            
+            raise TypeError(f"Invalid type for specifying module: {type(module)}")
         
-        self._module_resource = self.acadia._stream_module_resources[self.module]()
-        self._input_switch_slave = self._module_resource.switch_port()
-    
-    def reset(self):
-        """
-        Reset the datamover controller, module, and any associated FIFOs.
-        """
-        # Reset the DataMover controller
-        address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_s2mm_datamover_controller"].address().value()
-        self.acadia._active_sequencer.bus_write(address=address+3, data=0)
+        module_resource = self._stream_module_resources[module]()
+        input_switch_slave = module_resource.switch_port()
         
-        if self._module_resource.kind == "adder":
-            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value()
-            self.acadia._active_sequencer.bus_write(address=address, data=(1 << 2))
-        elif self._module_resource.kind == "dsp":
-            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value()
-            self.acadia._active_sequencer.bus_write(address=address, data=(1 << 4))
-        elif self._module_resource.kind == "cmacc":
-            address = self.acadia._firmware.sequencer_bus_decoder[f"module{self._input_switch_slave}_registers"].address().value() + 2
-            self.acadia._active_sequencer.bus_write(address=address, data=(1 << 24))
-            
-    def release(self):
-        """
-        Release the module resources required for the configuration.
-        """
-        self._input_resource._released = True
-        self._module_resource._released = True
-            
+        cfg = StreamConfiguration(input_source, 
+                                   module, 
+                                   input_resource, 
+                                   module_resource, 
+                                   adc_switch_master, 
+                                   adc_switch_slave, 
+                                   input_switch_master, 
+                                   input_switch_slave)
+        
+        self._stream_configurations.append(cfg)
+        
+        return cfg
+        

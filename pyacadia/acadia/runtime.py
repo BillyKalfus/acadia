@@ -350,7 +350,7 @@ class Runtime(ABC):
                     
                     metadata = json.loads(metadata_string)
                     filedeltas = mgr.filedeltas(metadata)
-                    # logging.debug(f"Received deltas {filedeltas}")
+                    logging.debug(f"Received deltas {filedeltas}")
                     
                     for filename,(offset,size) in filedeltas.items():
                         if size == 0:
@@ -377,6 +377,10 @@ class Runtime(ABC):
                                                      f" offset {offset}")
                                 with open(file_path, "wb") as f:
                                     f.write(file_bytes)
+                        else:
+                            logging.error(f"Received filedelta for file"
+                                          f" {filename} with size {size} but"
+                                          f" server returned no file data")
                                 
                     mgr.load(reload=True)
                     

@@ -27,7 +27,7 @@
 --     (determined by a programmable overflow value) and when the packet ends.
 --     DSP behavior can be specified independently for the following events:
 --         Packet start: This configuration is applied for only the first cycle of the packet.
---         Counter start: This configuration is applied when the counter overflows (that is, 
+--         Counter start: This configuration is applied after the counter overflows (that is, 
 --                        the first cycle of a new counter period but not the first of the packet).
 --         Counter running: This configuration is applied when the counter is running, but only when
 --                           it's not the first cycle of a packet and when it's not the first cycle 
