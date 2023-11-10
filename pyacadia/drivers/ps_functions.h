@@ -34,19 +34,22 @@ int add_rows_input_phys_output_phys(
 void to_samples(
     float*, // input,
     int16_t*, // output,
-    uint32_t // n
+    uint32_t, // n
+    float // scale
 );
 
 void to_samples_simd(
     float*, // input,
     int16_t*, // output,
-    uint32_t // n
+    uint32_t, // n
+    float // scale
 );
 
 void to_samples_simd_batched(
     float*, // input,
     int16_t*, // output,
-    uint32_t // n
+    uint32_t, // n
+    float // scale
 );
 
 // https://github.com/Xilinx/u-boot-xlnx/blob/master/arch/arm/cpu/armv8/generic_timer.c

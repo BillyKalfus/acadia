@@ -203,24 +203,28 @@ int add_rows_input_phys_output_phys(
 void to_samples(
     float* input,
     int16_t* output,
-    uint32_t n
+    uint32_t n,
+    float scale
 ) {
+    float total_scale = scale*(1 << 15);
     for(uint32_t i = 0; i < n; i++) {
-        output[i] = round(input[i] * (1 << 15));
+        output[i] = round(input[i] * total_scale);
     }
 }
 
 void to_samples_simd(
     float* input,
     int16_t* output,
-    uint32_t n
+    uint32_t n,
+    float scale
 ) {
     float32x4_t s_in;
     int16x4_t s_out; 
+    float total_scale = scale*(1 << 15);
 
     for(uint32_t i = 0; i < n; i += 4) {
         s_in = vld1q_f32(input + i); // Load
-        s_in = vmulq_n_f32(s_in, (float)(1 << 15)); // Multiply
+        s_in = vmulq_n_f32(s_in, total_scale); // Multiply
         s_in = vrndnq_f32(s_in); // Round
         s_out = vqmovn_s32(vcvtq_s32_f32(s_in)); // Convert to int16
         vst1_s16(output + i, s_out); // Store
@@ -230,10 +234,12 @@ void to_samples_simd(
 void to_samples_simd_batched(
     float* input,
     int16_t* output,
-    uint32_t n
+    uint32_t n,
+    float scale
 ) {
     float32x4_t s_in0, s_in1, s_in2, s_in3, s_in4, s_in5, s_in6, s_in7;
     int16x4_t s_out0, s_out1, s_out2, s_out3, s_out4, s_out5, s_out6, s_out7; 
+    float total_scale = scale*(1 << 15);
 
     for(uint32_t i = 0; i < n; i += 4*8) {
         // Load
@@ -247,14 +253,14 @@ void to_samples_simd_batched(
         s_in7 = vld1q_f32(input + i + 28);
         
         // Multiply
-        s_in0 = vmulq_n_f32(s_in0, (float)(1 << 15));
-        s_in1 = vmulq_n_f32(s_in1, (float)(1 << 15));
-        s_in2 = vmulq_n_f32(s_in2, (float)(1 << 15));
-        s_in3 = vmulq_n_f32(s_in3, (float)(1 << 15));
-        s_in4 = vmulq_n_f32(s_in4, (float)(1 << 15));
-        s_in5 = vmulq_n_f32(s_in5, (float)(1 << 15));
-        s_in6 = vmulq_n_f32(s_in6, (float)(1 << 15));
-        s_in7 = vmulq_n_f32(s_in7, (float)(1 << 15));
+        s_in0 = vmulq_n_f32(s_in0, total_scale);
+        s_in1 = vmulq_n_f32(s_in1, total_scale);
+        s_in2 = vmulq_n_f32(s_in2, total_scale);
+        s_in3 = vmulq_n_f32(s_in3, total_scale);
+        s_in4 = vmulq_n_f32(s_in4, total_scale);
+        s_in5 = vmulq_n_f32(s_in5, total_scale);
+        s_in6 = vmulq_n_f32(s_in6, total_scale);
+        s_in7 = vmulq_n_f32(s_in7, total_scale);
         
         // Round
         s_in0 = vrndnq_f32(s_in0);

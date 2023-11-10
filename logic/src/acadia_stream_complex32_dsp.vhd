@@ -219,9 +219,8 @@ begin
     data_in_tready <= '1';
 
     input_narrowing_proc: process(clk) 
-       variable se     : signed(18 downto 0);
-       variable sum_re : signed(18 downto 0); 
-       variable sum_im : signed(18 downto 0); 
+       variable sum_re : signed(data_in_re_narrowed'high downto 0); 
+       variable sum_im : signed(data_in_im_narrowed'high downto 0); 
     begin
         if rising_edge(clk) then
             -- Use variables and a loop to sum all the inputs
@@ -230,20 +229,11 @@ begin
             -- that this would ever need more than two pairs and this way is clearer so I don't
             -- give a hoot
             sum_re := (others => '0');
-            sum_re_loop: for i in 0 to INPUT_WORDS-1 loop
-                se(15 downto 0)  := signed(data_in_tdata(i*16 + 15 downto i*16));
-                se(18 downto 16) := (others => data_in_tdata(i*16 + 15));
-                
-                sum_re := sum_re + se;
-            end loop sum_re_loop;
-
             sum_im := (others => '0');
-            sum_im_loop: for i in 0 to INPUT_WORDS-1 loop
-                se(15 downto 0)  := signed(data_in_tdata(i*16 + 15 downto i*16));
-                se(18 downto 16) := (others => data_in_tdata(i*16 + 15));
-                
-                sum_im := sum_im + se;
-            end loop sum_im_loop;
+            sum_loop: for i in 0 to INPUT_WORDS-1 loop
+                sum_re := sum_re + resize(signed(data_in_tdata((i*32) + 15 downto (i*32))), sum_re'length);
+                sum_im := sum_im + resize(signed(data_in_tdata((i*32) + 31 downto (i*32) + 16)), sum_im'length);
+            end loop sum_loop;
 
             -- Now update the outputs with the varables
             data_in_re_narrowed    <= std_logic_vector(sum_re);
