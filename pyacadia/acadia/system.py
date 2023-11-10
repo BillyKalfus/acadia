@@ -623,7 +623,8 @@ class Waveform(Array):
         super().allocate(self._channel.seconds_to_bytes(length))
         
         # Scale the element axis by the sample time
-        self._axis = np.arange(self._channel.seconds_to_samples(length))*self._channel.samples_to_seconds(1)
+        axis = np.arange(self._channel.seconds_to_samples(length))*self._channel.samples_to_seconds(1)
+        self._axis = np.repeat(axis, 2)
         
     def __len__(self):
         """
@@ -706,7 +707,8 @@ class ProcessedWaveform(Array):
         super().allocate(valid_cycles * 8)
         
         # Scale the element axis by the sample time
-        self._axis = np.arange(valid_cycles)*(self._channel.samples_to_seconds(1) * self._decimation)
+        axis = np.arange(valid_cycles)*(self._channel.samples_to_seconds(1) * self._decimation)
+        self._axis = np.repeat(axis, 2)
         
     def __len__(self):
         """
@@ -1520,7 +1522,7 @@ class Acadia:
             self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
             
             # Counter period low and high
-            self.sequencer().bus_write(address=dsp_address + 12, data=(dst._decimation // path_width_samples)-1) # low
+            self.sequencer().bus_write(address=dsp_address + 12, data=((dst._decimation // path_width_samples)-1) << 16) # low
             self.sequencer().bus_write(address=dsp_address + 13, data=0) # high
             
         else:

@@ -57,7 +57,7 @@ architecture rtl of dsp_tb2 is
     signal registers_en   : std_logic := '0';
 begin
 
-    uut : entity work.acadia_complex_dsp
+    uut : entity work.acadia_stream_complex32_dsp
         port map(
             clk => clk,
             
@@ -66,7 +66,7 @@ begin
             data_in_tready => data_in_tready,
             data_in_tlast => data_in_tlast,
             
-            data_out_clk => clk,
+            data_out_aclk => clk,
             data_out_tdata => data_out_tdata,
             data_out_tvalid => data_out_tvalid,
             data_out_tready => data_out_tready,
@@ -194,7 +194,7 @@ begin
         wait until rising_edge(clk);
         -- Counter period low
         registers_addr <= x"0000000C";
-        registers_mosi <= x"00050000";
+        registers_mosi <= x"00010000";
         registers_we   <= '1';
         registers_en   <= '1';
 
