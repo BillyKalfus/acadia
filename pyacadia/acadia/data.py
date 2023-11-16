@@ -370,6 +370,10 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         return deltas
     
     def write(self, record):
+        if hasattr(record, "memory"):
+            self.write(record.memory())
+            return
+        
         if isinstance(record, np.ndarray):
             if self._dtype is None:
                 self._dtype = record.dtype
@@ -464,17 +468,9 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             return
         
         self._dtype = records_flattened.dtype
-        element_count = reduce(operator.mul, metadata["shape"])
+        element_count = reduce(operator.mul, metadata["shape"], 1)
         complete_records = len(records_flattened) // element_count
         leftover_elements = len(records_flattened) % element_count
-        # if leftover_elements != 0:
-        #     logging.warning(f"Leftover data found in records file; expected"
-        #                     f" data shape {metadata['shape']} ="
-        #                     f" {element_count} elements, but"
-        #                     f" {len(records_flattened)} elements loaded"
-        #                     f" ({complete_records} complete records,"
-        #                     f" {leftover_elements} leftover elements)")
-            
         
         if leftover_elements == 0:
             self._loaded_elements = [complete_records] + [0]*len(metadata["shape"])
@@ -497,9 +493,29 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         """
         return self._loaded_elements
     
-    def records(self):
-        return self._records
-    
+    def records(self, partial=False):
+        """
+        Retrieve record data from a loaded record group.
+        
+        :param partial: If ``True``, all record data is loaded and returned as-is
+        :type partial: bool
+        """
+        if f"{self._name}_records.bin" not in self._metadata["files"]:
+            return None
+        
+        if partial:
+            return self._records
+        
+        elements = self._metadata["files"][f"{self._name}_records.bin"]["length"]
+        elements_per_record = reduce(operator.mul, self._metadata["shape"], 1)
+        
+        if elements < elements_per_record:
+            return None
+        
+        complete_records = elements // elements_per_record
+        records_flattened = self._records.flatten()[: complete_records*elements_per_record]
+        return records_flattened.reshape(tuple([complete_records, *self._metadata['shape']]))
+        
     def axis(self, idx=0, map=False):
         """
         Get the axis for a given dimension. If there are no axes in the group,
@@ -645,7 +661,7 @@ class DataManager:
     An abstraction for collecting and storing groups of data records.
     """
         
-    def __init__(self, directory, save_count=5):
+    def __init__(self, directory, save_count=1):
         """
         Initializes a DataManager for collecting data records inside a 
         directory. Along with the binary records, a metadata JSON file will be

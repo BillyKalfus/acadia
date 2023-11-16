@@ -128,7 +128,7 @@ DEFAULT_CONFIG = {
 
     "sequencer_cache_memory": {
         "primitive": "block",
-        "address": 0x00_b000_0000, 
+        "address": 0x00_B000_0000, 
         "segment": "s_axi/reg0",
         "size_bits": 2**20,
         "bus_pipeline": False,
@@ -142,7 +142,7 @@ DEFAULT_CONFIG = {
 
     "sequencer_instruction_memory": {
         "primitive": "block",
-        "address": 0x00_b100_0000, 
+        "address": 0x10_b080_0000, 
         "segment": "s_axi/reg0",
         "size_bits": 128*4096,
         "synchronous": False,

@@ -77,3 +77,7 @@ echo CONFIG_lapack=y >> project-spec/configs/rootfs_config
 echo SIGGEN_UNLOCKED_RECIPES += \"gcc-cross-aarch64 libgcc-initial\" >> project-spec/meta-user/conf/petalinuxbsp.conf
 echo FORTRAN_forcevariable = \",fortran\" >> project-spec/meta-user/conf/petalinuxbsp.conf
 echo RUNTIMETARGET_append_pn-gcc-runtime = \" libquadmath\" >> project-spec/meta-user/conf/petalinuxbsp.conf
+
+# Add kernel headers
+echo IMAGE_INSTALL_append = \" kernel-devsrc\" >> project-spec/meta-user/conf/petalinuxbsp.conf
+echo CONFIG_kernel-devsrc=y >> project-spec/configs/rootfs_config

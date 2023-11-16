@@ -1278,7 +1278,7 @@ class Channel:
 
         # TODO: do this better
         float_type = np.float64 if array.dtype == np.complex128 else np.float32
-        out[:] = (array*(2**13)).round().view(float_type).astype(np.int16) << 2
+        out[:] = ((array*(2**13)).round().view(float_type).astype(np.int16) << 2).view(np.uint32)
         return out
     
     @staticmethod

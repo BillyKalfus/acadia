@@ -4,13 +4,14 @@ import subprocess
 import socket
 import io
 import time
-import datetime
 import logging
 import pickle
 import json
 
+from datetime import datetime, timezone
 from threading import Thread, Event
 from abc import ABC, abstractclassmethod
+from dataclasses import asdict, is_dataclass
 
 import numpy as np
 
@@ -26,7 +27,7 @@ class Runtime(ABC):
     
     # ---------------- Functions to be implemented or overridden by the user ------------- #
     @abstractclassmethod
-    def main(cls, directory: str, datamanager: DataManager, kwargs: dict):
+    def main(cls, directory: str, datamanager: DataManager, **kwargs):
         """
         A function that will be run on the target upon deployment. 
         """
@@ -43,12 +44,6 @@ class Runtime(ABC):
         return None, None, None 
     
     # ---------------- Functions to be run on the host ---------------- #
-    
-    def __init__(self, kwargs):
-        """
-        Create a local instance of the runtime
-        """
-        self._kwargs_json = json.dumps(kwargs)
     
     def run(self, 
             target_address, 
@@ -98,7 +93,7 @@ class Runtime(ABC):
         ``/etc/ssh/sshd_config``.
   
         """      
-        time_str = datetime.datetime.now(datetime.timezone.utc).strftime("%m%d%y-%H%M%S")
+        time_str = datetime.now(timezone.utc).strftime("%m%d%y-%H%M%S")
         subdirectory = subdirectory_name if subdirectory_name is not None else time_str
         self.remote_directory = os.path.join(remote_base_directory, subdirectory)
         self.local_directory = os.path.join(local_download_directory, subdirectory)
@@ -131,9 +126,13 @@ class Runtime(ABC):
             
         code += f"\n\n"
         code += f"if __name__ == \"__main__\":\n"
-        code += f"    import json\n"
-        code += f"    kwargs = json.loads('{self._kwargs_json}')\n"
-        code += f"    {self.__class__.__name__}.remote_main(\"{self.remote_directory}\", {log_level}, kwargs)\n"
+        
+        if is_dataclass(self):
+            code += f"    kwargs = {asdict(self)}\n"
+        else:
+            code += f"    kwargs = {{}}\n"
+            
+        code += f"    {self.__class__.__name__}.remote_main(\"{self.remote_directory}\", {log_level}, **kwargs)\n"
 
         multiplex_flags = ""
         if multiplex_ssh:
@@ -414,7 +413,7 @@ class Runtime(ABC):
     # ----------------- Functions to be run on the target ----------------- #
 
     @classmethod
-    def remote_main(cls, directory, log_level, kwargs):
+    def remote_main(cls, directory, log_level, **kwargs):
         """
         This is the main entry point of the remote process. This should not 
         be called manually.
@@ -428,8 +427,9 @@ class Runtime(ABC):
         try:
             from acadia.data import DataManager
             mgr = DataManager(directory=directory)
+            os.chdir(directory)
             logging.info("Running main method")
-            cls.main(directory, mgr, kwargs)
+            cls.main(directory, mgr, **kwargs)
             logging.info("Main complete, saving")
             mgr.save()
             logging.info("Saved")

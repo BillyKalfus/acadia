@@ -389,7 +389,7 @@ class Array:
     references to it enclosed within other objects).
     """
     
-    def __init__(self, dtype, size=None, region=None):
+    def __init__(self, dtype_or_resource, length=None, region=None):
         """
         Create an empty reference to an array.
         
@@ -418,38 +418,57 @@ class Array:
         else:
             raise TypeError(f"Invalid region specifier {region}")
         
-        # The actual underlying memory resource will be stored here
-        self._resource = None
+        if isinstance(dtype_or_resource, (str, np.dtype, type, dict)):
+            self._dtype = np.dtype(dtype_or_resource)
+            self._resource = None
+            if length is not None:
+                self.allocate(length)
+        elif isinstance(dtype_or_resource, np.ndarray):
+            self._resource = dtype_or_resource
+            self._dtype = dtype_or_resource.dtype
+            self._length = dtype_or_resource.size
+            self._axis = np.arange(self._length, dtype=np.float32)
+            if length is not None:
+                raise ValueError("Cannot provide both resource data and length.")
+        elif isinstance(dtype_or_resource, (memoryview, bytes, bytearray)):
+            self._resource = dtype_or_resource
+            self._dtype = np.uint8
+            self._length = len(dtype_or_resource)
+            self._axis = np.arange(self._length, dtype=np.float32)
+            if length is not None:
+                raise ValueError("Cannot provide both resource data and length.")
+        else:
+            self._resource = None
+            self._dtype = dtype_or_resource
+            if length is not None:
+                self.allocate(length)
         
-        self._dtype = dtype
         
-        if size is not None:
-            self.allocate(size)
-        
-    def allocate(self, size: int):
+    def allocate(self, length):
         """
         Create an instance of the underlying memory type, thereby reserving a
         resource ID for that type and notifying the compiler to reserve memory
         (in the case of a hardware array). Note that compilation is necessary
-        after calling thsi function.
+        after calling this function.
         
-        :param size: Array size in bytes
-        :type size: int
-        :param dtype: Memory type of the array to cast
+        :param length: Array length in elements
+        :type length: int
+        :param dtype: Memory type of the array
         :type dtype: np.dtype
         """
-        self._size = size
         
         if self.allocated():
             raise ValueError("Attempted re-allocation of non-free memory")
                 
+        self._length = length
+        self._axis = np.arange(length, dtype=np.float32)
+                
         if self._class is None:
-            self._resource = np.empty(shape=(self._size // self._dtype(0).nbytes,), 
-                                      dtype=self._dtype)
+            self._resource = np.empty(shape=length, dtype=self._dtype)
+        elif isinstance(self._class, ManagedMemory):
+            self._resource = self._class(size=length*self._dtype.itemsize, dtype=self._dtype)
         else:
-            self._resource = self._class(size=self._size, dtype=self._dtype)
-            
-        self._axis = np.arange(self._size)
+            raise TypeError(f"Unable to instantiate array of type {self._class}")
             
     def allocated(self):
         """
@@ -494,7 +513,8 @@ class Array:
         
         if not self.allocated():
             raise ValueError("Attempted to access length of unallocated array")
-        return self._size
+        
+        return self.byte_length() // self._dtype.itemsize
     
     def memory(self):
         """
@@ -508,10 +528,10 @@ class Array:
         if not self.allocated():
             raise ValueError("Attempted access of unallocated array")
         
-        if not hasattr(self._resource, "memory"):
-            raise AttributeError("Attempted access of unmapped memory.")
+        if hasattr(self._resource, "memory"):
+            return self._resource.memory
         
-        return self._resource.memory
+        return self._resource
     
     def word_address(self):
         if not self.allocated():
@@ -536,7 +556,7 @@ class Array:
             raise ValueError("Attempted length access of unallocated array")
         
         return self._resource.byte_length()
-
+    
         
 class ProceduralArrayMixin:
     """
@@ -579,14 +599,13 @@ class ProceduralArrayMixin:
         
         self._generator(self.memory(), self.axis(), *args, **kwargs)
         
-        
 class Waveform(Array):
     """
     An extension of :class:`Array` that is intended to sample 
     functions of time using parameters extracted from :class:`Channel` objects.
     """
     
-    def __init__(self, channel, length=None, region=None):
+    def __init__(self, channel, length_seconds=None, region=None, data=None):
         """
         Create an empty reference to an array.
         
@@ -603,15 +622,20 @@ class Waveform(Array):
             
         :type region: :class:`Channel` or :class:`ManagedMemory`
         
-        :param length: The length of the waveform in seconds. If omitted,
+        :param length_seconds: The length of the waveform in seconds. If omitted,
             :meth:`allocate` must be called manually.
         
         """        
         self._channel = channel
-        self._length = length
-        super().__init__(np.int16, length, region)
-        
-    def allocate(self, length):
+        self._length_seconds = length_seconds
+        if data is not None:
+            super().__init__(data, length_seconds, region)
+            if length_seconds is not None:
+                self._axis = np.arange(len(self._axis)) * length_seconds / len(self._axis)
+        else:
+            super().__init__(np.uint32, length_seconds, region)
+            
+    def allocate(self, length_seconds):
         """
         Create an instance of the underlying memory type, thereby reserving a
         resource ID for that type and notifying the compiler to reserve memory
@@ -620,18 +644,13 @@ class Waveform(Array):
         :param length: Waveform length in seconds
         :type length: float
         """
-        super().allocate(self._channel.seconds_to_bytes(length))
+        if self._channel is None:
+            raise ValueError("Attempted to allocate `Waveform` without channel assigned.")
+        
+        super().allocate(self._channel.seconds_to_samples(length_seconds))
         
         # Scale the element axis by the sample time
-        axis = np.arange(self._channel.seconds_to_samples(length))*self._channel.samples_to_seconds(1)
-        self._axis = np.repeat(axis, 2)
-        
-    def __len__(self):
-        """
-        :return: The length of the waveform in samples
-        :rtype: int
-        """
-        return self._channel.bytes_to_samples(self.byte_length())
+        self._axis = np.arange(len(self._axis)) * length_seconds / len(self._axis)
     
     def dma_parameters(self):
         """
@@ -639,16 +658,27 @@ class Waveform(Array):
         """
         return [{
             "channel": self._channel,
-            "length": self._channel.seconds_to_bytes(self._length) // self._channel.interface_width_bytes,
+            "length": self._channel.seconds_to_bytes(self._length_seconds) // self._channel.interface_width_bytes,
             "word_address": (self.word_address() if self._channel.is_dac else 0)
         }]
         
-class ProcessedWaveform(Array):
+    @staticmethod
+    def unpack(memory, precision=32):
+        """
+        Unpack the integer sample data in memory into complex floating-point 
+        numbers.
+        
+        :param precision: Floating-point precision used for numerical data.
+            This must correspond to a numpy dtype.
+        """
+        return memory.view(np.int16).astype(f'float{precision}').view(f'complex{2*precision}')
+        
+class ProcessedWaveform(Waveform):
     """
     An extension of :class:`Waveform` for waveforms processed by stream DSP modules.
     """
     
-    def __init__(self, channel, length=None, region=None, decimation=4):
+    def __init__(self, channel, length_seconds=None, region=None, decimation=4, data=None):
         """
         Create an empty reference to an array.
         
@@ -665,89 +695,65 @@ class ProcessedWaveform(Array):
             
         :type region: :class:`Channel` or :class:`ManagedMemory`
         
-        :param length: The length of the waveform in seconds. If omitted,
+        :param length_seconds: The length of the waveform in seconds. If omitted,
             :meth:`allocate` must be called manually.
+        :type length_seconds: float
+        """              
         
-        """      
-        self._path_width_samples = 4 # TODO: get this from firmware somehow
-        
-        if decimation % self._path_width_samples != 0:
-            raise ValueError(f"Decimation must be a multiple of {self._path_width_samples} (received {decimation})")
-        
-        self._channel = channel
-        self._length = length
-        self._decimation = decimation
-        
-        super().__init__(np.int32, length, region)
-        
-    def allocate(self, length):
+        self._decimation = decimation        
+        if data is not None:
+            super().__init__(channel, length_seconds, region, data)
+            self._axis *= self._decimation
+        else:
+            super().__init__(channel, length_seconds, region, np.uint64)
+            
+        if decimation % (self._channel.interface_width_bytes // 4) != 0:
+            raise ValueError(f"Decimation must be a multiple of"
+                            f" {self._channel.interface_width_bytes}"
+                            f" (received {decimation})")
+            
+    def allocate(self, length_seconds):
         """
         Create an instance of the underlying memory type, thereby reserving a
         resource ID for that type and notifying the compiler to reserve memory
         (in the case of a hardware array).
         
-        :param length: Waveform length in seconds
-        :type length: float
+        :param length_seconds: Waveform length in seconds
+        :type length_seconds: float
         """
         
-        dsp_counter_value = self._decimation // self._path_width_samples
-        
-        # The length of the total signal in cycles
-        length_cycles = self._channel.seconds_to_bytes(length) // self._channel.interface_width_bytes
-        
-        if length_cycles % dsp_counter_value != 0:
-            raise ValueError(f"`ProcessedWaveform` length does not produce"
-                             f" an integer for the DSP counter period"
-                             f" ({length_cycles} cycles, {dsp_counter_value}"
-                             f" counter period)")
-        
-        valid_cycles = length_cycles // dsp_counter_value
-        
-        # DSP output is 8 bytes per word
-        super().allocate(valid_cycles * 8)
-        
-        # Scale the element axis by the sample time
-        axis = np.arange(valid_cycles)*(self._channel.samples_to_seconds(1) * self._decimation)
-        self._axis = np.repeat(axis, 2)
-        
-    def __len__(self):
+        super().allocate(length_seconds / self._decimation)
+        self._axis *= self._decimation
+     
+    @staticmethod   
+    def unpack(data, precision=32):
         """
-        :return: The length of the waveform in samples
-        :rtype: int
+        Unpack the integer sample data in memory into complex floating-point 
+        numbers.
+        
+        :param precision: Floating-point precision used for numerical data.
+            This must correspond to a numpy dtype.
         """
-        return self._channel.bytes_to_samples(self.byte_length() // 8)
-    
-    def dma_parameters(self):
-        """
-        Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
-        """
-        return [{
-            "channel": self._channel,
-            "length": self._channel.seconds_to_bytes(self._length) // self._channel.interface_width_bytes,
-            "word_address": (self.word_address() if self._channel.is_dac else 0)
-        }]
+        return data.view(np.int32).astype(f'float{precision}').view(f'complex{2*precision}')
         
 class ProceduralWaveform(Waveform, ProceduralArrayMixin):
     pass
         
-class ConstantWaveform(Waveform):
+class ConstantWaveform(Array):
     """
     A waveform with a constant value.
     """
     
-    def __init__(self, channel, length):
+    def __init__(self, channel, length_seconds):
         """
         :param channel: Channel for the waveform
         :type channel: :class:`Channel`
         :param length: Length of the constant in seconds
         :type length: float
         """
-        super().__init__(channel, length, channel.memory_type)
-        
-    def allocate(self, length):
-        # Allocate only a single cycle but store the length in time for later
-        self._length = length
-        super().allocate(self._channel.bytes_to_seconds(self._channel.interface_width_bytes))
+        self._channel = channel
+        self._length_seconds = length_seconds
+        super().__init__(np.uint32, self._channel.interface_width_bytes // 4, channel.memory_type)
         
     def populate(self, value):
         """
@@ -768,7 +774,7 @@ class ConstantWaveform(Waveform):
         """            
         return [{
             "channel": self._channel,
-            "length": self._channel.seconds_to_bytes(self._length) // self._channel.interface_width_bytes,
+            "length": self._channel.seconds_to_bytes(self._length_seconds) // self._channel.interface_width_bytes,
             "word_address": self.word_address(),
             "fixed": True
         }]
@@ -978,7 +984,7 @@ class Acadia:
             
     # ---------------- COMPILATION FUNCTIONS ---------------------- #
     
-    def sequencer(self):
+    def sequencer(self) -> Sequencer:
         """
         Create and store a new sequencer object associated with this system,
         if a sequencer is not already active (in which case, that one is 
@@ -990,7 +996,7 @@ class Acadia:
         
         return self._sequencer_type()
     
-    def sequence(self, func):
+    def sequence(self, func) -> Sequencer:
         """
         Compiles a Python function as a sequence for the Acadia sequencer. 
         The wrapped function should accept an instance of :class:`Acadia` as
@@ -1101,7 +1107,7 @@ class Acadia:
             raise TypeError("NCO frequency can only be set in `Sequencer` contexts.")
     
     @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE, "tile_synchronizer")
-    def update_nco_phase(self, channel, phase, low=True, high=True):
+    def update_nco_phase(self, channel: Channel, phase: float, low=True, high=True):
         """
         Set the NCO phase offset to the given word.
 
@@ -1115,7 +1121,7 @@ class Acadia:
         phase_word = int(round((2**18)*phase/(2*np.pi)))
         proc = Processor.active_processor()
         if proc is None:
-            channel.update_phase_registers(phase_word)
+            channel.update_nco_phase_registers(phase_word)
                 
         elif isinstance(proc, Sequencer):
             phase_reg = self._firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
@@ -1485,15 +1491,9 @@ class Acadia:
         
         path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
         
-        if isinstance(dst, Waveform):
-            if (dst.byte_length() // 4) % path_width_samples != 0:
-                raise ValueError(f"Destination size {dst.byte_length()} cannot"
-                                    f" be filled in an integer number of cycles"
-                                    f" (path width {path_width_samples} samples)")
+        
             
-            cfg = self._request_stream_configuration(channel, "memory")
-            
-        elif isinstance(dst, ProcessedWaveform):
+        if isinstance(dst, ProcessedWaveform):
                 
             cfg = self._request_stream_configuration(channel, "dsp")
             
@@ -1522,8 +1522,17 @@ class Acadia:
             self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
             
             # Counter period low and high
-            self.sequencer().bus_write(address=dsp_address + 12, data=((dst._decimation // path_width_samples)-1) << 16) # low
-            self.sequencer().bus_write(address=dsp_address + 13, data=0) # high
+            counter_value = (dst._decimation // path_width_samples) - 1
+            self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
+            self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
+            
+        elif isinstance(dst, Waveform):
+            if (dst.byte_length() // 4) % path_width_samples != 0:
+                raise ValueError(f"Destination size {dst.byte_length()} cannot"
+                                    f" be filled in an integer number of cycles"
+                                    f" (path width {path_width_samples} samples)")
+            
+            cfg = self._request_stream_configuration(channel, "memory")
             
         else:
             raise TypeError(f"Capture destination must be of type `Waveform`"
@@ -1542,6 +1551,8 @@ class Acadia:
                 "args": (), 
                 "kwargs": params,
                 "retval": None})
+            
+        return cfg
         
     @requires_sequencer
     def generate_blank(self, channel, length):
@@ -1612,24 +1623,30 @@ class Acadia:
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
         
     @requires_sequencer
-    def stream_reset(self, configuration: StreamConfiguration):
+    def stream_reset(self, configuration: StreamConfiguration = None):
         """
         Reset the datamover controller, module, and any associated FIFOs.
         """
         # Reset the DataMover controller
-        address = self._firmware.sequencer_bus_decoder[f"{configuration.output_datamover()}_controller"].address().value()
-        self.sequencer().bus_write(address=address+3, data=0)
-        
-        # Reset the module
-        if configuration.module_resource.kind == "adder":
-            address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
-            self.sequencer().bus_write(address=address, data=(1 << 2))
-        elif configuration.module_resource.kind == "dsp":
-            address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
-            self.sequencer().bus_write(address=address, data=(1 << 4))
-        elif configuration.module_resource.kind == "cmacc":
-            address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value() + 2
-            self.sequencer().bus_write(address=address, data=(1 << 24))
+        if configuration is None: 
+            configurations = self._stream_configurations
+        else:
+            configurations = [configuration]
+            
+        for cfg in configurations:
+            address = self._firmware.sequencer_bus_decoder[f"{cfg.output_datamover()}_controller"].address().value()
+            self.sequencer().bus_write(address=address+3, data=0)
+            
+            # Reset the module
+            if cfg.module_resource.kind == "adder":
+                address = self._firmware.sequencer_bus_decoder[f"module{cfg.input_switch_slave}_registers"].address().value()
+                self.sequencer().bus_write(address=address, data=(1 << 2))
+            elif cfg.module_resource.kind == "dsp":
+                address = self._firmware.sequencer_bus_decoder[f"module{cfg.input_switch_slave}_registers"].address().value()
+                self.sequencer().bus_write(address=address, data=(1 << 4))
+            elif cfg.module_resource.kind == "cmacc":
+                address = self._firmware.sequencer_bus_decoder[f"module{cfg.input_switch_slave}_registers"].address().value() + 2
+                self.sequencer().bus_write(address=address, data=(1 << 24))
 
     @requires_sequencer
     def stream_count(self, configuration: StreamConfiguration):
@@ -1941,6 +1958,7 @@ class Acadia:
         PSGPIO.sysfs_export(gpio)
         PSGPIO.sysfs_set_direction(gpio, "out")
         PSGPIO.sysfs_write(gpio, 0)
+        time.sleep(0.1)
         PSGPIO.sysfs_write(gpio, 1)
         
     def gpio_set_direction(self, port, directions):
@@ -2291,7 +2309,7 @@ class Acadia:
         elif port == "cache":
             # One additional cycle minimum because the memory has a read latency of 1
             # even before any pipelining because it's a synchronous memory
-            latency += 1 
+            latency += 1
             latency += self._firmware["sequencer_cache_memory"]["bus_port_input_pipeline"]
             latency += self._firmware["sequencer_cache_memory"]["bus_port_output_pipeline"]
         elif self._firmware["sequencer_bus"][port]["bus_pipeline"]:
