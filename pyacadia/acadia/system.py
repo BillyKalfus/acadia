@@ -3,12 +3,14 @@ import mmap
 import time
 import logging
 import struct
+import builtins
 from dataclasses import dataclass
 from functools import wraps
 
 import numpy as np
 
-from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation
+from .arrays import Waveform, DecimatedWaveform
+from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
 from .channel import Channel
@@ -17,12 +19,7 @@ from .firmware import Firmware
 
 __all__ = ["DMASynchronizer", 
            "RFDCSynchronizer", 
-           "Array", 
-           "ProceduralArrayMixin", 
-           "Waveform", 
-           "ProceduralWaveform", 
            "StreamConfiguration"
-           "ConstantWaveform",
            "Acadia"]
 
 class DMASynchronizer(Synchronizer):
@@ -70,27 +67,35 @@ class DMASynchronizer(Synchronizer):
                                  f" of `Acadia`")
                 
             if function == DMASynchronizer.DMA:
-                if not isinstance(kwargs["channel"], Channel):
-                    raise TypeError(f"Unable to identify channel (received"
-                                    f" {kwargs['channel']}).")
+                if "channel" not in kwargs:
+                    raise KeyError(f"Unable to locate channel in kwargs {kwargs}")
                 
-                if kwargs["channel"] in channel_lengths:
-                    channel_lengths[kwargs["channel"]] += kwargs["length"]
+                if "length" not in kwargs:
+                    raise KeyError(f"Unable to locate length in kwargs {kwargs}")
+                
+                channel = kwargs['channel']
+                length = kwargs["length"]
+                
+                if not isinstance(channel, Channel):
+                    raise TypeError(f"Channel must be of type `Channel` (received"
+                                    f" {channel}).")
+                
+                if not isinstance(length, (int, Symbol, Operation)):
+                    raise TypeError(f"Received invalid length: {length}")
+                
+                if channel in channel_lengths:
+                    channel_lengths[channel] += length
                 else:
-                    channel_lengths[kwargs["channel"]] = kwargs["length"]
+                    channel_lengths[channel] = length
                     
-                self.dma_mask |= acadia.get_dma(kwargs["channel"]).mask
+                self.dma_mask |= acadia.get_dma(channel).mask
                 descriptor = acadia.channel_dma_stream(**kwargs)
                 
             elif function == DMASynchronizer.BARRIER:
                 # We first need to figure out the time in the block at which 
                 # the barrier exists.
-                barrier_time = 0
-                for length in channel_lengths.values():
-                    if not isinstance(length, int):
-                        raise TypeError(f"Received invalid length: {length}")
-                    if length > barrier_time:
-                        barrier_time = length
+                barrier_time = Operation(builtins.max, *list(channel_lengths.values()))
+                logging.debug(f"Inserting DMA barrier at time {barrier_time}")
                                                 
                 # Then, for every channel that has some action after the 
                 # barrier, we need to add a blank so that the next action 
@@ -104,14 +109,14 @@ class DMASynchronizer(Synchronizer):
                 for channel in future_channels:
                     channel_length = channel_lengths[channel] if channel in channel_lengths else 0
                     delay_length = barrier_time - channel_length
-                    if delay_length < 0:
-                        raise ValueError(f"Received negative delay length {delay_length} (barrier time {barrier_time}, channel length {channel_length})")
-                    
-                    if delay_length > 0:
-                        acadia.channel_dma_stream(channel=channel,
-                                                    length=delay_length,
-                                                    word_address=0,
-                                                    blank=True)
+                    # TODO: when delay_length is fully known at compile time, we could remove the
+                    # DMA stream command if it's zero length. However, we can't know if this is 
+                    # because it's the first point of some sweep where it's going to be changed
+                    # later. This seems universal for all ConstantWaveforms
+                    acadia.channel_dma_stream(channel=channel,
+                                                length=delay_length,
+                                                word_address=0,
+                                                blank=True)
                     
                 # Reset channel lengths so that when we hit the next barrier 
                 # (if any) it only adds delays after this one
@@ -376,408 +381,6 @@ class RFDCSynchronizer(Synchronizer):
                             comment="Write TDD mode clear register")
             
         super().__exit__(exc_type, exc_val, exc_tb)
-        
-class Array:
-    """
-    A wrapper for a segment of memory in the Acadia hardware. Instances are 
-    initialized with a region specifier that indicates which region of memory 
-    the array should encapsulate (described further in :meth:`__init__`).
-    The memory segment backing an instance of this class is not allocated 
-    until :meth:`allocate` is explicitly called on it, allowing higher-level 
-    functions to manipulate the array in ways that would require recompilation
-    without having to instantiate a new object (and therefore lose any 
-    references to it enclosed within other objects).
-    """
-    
-    def __init__(self, dtype_or_resource, length=None, region=None):
-        """
-        Create an empty reference to an array.
-        
-        :param region: The memory region in which to create the array. If an
-            instance of :class:`Channel`, the type of the underlying memory 
-            will be determined by the instance's ``memory_type`` attribute.
-            Otherwise, one may pass a subclass of ``type`` which will be
-            directly used to instantiate the array when allocated.
-        :type region: :class:`Channel` or :class:`ManagedMemory`
-        """
-        if isinstance(region, Channel):
-            if not region.is_dac:
-                raise ValueError(f"Attempted to create array for ADC"
-                                 " channel. Because there is no dedicated"
-                                 " memory for capture in Acadia, the capture"
-                                 " memory region is not automatically able to"
-                                 " be inferred. If you do not know what to put"
-                                 " here, use the `PLDDR0Array` attribute of"
-                                 " the `Acadia` object that this is capturing"
-                                 " on.")
-            self._class = region.memory_type
-        elif isinstance(region, ManagedMemory):
-            self._class = region
-        elif region is None:
-            self._class = None
-        else:
-            raise TypeError(f"Invalid region specifier {region}")
-        
-        if isinstance(dtype_or_resource, (str, np.dtype, type, dict)):
-            self._dtype = np.dtype(dtype_or_resource)
-            self._resource = None
-            if length is not None:
-                self.allocate(length)
-        elif isinstance(dtype_or_resource, np.ndarray):
-            self._resource = dtype_or_resource
-            self._dtype = dtype_or_resource.dtype
-            self._length = dtype_or_resource.size
-            self._axis = np.arange(self._length, dtype=np.float32)
-            if length is not None:
-                raise ValueError("Cannot provide both resource data and length.")
-        elif isinstance(dtype_or_resource, (memoryview, bytes, bytearray)):
-            self._resource = dtype_or_resource
-            self._dtype = np.uint8
-            self._length = len(dtype_or_resource)
-            self._axis = np.arange(self._length, dtype=np.float32)
-            if length is not None:
-                raise ValueError("Cannot provide both resource data and length.")
-        else:
-            self._resource = None
-            self._dtype = dtype_or_resource
-            if length is not None:
-                self.allocate(length)
-        
-        
-    def allocate(self, length):
-        """
-        Create an instance of the underlying memory type, thereby reserving a
-        resource ID for that type and notifying the compiler to reserve memory
-        (in the case of a hardware array). Note that compilation is necessary
-        after calling this function.
-        
-        :param length: Array length in elements
-        :type length: int
-        :param dtype: Memory type of the array
-        :type dtype: np.dtype
-        """
-        
-        if self.allocated():
-            raise ValueError("Attempted re-allocation of non-free memory")
-                
-        self._length = length
-        self._axis = np.arange(length, dtype=np.float32)
-                
-        if self._class is None:
-            self._resource = np.empty(shape=length, dtype=self._dtype)
-        elif isinstance(self._class, ManagedMemory):
-            self._resource = self._class(size=length*self._dtype.itemsize, dtype=self._dtype)
-        else:
-            raise TypeError(f"Unable to instantiate array of type {self._class}")
-            
-    def allocated(self):
-        """
-        :return: ``True`` if the underlying memory resource has been allocated
-        :rtype: bool
-        """
-        return self._resource is not None
-    
-    def free(self):
-        """
-        Removed internal reference to underlying memory resources, allowing 
-        reallocation.
-        """
-        self._resource = None
-        
-    def axis(self):
-        if not self.allocated():
-            raise ValueError(f"Unable to retrieve axis of unallocated array.")
-        
-        return self._axis
-    
-    def dtype(self):
-        return self._dtype
-                
-    def __getitem__(self, k):
-        if not self.allocated():
-            raise ValueError("Attempted access of unallocated array")
-        
-        return self._resource[k]
-    
-    def __setitem__(self, k, v):
-        if not self.allocated():
-            raise ValueError("Attempted access of unallocated array")
-        
-        self._resource[k] = v
-        
-    def __len__(self):
-        """
-        :return: The length of the array in bytes.
-        :rtype: int
-        """
-        
-        if not self.allocated():
-            raise ValueError("Attempted to access length of unallocated array")
-        
-        return self.byte_length() // self._dtype.itemsize
-    
-    def memory(self):
-        """
-        Retrieve a reference to the underlying resource memory, if present.
-        
-        :raises: ``ValueError`` if the memory has not been allocated
-        :raises: ``AttributeError`` if the memory is not mapped, determined
-            by checking whether the underlying resource has a memory attribute.
-        
-        """
-        if not self.allocated():
-            raise ValueError("Attempted access of unallocated array")
-        
-        if hasattr(self._resource, "memory"):
-            return self._resource.memory
-        
-        return self._resource
-    
-    def word_address(self):
-        if not self.allocated():
-            raise ValueError("Attempted address access of unallocated array")
-        
-        return self._resource.word_address()
-    
-    def byte_address(self):
-        if not self.allocated():
-            raise ValueError("Attempted address access of unallocated array")
-        
-        return self._resource.byte_address()
-    
-    def word_length(self):
-        if not self.allocated():
-            raise ValueError("Attempted length access of unallocated array")
-        
-        return self._resource.word_length()
-    
-    def byte_length(self):
-        if not self.allocated():
-            raise ValueError("Attempted length access of unallocated array")
-        
-        return self._resource.byte_length()
-    
-        
-class ProceduralArrayMixin:
-    """
-    A mixin class for hardware arrays with efficient routines for dynamically
-    populating them.
-    """
-    
-    @property
-    def generator(self):
-        return self._generator
-    
-    @generator.setter
-    def generator(self, generator):
-        """
-        Assign a generator.
-        
-        :param generator: A function that can be used to populate the array.
-            This should be a callable that accepts a numpy array as the first
-            argument, which is understood to be a mapped array encapsulating
-            the underlying memory. The function must accept another numpy array
-            as its second argument, which is understood to be the axis values 
-            for the output array.The function may accept any other positional
-            or keyword arguments, which will be able to passed in when the 
-            array is populated.
-        :type generator: callable
-        """        
-        self._generator = generator
-        
-    def populate(self, *args, **kwargs):
-        """
-        Populate the underlying array resource, passing any arguments to the
-        encapsulated generator function. The object instance must implement
-        the method ``memory`` with a similar signature to ``Array.memory``.
-        
-        :raises: ``ValueError`` if the array does not have a generator
-        """    
-        
-        if self._generator is None:
-            raise ValueError("Attempted to populate array without generator")
-        
-        self._generator(self.memory(), self.axis(), *args, **kwargs)
-        
-class Waveform(Array):
-    """
-    An extension of :class:`Array` that is intended to sample 
-    functions of time using parameters extracted from :class:`Channel` objects.
-    """
-    
-    def __init__(self, channel, length_seconds=None, region=None, data=None):
-        """
-        Create an empty reference to an array.
-        
-        :param channel: A channel from which the sampling parameters for
-            procedurally populating the memory can be derived.
-            
-        :type channel: :class:`Channel`
-        
-        :param region: The memory region in which to create the array. If an
-            instance of :class:`Channel`, the type of the underlying memory 
-            will be determined by the instance's ``memory_type`` attribute.
-            Otherwise, one may pass a subclass of ``type`` which will be
-            directly used to instantiate the array when allocated.
-            
-        :type region: :class:`Channel` or :class:`ManagedMemory`
-        
-        :param length_seconds: The length of the waveform in seconds. If omitted,
-            :meth:`allocate` must be called manually.
-        
-        """        
-        self._channel = channel
-        self._length_seconds = length_seconds
-        if data is not None:
-            super().__init__(data, length_seconds, region)
-            if length_seconds is not None:
-                self._axis = np.arange(len(self._axis)) * length_seconds / len(self._axis)
-        else:
-            super().__init__(np.uint32, length_seconds, region)
-            
-    def allocate(self, length_seconds):
-        """
-        Create an instance of the underlying memory type, thereby reserving a
-        resource ID for that type and notifying the compiler to reserve memory
-        (in the case of a hardware array).
-        
-        :param length: Waveform length in seconds
-        :type length: float
-        """
-        if self._channel is None:
-            raise ValueError("Attempted to allocate `Waveform` without channel assigned.")
-        
-        super().allocate(self._channel.seconds_to_samples(length_seconds))
-        
-        # Scale the element axis by the sample time
-        self._axis = np.arange(len(self._axis)) * length_seconds / len(self._axis)
-    
-    def dma_parameters(self):
-        """
-        Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
-        """
-        return [{
-            "channel": self._channel,
-            "length": self._channel.seconds_to_bytes(self._length_seconds) // self._channel.interface_width_bytes,
-            "word_address": (self.word_address() if self._channel.is_dac else 0)
-        }]
-        
-    @staticmethod
-    def unpack(memory, precision=32):
-        """
-        Unpack the integer sample data in memory into complex floating-point 
-        numbers.
-        
-        :param precision: Floating-point precision used for numerical data.
-            This must correspond to a numpy dtype.
-        """
-        return memory.view(np.int16).astype(f'float{precision}').view(f'complex{2*precision}')
-        
-class ProcessedWaveform(Waveform):
-    """
-    An extension of :class:`Waveform` for waveforms processed by stream DSP modules.
-    """
-    
-    def __init__(self, channel, length_seconds=None, region=None, decimation=4, data=None):
-        """
-        Create an empty reference to an array.
-        
-        :param channel: A channel from which the sampling parameters for
-            procedurally populating the memory can be derived.
-            
-        :type channel: :class:`Channel`
-        
-        :param region: The memory region in which to create the array. If an
-            instance of :class:`Channel`, the type of the underlying memory 
-            will be determined by the instance's ``memory_type`` attribute.
-            Otherwise, one may pass a subclass of ``type`` which will be
-            directly used to instantiate the array when allocated.
-            
-        :type region: :class:`Channel` or :class:`ManagedMemory`
-        
-        :param length_seconds: The length of the waveform in seconds. If omitted,
-            :meth:`allocate` must be called manually.
-        :type length_seconds: float
-        """              
-        
-        self._decimation = decimation        
-        if data is not None:
-            super().__init__(channel, length_seconds, region, data)
-            self._axis *= self._decimation
-        else:
-            super().__init__(channel, length_seconds, region, np.uint64)
-            
-        if decimation % (self._channel.interface_width_bytes // 4) != 0:
-            raise ValueError(f"Decimation must be a multiple of"
-                            f" {self._channel.interface_width_bytes}"
-                            f" (received {decimation})")
-            
-    def allocate(self, length_seconds):
-        """
-        Create an instance of the underlying memory type, thereby reserving a
-        resource ID for that type and notifying the compiler to reserve memory
-        (in the case of a hardware array).
-        
-        :param length_seconds: Waveform length in seconds
-        :type length_seconds: float
-        """
-        
-        super().allocate(length_seconds / self._decimation)
-        self._axis *= self._decimation
-     
-    @staticmethod   
-    def unpack(data, precision=32):
-        """
-        Unpack the integer sample data in memory into complex floating-point 
-        numbers.
-        
-        :param precision: Floating-point precision used for numerical data.
-            This must correspond to a numpy dtype.
-        """
-        return data.view(np.int32).astype(f'float{precision}').view(f'complex{2*precision}')
-        
-class ProceduralWaveform(Waveform, ProceduralArrayMixin):
-    pass
-        
-class ConstantWaveform(Array):
-    """
-    A waveform with a constant value.
-    """
-    
-    def __init__(self, channel, length_seconds):
-        """
-        :param channel: Channel for the waveform
-        :type channel: :class:`Channel`
-        :param length: Length of the constant in seconds
-        :type length: float
-        """
-        self._channel = channel
-        self._length_seconds = length_seconds
-        super().__init__(np.uint32, self._channel.interface_width_bytes // 4, channel.memory_type)
-        
-    def populate(self, value):
-        """
-        Set the complex amplitude of the constant.
-        
-        :param value: Waveform value
-        :type value: complex
-        
-        """
-        # Load the DAC memory with the new amplitude
-        arr = np.empty(self._channel.bytes_to_samples(self._channel.interface_width_bytes), np.complex64)
-        arr.fill(value)
-        Channel.to_samples(arr, out=self.memory())
-        
-    def dma_parameters(self):
-        """
-        Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
-        """            
-        return [{
-            "channel": self._channel,
-            "length": self._channel.seconds_to_bytes(self._length_seconds) // self._channel.interface_width_bytes,
-            "word_address": self.word_address(),
-            "fixed": True
-        }]
         
 @dataclass
 class StreamConfiguration:
@@ -1458,7 +1061,7 @@ class Acadia:
                     dma_parameters = [{
                         "channel": self.DAC(i),
                         "length": signal.byte_length() // self.DAC(i).interface_width_bytes,
-                        "word_address": signal.word_address()
+                        "word_address": signal.word_address() // (self.DAC(i).interface_width_bytes // 4)
                     }]
                     break
             
@@ -1491,9 +1094,7 @@ class Acadia:
         
         path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
         
-        
-            
-        if isinstance(dst, ProcessedWaveform):
+        if isinstance(dst, DecimatedWaveform):
                 
             cfg = self._request_stream_configuration(channel, "dsp")
             
@@ -1819,17 +1420,6 @@ class Acadia:
         """
         Assembles instruction memory for the sequencer and all DMAs.
         """
-        
-        num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
-        logging.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
-        
-        sequencer_program = bytearray(num_sequencer_instructions*16)
-        
-        idx = 0
-        for s in self._sequencer_type.instances:
-            for instr in s._compiled_program:
-                sequencer_program[idx*16 : idx*16 + 16] = instr.assemble()
-                idx += 1
 
         dac_dma_programs = []
         for i,dma in enumerate(self._dac_dmas):
@@ -1846,6 +1436,19 @@ class Acadia:
             for idx,instr in enumerate(dma._compiled_program):
                 struct.pack_into("<Q", dma_program, idx*8, instr.assemble())  
             adc_dma_programs.append(dma_program)
+            
+        # Assemble the sequencer last so that if any DMA descriptors are resolved to have zero length,
+        # the instruction driving them is removed
+        num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
+        logging.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
+        
+        sequencer_program = bytearray(num_sequencer_instructions*16)
+        
+        idx = 0
+        for s in self._sequencer_type.instances:
+            for instr in s._compiled_program:
+                sequencer_program[idx*16 : idx*16 + 16] = instr.assemble()
+                idx += 1
             
         return sequencer_program, dac_dma_programs, adc_dma_programs
     
@@ -2081,7 +1684,7 @@ class Acadia:
             base_word_address=0,
             base_byte_address=(self._firmware[f"dac_tile{i // 4}_sample_memory"]["address"] 
                                + (i % 4)*(self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8)),
-            word_width=128,
+            word_width=32,
             memory_size=self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8) for i in range(self._firmware.NUM_DACS)]
         
     def _create_cmacc_kernel_arrays(self):
@@ -2268,7 +1871,7 @@ class Acadia:
 
         # Configure the DataMover controller (the last bus write will 
         # push the complete command into the command FIFO)
-        bus_address_base = self._firmware.sequencer_bus_decoder[f"{datamover_name}_controller"].address()
+        bus_address_base = self._firmware.sequencer_bus_decoder[f"{datamover_name}_controller"].address().value()
         self._active_sequencer.bus_write(address=bus_address_base+2, 
                                          data=misc_reg,
                                          comment=f"Configuration for {size}-byte transfer to address"

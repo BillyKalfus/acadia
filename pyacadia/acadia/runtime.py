@@ -26,8 +26,7 @@ class Runtime(ABC):
     """
     
     # ---------------- Functions to be implemented or overridden by the user ------------- #
-    @abstractclassmethod
-    def main(cls, directory: str, datamanager: DataManager, **kwargs):
+    def main(self, directory: str, datamanager: DataManager):
         """
         A function that will be run on the target upon deployment. 
         """
@@ -102,11 +101,12 @@ class Runtime(ABC):
         self._target_address = target_address
         self._copy_to_local = copy_to_local
         self._remove_remote_directory = remove_remote_directory
+        self._local_log_name = os.path.join(self.local_directory, "runtime.log")
         
         os.mkdir(self.local_directory)
         
         logging.basicConfig(level=log_level, 
-                    filename=os.path.join(self.local_directory, "runtime.log"), 
+                    filename=self._local_log_name, 
                     filemode="w",
                     format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
         
@@ -126,13 +126,15 @@ class Runtime(ABC):
             
         code += f"\n\n"
         code += f"if __name__ == \"__main__\":\n"
-        
+                
         if is_dataclass(self):
-            code += f"    kwargs = {asdict(self)}\n"
-        else:
-            code += f"    kwargs = {{}}\n"
+            remote_json_path = os.path.join(self.remote_directory, 'runtime_kwargs.json')
+            code += f"    import json\n"
+            code += f"    with open(\"{remote_json_path}\") as f:\n"
+            code += f"        args = json.load(f)\n"
             
-        code += f"    {self.__class__.__name__}.remote_main(\"{self.remote_directory}\", {log_level}, **kwargs)\n"
+        code += f"    runtime = {self.__class__.__name__}({'**args' if is_dataclass(self) else ''})\n"
+        code += f"    runtime.remote_main(\"{self.remote_directory}\", {log_level})\n"
 
         multiplex_flags = ""
         if multiplex_ssh:
@@ -160,13 +162,29 @@ class Runtime(ABC):
             shell=True)
         stdout,stderr = file_proc.communicate(input=code, timeout=upload_timeout)
         
+        if is_dataclass(self):
+            logging.info(f"Uploading argument file")
+            cmd = f"{ssh_cmd} \"cat > {remote_json_path};\""
+            logging.debug(f"Executing command {cmd}")
+            file_proc = subprocess.Popen(
+                cmd, 
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="ascii",
+                shell=True)
+            
+            import json
+            stdout,stderr = file_proc.communicate(input=json.dumps(asdict(self)), timeout=upload_timeout)
+        
         if file_proc.returncode != 0:
             logging.error(f"File upload failed with output:\n"
                           f"stdout:\n{stdout}\n\nstderr:\n{stderr}\n\n")
             raise Exception("File upload failed")
 
         logging.info(f"Launching main remote process")
-        cmd = f"{ssh_cmd} -t -t python3 {remote_runtime_file}"
+        cmd = f"{ssh_cmd} python3 -t -t {remote_runtime_file}"
         logging.debug(f"Executing command {cmd}")
         
         self._runtime_proc = subprocess.Popen(
@@ -229,7 +247,8 @@ class Runtime(ABC):
                                             self._display_iteration_event, 
                                             self._server_address, 
                                             update_period, 
-                                            self.local_directory),
+                                            self.local_directory,
+                                            asdict(self) if is_dataclass(self) else None),
                                         daemon=True)
             self._display_thread.start()
         else:
@@ -241,7 +260,7 @@ class Runtime(ABC):
         
     def _create_widgets(self):
         from IPython.display import display
-        from ipywidgets import Button
+        from ipywidgets import Button, HTML, HBox
         
         # Create an overall grid for viewing plots and logs
         # grid = GridspecLayout()
@@ -255,7 +274,11 @@ class Runtime(ABC):
             tooltip="Click to stop all local and remote processes.")
         
         self._stop_button.on_click(_self_stop)
-        display(self._stop_button)
+        self._metadata_link = HTML(value=f"<a href=\"{os.path.join(self.local_directory, 'metadata.json')}\">Metadata</a>")
+        self._local_log_link = HTML(value=f"<a href=\"{self._local_log_name}\">Local Log</a>")
+        self._remote_log_link = HTML(value=f"Remote Log")
+        box = HBox([self._stop_button, self._metadata_link, self._local_log_link, self._remote_log_link])
+        display(box)
         
     def stop(self, timeout=1):
         """
@@ -322,9 +345,10 @@ class Runtime(ABC):
             os.system(f"ssh {self._username}@{self._target_address} rm -rf {self.remote_directory}")
         
         self._stop_button.disabled = True
+        self._remote_log_link.value = f"<a href=\"{os.path.join(self.local_directory, 'remote_main.log')}\">Remote Log</a>"
             
     @staticmethod
-    def _display(stop_event, iteration_event, address, update_period, temp_directory):    
+    def _display(stop_event, iteration_event, address, update_period, temp_directory, runtime_kwargs):    
         logging.debug("Display thread started")
 
         mgr = DataManager(temp_directory)   
@@ -412,8 +436,7 @@ class Runtime(ABC):
         
     # ----------------- Functions to be run on the target ----------------- #
 
-    @classmethod
-    def remote_main(cls, directory, log_level, **kwargs):
+    def remote_main(self, directory, log_level):
         """
         This is the main entry point of the remote process. This should not 
         be called manually.
@@ -429,7 +452,7 @@ class Runtime(ABC):
             mgr = DataManager(directory=directory)
             os.chdir(directory)
             logging.info("Running main method")
-            cls.main(directory, mgr, **kwargs)
+            self.main(directory, mgr)
             logging.info("Main complete, saving")
             mgr.save()
             logging.info("Saved")

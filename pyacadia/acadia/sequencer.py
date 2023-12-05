@@ -1,5 +1,6 @@
 import struct
 import os
+import operator
 from enum import Enum
 from typing import get_type_hints
 from dataclasses import dataclass
@@ -71,9 +72,6 @@ class SequencerDatapathPort:
 
     def __repr__(self):
         return str(self)
-        
-        # def field_getattr(self, attr):
-        #     return self(getattr(self.Major, attr))
             
 class Source(SequencerDatapathPort, metaclass=Operable):
     class Major(Enum):
@@ -304,6 +302,8 @@ class STP:
 
         imm1_value = self.imm1
         while hasattr(imm1_value, "value") or hasattr(imm1_value, "address"):
+            if hasattr(imm1_value, "null") and imm1_value.null:
+                return struct.pack("<IIQ", 0, 0, 0)
             if hasattr(imm1_value, "value"):
                 if callable(imm1_value.value):
                     imm1_value = imm1_value.value()
@@ -317,6 +317,8 @@ class STP:
 
         imm2_value = self.imm2
         while hasattr(imm2_value, "value") or hasattr(imm2_value, "address"):
+            if hasattr(imm2_value, "null") and imm2_value.null:
+                return struct.pack("<IIQ", 0, 0, 0)
             if hasattr(imm2_value, "value"):
                 if callable(imm2_value.value):
                     imm2_value = imm2_value.value()
@@ -455,6 +457,8 @@ class STC:
 
         imm_stval_value = self.imm_stval
         while hasattr(imm_stval_value, "value") or hasattr(imm_stval_value, "address"):
+            if hasattr(imm_stval_value, "null") and imm_stval_value.null:
+                return struct.pack("<IIQ", 0, 0, 0)
             if hasattr(imm_stval_value, "value"):
                 if callable(imm_stval_value.value):
                     imm_stval_value = imm_stval_value.value()
@@ -468,6 +472,8 @@ class STC:
 
         imm_tval_value = self.imm_tval
         while hasattr(imm_tval_value, "value") or hasattr(imm_tval_value, "address"):
+            if hasattr(imm_tval_value, "null") and imm_tval_value.null:
+                return struct.pack("<IIQ", 0, 0, 0)
             if hasattr(imm_tval_value, "value"):
                 if callable(imm_tval_value.value):
                     imm_tval_value = imm_tval_value.value()
@@ -499,6 +505,12 @@ class Sequencer(Processor):
                 
         def resource_load(resource_self, value):
             self.store(src=value, dest=resource_self)
+            
+        def resource_augment(resource_self, op, *args):
+            self.store(src=Operation(Operable.AUGMENTING_OPERATORS[op], 
+                                     resource_self, 
+                                     *args), 
+                      dest=resource_self)
                         
         def register_str(reg_self):
             return f"REG{reg_self._resource_id}"
@@ -515,7 +527,7 @@ class Sequencer(Processor):
         def register_destination(reg_self):
             return Destination(Destination.Major.REG, reg_self._resource_id)
                         
-        reg_dct = {"operator_handler": resource_load,
+        reg_dct = {"augmenting_operator_handler": resource_augment,
                      "__str__": register_str,
                      "__repr__": register_str,
                      "load": resource_load,
@@ -527,7 +539,6 @@ class Sequencer(Processor):
         reg_dct.update(Operable.make_operator_functions(["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
-                           "mul", "rmul", "imul", 
                            "xor", "rxor", "ixor", "invert"]))
             
         self.Register = ManagedResource("Register", 
@@ -621,7 +632,7 @@ class Sequencer(Processor):
         dsp_dct = {"__str__": dsp_str,
                      "__repr__": dsp_str,
                      "load": resource_load,
-                     "operator_handler": resource_load,
+                     "augmenting_operator_handler": resource_augment,
                      "__setitem__": dsp_setitem,
                      "__getitem__": dsp_getitem,
                      "start_count": dsp_start_count,
@@ -632,7 +643,6 @@ class Sequencer(Processor):
         dsp_dct.update(Operable.make_operator_functions(["eq", "ne", "gt", "lt", "ge", "le", 
                            "add", "radd", "iadd", "sub", "rsub", "isub", 
                            "and", "rand", "iand", "or", "ror", "ior", 
-                           "mul", "rmul", "imul", 
                            "xor", "rxor", "ixor", "invert"]))
         
         self.DSP = ManagedResource("DSP", 
@@ -948,12 +958,12 @@ class Sequencer(Processor):
                 raise ValueError(f"Operation expects no keywords arguments;"
                                  f" received {obj._kwargs}.")
             
-            if obj._op == "invert":
+            if obj._op.__name__ == "invert":
                 # This is the only operation that takes one argument. 
                 # To make the compiler simpler, we can replace inversion 
                 # with an XOR of all 1's
                 return self.compile_source(
-                            Operation("xor", obj._args[0], 0xFFFFFFFF), 
+                            Operation(operator.xor, obj._args[0], 0xFFFFFFFF), 
                             dsp=dsp)
             
             if len(obj._args) != 2:
@@ -1035,19 +1045,17 @@ class Sequencer(Processor):
                 
             # Look at the operator encoded in the Operation and convert it into
             # an operating configuration for the DSP slice
-            dsp_mode_key = None
-                    
-            for base,key_format in [("add", "{}+{}"), 
-                                    ("sub", "{}-{}"), 
-                                    ("or", "{} OR {}"), 
-                                    ("and", "{} AND {}"),
-                                    ("xor", "{} XOR {}")]:
-                if obj._op == base or obj._op == f"i{base}":
-                    dsp_mode_key = key_format.format(*arg_inputs)
-                elif obj._op == f"r{base}":
-                    dsp_mode_key = key_format.format(*reversed(arg_inputs))
-                    
-            if not dsp_mode_key:
+            if obj._op.__name__ == "add" or obj._op.__name__ == "iadd":
+                dsp_mode_key = "{}+{}".format(*arg_inputs)
+            elif obj._op.__name__ == "sub" or obj._op.__name__ == "isub":
+                dsp_mode_key = "{}-{}".format(*arg_inputs) 
+            elif obj._op.__name__ == "or_" or obj._op.__name__ == "ior":
+                dsp_mode_key = "{} OR {}".format(*arg_inputs) 
+            elif obj._op.__name__ == "and_" or obj._op.__name__ == "iand":
+                dsp_mode_key = "{} AND {}".format(*arg_inputs) 
+            elif obj._op.__name__ == "xor" or obj._op.__name__ == "ixor":
+                dsp_mode_key = "{} XOR {}".format(*arg_inputs)         
+            else:
                 raise ValueError(f"Unable to find a DSP configuration for"
                                  f" Operation {obj}.")
                                 
@@ -1134,46 +1142,45 @@ class Sequencer(Processor):
         elif isinstance(condition, Operation):
             # This Operation must be the comparison
             # Some operators can be recursively simplified
-            if condition._op == "invert":
+            if condition._op.__name__ == "invert":
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
                 # Toggle the third bit, corresponding to the inverted condition
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
-            elif condition._op == "gt":
+            elif condition._op.__name__ == "gt":
                 # We can only check if 0 > x
                 if condition._args[0] != 0:
                     raise ValueError("Greater-than comparisons can only check 0 > x or x >= 0.")
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
                 return stc_kwargs,instructions,resources
-            elif condition._op == "lt":
+            elif condition._op.__name__ == "lt":
                 # We can only check if x < 0
                 if condition._args[1] != 0:
                     raise ValueError("Less-than comparisons can only check x < 0 or 0 <= x.")
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
                 return stc_kwargs,instructions,resources
-            elif condition._op == "ge":
+            elif condition._op.__name__ == "ge":
                 # We can only check if x >= 0
                 if condition._args[1] != 0:
                     raise ValueError("Greater-than comparisons can only check 0 > x or x >= 0.")
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
-            elif condition._op == "le":
+            elif condition._op.__name__ == "le":
                 # We can only check if 0 <= x
                 if condition._args[0] != 0:
                     raise ValueError("Less-than comparisons can only check x < 0 or 0 <= x.")
                 stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
-            elif condition._op == "ne":
-                new_condition = Operation("eq", *condition._args, **condition._kwargs)
+            elif condition._op.__name__ == "ne":
+                new_condition = Operation(operator.eq, *condition._args, **condition._kwargs)
                 stc_kwargs,instructions,resources = self.compile_condition(new_condition, mask)
                 stc_kwargs["op"] ^= 0b100
                 return stc_kwargs,instructions,resources
             
             # Base cases for recursive operation simplification
-            elif condition._op == "eq":
-                
+            elif condition._op.__name__ == "eq":
                 if ((isinstance(condition._args[0], int) and condition._args[0] == 0) 
                     or (isinstance(condition._args[0], Symbol) 
                         and condition._args[0].assigned()
@@ -1193,9 +1200,9 @@ class Sequencer(Processor):
                 
                 # not (SRC XOR MASK)
                 stc_kwargs["op"] = 0b101
-            elif condition._op == "and" or condition._op == "rand":
+            elif condition._op.__name__ == "and_":
                 stc_kwargs["op"] = 0b00
-            elif condition._op == "xor" or condition._op == "rxor":
+            elif condition._op.__name__ == "xor":
                 stc_kwargs["op"] = 0b01
             else:
                 # The Operation is computing something that is not a comparison,

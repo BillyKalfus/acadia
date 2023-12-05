@@ -1193,7 +1193,7 @@ class Channel:
         clock_speed = self.interface_sample_frequency / (self.interface_width_bytes // 4)
         duration_cycles = int(round(duration * clock_speed))
         if abs(duration * clock_speed - duration_cycles) > 1e-6:
-            raise ValueError("Array must be an integer number of cycles;"
+            raise ValueError("Duration must be an integer number of cycles;"
                              f" found {duration * clock_speed} cycles"
                              f" ({duration_samples} samples).")
 

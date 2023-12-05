@@ -11,7 +11,7 @@ from functools import reduce
 from itertools import count
 
 import numpy as np
-from numpy.lib.format import header_data_from_array_1_0, descr_to_dtype, dtype_to_descr
+from numpy.lib.format import descr_to_dtype, dtype_to_descr
 
 __all__ = ["RecordGroupMeta", 
            "ArrayRecordGroup",
@@ -31,7 +31,7 @@ class RecordGroup:
     between class initializers and their names.
     """
     
-    def __init__(self, name, directory):
+    def __init__(self, name, directory, **metadata):
         """
         Create a new record group.
         
@@ -43,6 +43,7 @@ class RecordGroup:
         """
         self._name = name
         self._directory = directory
+        self._metadata = metadata
     
     def load(self, metadata=None, map=True):
         """
@@ -56,7 +57,7 @@ class RecordGroup:
             class supports it.
         :type map: bool
         """
-        pass
+        self._metadata = metadata
     
     def full(self):
         """
@@ -89,14 +90,14 @@ class RecordGroup:
             previously.
         :rtype: dict
         """
-        return {}
+        return self._metadata
     
     def add_metadata(self, key, value):
         """
         Add an arbitrary piece of metadata to the group to be saved alongside 
         it.
         """
-        raise NotImplemented
+        self._metadata[key] = value
     
     def files(self) -> list:
         """
@@ -277,7 +278,8 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                  directory,
                  dtype=None, 
                  axes=None, 
-                 overwrite=False):
+                 overwrite=False,
+                 **metadata):
         """
         :param name: Name of the group
         :type name: str
@@ -293,13 +295,13 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         :param append_records: If `True`, new records will be appended to the
             complete record; otherwise, they will overwrite it.
         """
-        super().__init__(name, directory)
+        super().__init__(name, directory, **metadata)
         self._overwrite = overwrite
-        self._dtype = np.dtype(dtype)
+        self._dtype = np.dtype(dtype) if dtype is not None else dtype
         self._records = None
         self._loaded_elements = None
         self._open_objects = []
-        self._metadata = {"files": {}, "axes": None, "shape": [], "count": 0}
+        self._metadata.update({"files": {}, "axes": None, "shape": [], "count": 0})
         
         if axes is not None:
             axis_descriptions = []
@@ -325,20 +327,9 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                     raise TypeError(f"Invalid axis description type {type(ax)}")
         
             self._metadata["axes"] = axis_descriptions
-            
-    def metadata(self):
-        """
-        Retrieve metadata for all record files in the group. 
-        
-        :rtype: dict
-        """
-        return self._metadata
     
     def files(self):
         return list(self._metadata["files"].keys())
-    
-    def add_metadata(self, key, value):
-        self._metadata[key] = value
     
     @staticmethod
     def filedeltas(metadata1, metadata2):
@@ -370,10 +361,6 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         return deltas
     
     def write(self, record):
-        if hasattr(record, "memory"):
-            self.write(record.memory())
-            return
-        
         if isinstance(record, np.ndarray):
             if self._dtype is None:
                 self._dtype = record.dtype
@@ -381,13 +368,12 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 raise TypeError(f"Received numpy array of incorrect dtype"
                                 f" (expected {self._dtype}, received array"
                                 f" of {record.dtype})")
-        else:
+        elif isinstance(record, (float, int, complex, bool)):
             if self._dtype is None:
                 self._dtype = np.dtype(type(record))
-            else:
-                # A literal, try to create an instance of the dtype from it so
-                # that it will throw an error if this fails
-                _ = self._dtype(record)
+        else:
+            raise TypeError(f"Unable to write record of type {type(record)}"
+                            f" into ArrayRecordGroup")
 
         filename = f"{self._name}_records.bin"
         full_path = os.path.join(self._directory, filename)
@@ -416,7 +402,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             return None
         
         if "files" not in self._metadata:
-            logging.error(f"Incorrect header data format (not 'files' entry found)")
+            logging.error(f"Incorrect header data format ('files' entry not found)")
             return None
         
         if filename not in self._metadata["files"]:
@@ -478,7 +464,6 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         else:
             self._loaded_elements = [complete_records] + list(np.unravel_index(leftover_elements, metadata["shape"]))
             self._records = records_flattened
-        
         
     def close(self):
         for obj in self._open_objects:
@@ -557,14 +542,15 @@ class NumericTableRecordGroup(ArrayRecordGroup):
                  dtype=None, 
                  axes=None, 
                  overwrite=False, 
-                 fields=None):
+                 fields=None,
+                 **metadata):
         """
         :param fields: If not `None`, this should be a valid argument to 
             `numpy.dtype` for constructing the data type of the record 
             (see https://numpy.org/doc/stable/reference/arrays.dtypes.html#specifying-and-constructing-data-types 
             for details)
         """
-        super().__init__(name, directory, dtype, axes, overwrite)
+        super().__init__(name, directory, dtype, axes, overwrite, **metadata)
         self._fields = fields
         
     def write(self, record):
@@ -599,59 +585,51 @@ class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
     A simple counter.
     """
     
-    def __init__(self, name, directory, **widget_kwargs):
+    def __init__(self, name, directory, **metadata):
         """
         Initialize the reporter with an iterator. Any additional keyword 
         arguments are passed to the constructor for the underlying 
         `ipywidgets.IntProgress` instance.
         """
-        super().__init__(name, directory)
-        self._total = None
-        self._value = None
-        self._widget_kwargs = widget_kwargs
-        
-    def metadata(self):
-        return {"total": self._total, "value": self._value}
-        
-    def load(self, metadata=None, map=True):
-        self._total = metadata["total"]
-        self._value = metadata["value"]
+        super().__init__(name, directory, **metadata)
+        self._metadata["total"] = None
+        self._metadata["value"] = None
         
     @property
     def value(self):
-        return self._value
+        return self._metadata["value"]
     
     @value.setter
     def value(self, v):
         if not isinstance(v, int) and not isinstance(v, float):
             raise TypeError(f"Incompatible type for counter value: {type(v)}")
             
-        self._value = v
+        self._metadata["value"] = v
         
     @property
     def total(self):
-        return self._total
+        return self._metadata["total"]
     
     @total.setter
     def total(self, v):
         if not isinstance(v, int) and not isinstance(v, float):
             raise TypeError(f"Incompatible type for counter total: {type(v)}")
             
-        self._total = v
+        self._metadata["total"] = v
         
     def initialize_display(self):
-        if isinstance(self._value, (int, float)):
+        if isinstance(self._metadata["value"], (int, float)):
             from tqdm.notebook import tqdm
-            bar = tqdm(total=self._total, desc=self._name, **self._widget_kwargs)
-            bar.update(self._value)
+            bar = tqdm(total=self._metadata["total"], desc=self._name)
+            bar.update(self._metadata["value"])
         else:
             raise TypeError(f"Incompatible type for progress display:"
-                            f" {type(self._value)}")
-        return {"bar": bar, "last_value": self._value}
+                            f" {type(self._metadata['value'])}")
+        return {"bar": bar, "last_value": self._metadata["value"]}
         
     def update_display(self, vals):
-        vals["bar"].update(self._value - vals["last_value"])
-        vals["last_value"] = self._value
+        vals["bar"].update(self._metadata["value"] - vals["last_value"])
+        vals["last_value"] = self._metadata["value"]
             
     def close_display(self, vals):
         vals["bar"].close()
@@ -807,12 +785,12 @@ class DataManager:
         
         self._groups[group._name] = group
         
-    def report_iterations(self, iter, name="Iterations", **widget_kwargs):
+    def report_iterations(self, iter, name="Iterations"):
         """
         Report iterations through an iterable by creating a CounterRecordGroup
         and automatically increasing it for each item yielded by the iterable.
         """
-        group = CounterRecordGroup(name, self._directory, **widget_kwargs)    
+        group = CounterRecordGroup(name, self._directory)    
         self.add_group(group)
         
         group.value = 0

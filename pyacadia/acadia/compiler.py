@@ -14,48 +14,76 @@ __all__ = ["Operable",
 import operator
 from dataclasses import dataclass, field
 from typing import get_type_hints
-from types import MethodType
 from abc import ABC, abstractmethod
+from itertools import chain
 
 class Operable(type):
     """
     A metaclass used to capture operators acting on instances of derived 
     classes and return a symbolic representation of the operator call.
     """
-    
-    # A list of all operator methods that will return an Operation object
-    NUMERIC_OPERATORS = ["eq", "ne", "gt", "lt", "ge", "le", 
-                 "neg", "abs", "invert", "bool",
-                 "add", "radd",  
-                 "sub", "rsub", 
-                 "mul", "rmul", 
-                 "floordiv", "rfloordiv", 
-                 "truediv", "rtruediv", 
-                 "mod", "rmod", 
-                 "pow", "rpow", 
-                 "lshift", "rlshift", 
-                 "rshift", "rrshift", 
-                 "and", "rand", 
-                 "or", "ror", 
-                 "xor", "rxor"]
+        
+    NUMERIC_OPERATORS = {"eq": operator.eq, 
+                         "ne": operator.ne, 
+                         "gt": operator.ge, 
+                         "lt": operator.lt, 
+                         "ge": operator.ge, 
+                         "le": operator.le, 
+                         "neg": operator.neg, 
+                         "abs": operator.abs, 
+                         "invert": operator.invert, 
+                         "bool": operator.truth,
+                         "add": operator.add, 
+                         "sub": operator.sub, 
+                         "mul": operator.mul, 
+                         "floordiv": operator.floordiv, 
+                         "truediv": operator.truediv, 
+                         "mod": operator.mod, 
+                         "pow": operator.pow, 
+                         "lshift": operator.lshift, 
+                         "rshift": operator.rshift, 
+                         "and": operator.and_, 
+                         "or": operator.or_, 
+                         "xor": operator.xor}
                          
-    MISC_OPERATORS = ["len", "iter", "getitem", "setitem", "call", "contains"]
+    # MISC_OPERATORS = ["len", "iter", "getitem", "setitem", "call", "contains"]
     
-    # A list of all operators that will require a handler
-    HANDLED_OPERATORS = ["iadd", "isub", "imul", "ifloordiv", "itruediv",
-                         "imod", "ipow", "ilshift", "irshift", "iand", "ior",
-                         "ixor"]
+    AUGMENTING_OPERATORS = {"iadd": operator.iadd, 
+                            "isub": operator.isub, 
+                            "imul": operator.imul, 
+                            "ifloordiv": operator.ifloordiv, 
+                            "itruediv": operator.itruediv,
+                            "imod": operator.imod, 
+                            "ipow": operator.ipow, 
+                            "ilshift": operator.ilshift, 
+                            "irshift": operator.irshift, 
+                            "iand": operator.iand, 
+                            "ior": operator.ior,
+                            "ixor": operator.ixor}
+    
+    RIGHTHAND_OPERATORS = ["radd", 
+                           "rsub", 
+                           "rmul", 
+                           "rfloordiv", 
+                           "rtruediv", 
+                           "rmod", 
+                           "rpow", 
+                           "rlshift", 
+                           "rrshift", 
+                           "rand", 
+                           "ror", 
+                           "rxor"]
     
     @staticmethod
-    def make_op_func(op, handler=None):
+    def make_op_func(op_name):
         """
         A function factory for creating functions for operator calls. This is
         mainly necessary because if we try to loop through the list of 
         operators in __new__ like this::
 
             for op in supported_operators:
-                def op_func(*args, **kwargs):
-                    return handler(op, *args, **kwargs)
+                def op_func(*args):
+                    return handler(op, *args)
                 dct[f"__{op}__"] = op_func
 
         then the iteration variable ``op`` will be evaluated when ``op_func`` is
@@ -70,40 +98,37 @@ class Operable(type):
         .. _this: https://stackoverflow.com/questions/3431676/creating-functions-or-lambdas-in-a-loop-or-comprehension
         """
 
-        def op_func(*args, **kwargs):
-            operation = Operation(op, *args, **kwargs)
-            if op in Operable.HANDLED_OPERATORS:
-                args[0].operator_handler(operation)
+        def op_func(*args):
+            if op_name in Operable.AUGMENTING_OPERATORS:                    
+                args[0].augmenting_operator_handler(op_name, *(args[1:]))
                 return args[0]
-            if handler is not None:
-                return handler(operation)
-            return operation
-        
+            
+            if op_name in Operable.RIGHTHAND_OPERATORS:
+                return Operation(Operable.NUMERIC_OPERATORS[op_name[1:]], 
+                                 *reversed(args))
+            
+            return Operation(Operable.NUMERIC_OPERATORS[op_name], *args)
+                    
         return op_func
     
     @staticmethod
-    def make_operator_functions(operators=None, support_handled_operators=True):
+    def make_operator_functions(operators=None):
         funcs = {}
         if operators is not None:
             supported_operators = operators
             
         else:
-            supported_operators = (Operable.NUMERIC_OPERATORS 
-                                   + Operable.MISC_OPERATORS)
-            if support_handled_operators:
-                supported_operators += Operable.HANDLED_OPERATORS
-        
-        # handlers = kwargs["handlers"] if "handlers" in kwargs else []
-        handlers = []
+            supported_operators = chain(Operable.NUMERIC_OPERATORS, 
+                                        # Operable.MISC_OPERATORS,
+                                        Operable.AUGMENTING_OPERATORS,
+                                        Operable.RIGHTHAND_OPERATORS)
+
         for op in supported_operators:
-            if op in handlers:
-                funcs[f"__{op}__"] = Operable.make_op_func(op, handler=handlers[op])
-            else:
-                funcs[f"__{op}__"] = Operable.make_op_func(op)
+            funcs[f"__{op}__"] = Operable.make_op_func(op)
                 
         return funcs
      
-    def __new__(cls, name, bases, dct, operators=None, support_handled_operators=True):
+    def __new__(cls, name, bases, dct, operators=None):
         """
         Creates a new :class:`Operable` type.
         
@@ -111,17 +136,8 @@ class Operable(type):
             capture. The elements in this list should be the names of the operator
             methods to override, without the underscores.
         :type operators: list of str
-        :param operaror_handler: For operators that are understood to modify an object 
-            in place (such as +=), the corresponding dunder method will have to 
-            return the object itself in order to not overwrite it with the 
-            :class:`Operation` object. Therefore, we designate a function as the 
-            "augmentation handler" for the :class:`Operable`. When an augmenting
-            operator is called on the :class:`Operable`, the augmentation handler
-            will be called and passed the newly-created :class:`Operation` as its
-            sole argument.
         """
-
-        dct.update(Operable.make_operator_functions(operators, support_handled_operators))
+        dct.update(Operable.make_operator_functions(operators))
         return super().__new__(cls, name, bases, dct)
     
 class Operation(metaclass=Operable):
@@ -154,30 +170,64 @@ class Operation(metaclass=Operable):
     def __repr__(self):
         return f"Operation({self._op}, {self._args}, {self._kwargs})"
     
-    def value(self, op_lib=operator):
+    def value(self):
+        """
+        Retrieve the value of the operation acting on its arguments.
+        """
         solved_args = []
         for arg in self._args:
-            if isinstance(arg, Symbol) or isinstance(arg, Operation):
+            if isinstance(arg, Symbol):
+                if not arg.assigned():
+                    raise ValueError(f"Attempted to solve `Operation` with"
+                                     f" unassigned Symbol: {arg}")
+                solved_args.append(arg.value())
+            elif isinstance(arg, Operation):
+                if not arg.resolveable():
+                    raise ValueError(f"Attempted to solve `Operation` with"
+                                     f" unresolveable `Operation` as an"
+                                     f" argument: {arg}")
                 solved_args.append(arg.value())
             else:
                 solved_args.append(arg)
         solved_kwargs = {}
         for key,value in self._kwargs.items():
-            if isinstance(arg, Symbol) or isinstance(arg, Operation):
+            if isinstance(value, Symbol) or isinstance(value, Operation):
                 solved_kwargs[key] = value.value()
             else:
                 solved_kwargs[key] = value
                 
-        return getattr(op_lib, self._op)(*solved_args, **solved_kwargs)
+        return self._op(*solved_args, **solved_kwargs)
     
-    def operator_handler(self, operation):
+    def resolveable(self):
         """
-        Since operations do not support augmentation, throw an error if acted
-        upon by an augmenting operator.
+        Determine whether all arguments for this :class:`Operation` have
+        defined values. For :class:`Symbol` instances, this is when the 
+        instance is assigned; for :class:`Operation` instances, this is when
+        all of its arguments are resolveable; for all other types, this is 
+        assumed to be true.
+        
+        :rtype: bool
         """
-
-        raise ValueError(f"Operation object {self} acted upon by augmenting"
-                         f" operator with operation {operation}.")
+        for arg in chain(self._args, self._kwargs.values()):
+            if isinstance(arg, Symbol):
+                if not arg.assigned():
+                    return False
+            elif isinstance(arg, Operation):
+                if not arg.resolveable():
+                    return False
+            
+        return True
+    
+    def augmenting_operator_handler(self, op, *args):
+        # Copy all of the information from the augmenting operation
+        # The arguments will be (self, <other args>) so we need to make
+        # as copy in order not to get a recursive operation
+        # Also remove the "i" in front of all the augmenting operator names
+        
+        clone = Operation(self._op, *self._args, **self._kwargs)
+        self._op = Operable.AUGMENTING_OPERATORS[op]
+        self._args = (clone, *(args[1:]))
+        self._kwargs = {}
     
 class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):
     """
@@ -289,34 +339,44 @@ class ManagedResource(type):
 
     def __call__(type_self, *args, **kwargs):
         """
-        Creates a new instance of the resource. The only supported keyword 
-        argument is ``size``, the meaning of which will depend on the type being
-        instantiated.
+        Creates a new instance of the resource.
+        
+        :param size: The amount by which the underlying resource ID will be
+            increased upon allocation. If not provided, a size of 1 is 
+            assumed.
+        :type size: int
+        :param track: If ``False``, the internal instance tracker does not track
+            this instance or advance the allocation index upon creation. This 
+            is primarily intended for creating "views" of other resources.
+        :type track: bool
         """
 
+        size = kwargs.pop("size", 1)
         if (type_self._allocation_limit is not None 
             and type_self._allocation_index >= type_self._allocation_limit):
             # Find a free instance we can use, as indicated by noting that
             # it is released
             for instance in type_self.instances:
-                if instance._released:
+                if instance._released and instance.size >= size:
                     instance._released = False
+                    instance.size = size
                     return instance
 
             raise ValueError(f"Unable to allocate resource;"
                              f" instance limit reached for {type_self} with no"
                              f" released instance found.")
         
-        size = kwargs.pop("size", 1)
         instance = super().__call__(*args, **kwargs)
         instance._released = False
         instance._resource_id = type_self._allocation_index
         instance.size = size
-            
-        if type_self._next_instance_symbol is not None and not type_self._next_instance_symbol.assigned():
-            type_self._next_instance_symbol.assign(instance)            
-        type_self.instances.append(instance)
-        type_self._allocation_index += instance.size
+        
+        track = kwargs.pop("track", True)
+        if track:
+            if type_self._next_instance_symbol is not None and not type_self._next_instance_symbol.assigned():
+                type_self._next_instance_symbol.assign(instance)            
+            type_self.instances.append(instance)
+            type_self._allocation_index += instance.size
                 
         return instance
     
@@ -443,10 +503,26 @@ class ManagedMemory(ManagedResource):
 
             return self.base_byte_address + self._resource_id 
         
+        def res_view(self, byte_offset=0, byte_length=None):
+            """
+            Return an untracked ManagedMemory instance providing a view of the
+            resource.
+            
+            :param byte_offset: The offset into the memory where the view starts.
+            :type byte_offset: int
+            :param byte_length: The length of the view in bytes
+            :type byte_length: int
+            """
+            instance = type_self(size=(byte_length if byte_length is not None else self.size), 
+                                 track=False, 
+                                 dtype=self._dtype)
+            instance._resource_id = self._resource_id + byte_offset
+        
         type_instance.word_length = res_word_length
         type_instance.byte_length = res_byte_length
         type_instance.word_address = res_word_address
         type_instance.byte_address = res_byte_address
+        type_instance.view = res_view
 
         if default_getitem:
             def res_getitem(self, key):

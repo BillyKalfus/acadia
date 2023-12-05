@@ -127,6 +127,8 @@ DEFAULT_CONFIG = {
     },
 
     "sequencer_cache_memory": {
+        "clock": "hs_clk",
+        "axi_master": "PS", # either "PS" or "crossbar"
         "primitive": "block",
         "address": 0x00_B000_0000, 
         "segment": "s_axi/reg0",
@@ -141,6 +143,7 @@ DEFAULT_CONFIG = {
     },
 
     "sequencer_instruction_memory": {
+        "clock": "seq_clk",
         "primitive": "block",
         "address": 0x10_b080_0000, 
         "segment": "s_axi/reg0",
@@ -421,6 +424,8 @@ DEFAULT_CONFIG = {
             "channel_interface_width": [128]*16,
             "channel_pipeline_stages": [1]*16,
             "channel_nyquist_zone": [1]*16,
+            "dma_has_decimation": [False]*16,
+            "dma_has_narrowing": [False]*16,
             "tile_axis_clocks": ["dac_clk", "dac_clk", "dac_clk", "dac_clk"],
             "tile_mts": [True]*4,
             "tile_sample_rate_hz": [6e9]*4,
@@ -435,6 +440,8 @@ DEFAULT_CONFIG = {
             "channel_interface_width": [128]*16,
             "channel_pipeline_stages": [1]*16,
             "channel_dither": [False]*16,
+            "dma_has_decimation": [False]*16,
+            "dma_has_narrowing": [True]*16,
             "tile_axis_clocks": ["adc_clk", "adc_clk", "adc_clk", "adc_clk"],
             "tile_mts": [True]*4,
             "tile_sample_rate_hz": [2e9]*4,

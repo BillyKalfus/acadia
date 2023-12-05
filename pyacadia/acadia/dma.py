@@ -37,6 +37,14 @@ class Descriptor:
             
         if trace_length & 0xFFFFFFFF != trace_length:
             raise ValueError(f"Trace length must fit in 32 bits; received {trace_length}")
+        
+        if trace_length < 0:
+            raise ValueError(f"Received negative trace length for descriptor {self}")
+            
+        if trace_length == 0:
+            # Indicate that this is truly a null descriptor
+            self.null = True
+            return 0
             
         tmp |= trace_length
             

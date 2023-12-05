@@ -32,7 +32,9 @@ entity acadia_dma is
         ADDRESS_COUNTER_WIDTH      : positive := 32;
         DESCRIPTOR_MEM_ADDR_WIDTH  : positive := 16;
         DESCRIPTOR_FIFO_DEPTH      : positive := 8;
-        LOG2_DESCRIPTOR_FIFO_DEPTH : positive := 3
+        LOG2_DESCRIPTOR_FIFO_DEPTH : positive := 3;
+        HAS_DECIMATION             : boolean := false;
+        HAS_NARROWING              : boolean := false
     );
     port (
         clk                 : in  std_logic;
@@ -133,6 +135,8 @@ architecture rtl of acadia_dma is
     -- Internal drivers for sideband signals
     signal valid_int : std_logic;
     signal last_int  : std_logic;
+
+    signal address_out_tdata_next : unsigned(ADDRESS_WIDTH-1 downto 0);
     
 begin    
     
@@ -226,11 +230,22 @@ begin
     -- We'll choose to make the last sample in the decimation the 
     -- valid one solely because then we can condition the "last"
     -- signal on this and descriptor_done
-    decimation_valid <= '1' when descriptor_dec = "00" else
-                        '1' when (descriptor_dec = "01" and descriptor_point(0) = '1') else
-                        '1' when (descriptor_dec = "10" and descriptor_point(1 downto 0) = "11") else
-                        '1' when (descriptor_dec = "11" and descriptor_point(2 downto 0) = "111") else
-                        '0';
+    has_decimation_gen: if HAS_DECIMATION = true generate
+        decimation_valid <= '1' when descriptor_dec = "00" else
+                            '1' when (descriptor_dec = "01" and descriptor_point(0) = '1') else
+                            '1' when (descriptor_dec = "10" and descriptor_point(1 downto 0) = "11") else
+                            '1' when (descriptor_dec = "11" and descriptor_point(2 downto 0) = "111") else
+                            '0';
+        address_out_tdata_next <= descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr when descriptor_dec = "01" else
+                                  descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr when descriptor_dec = "10" else
+                                  descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr when descriptor_dec = "11" else
+                                  descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr;
+    end generate has_decimation_gen;
+
+    not_has_decimation_gen: if HAS_DECIMATION = false generate
+        decimation_valid       <= '1';
+        address_out_tdata_next <= descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr;
+    end generate not_has_decimation_gen;
       
     output_proc: process(clk) begin
         if rising_edge(clk) then
@@ -240,14 +255,8 @@ begin
             -- Update the address outputs depending on whether the descriptor is fixed or not
             if(descriptor_fixed = '1') then                
                 address_out_tdata <= std_logic_vector(descriptor_addr);
-            elsif(descriptor_dec = "01") then
-                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH downto 1) + descriptor_addr);
-            elsif(descriptor_dec = "10") then
-                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+1 downto 2) + descriptor_addr);
-            elsif(descriptor_dec = "11") then
-                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH+2 downto 3) + descriptor_addr);
             else
-                address_out_tdata <= std_logic_vector(descriptor_point(ADDRESS_WIDTH-1 downto 0) + descriptor_addr);
+                address_out_tdata <= std_logic_vector(address_out_tdata_next);
             end if;
 
             -- Set the valid outputs depending on run state and decimation mode
@@ -267,7 +276,7 @@ begin
                 narrow_idx <= not narrow_idx;
             end if;
             
-            if(narrow_int = '1') then
+            if((HAS_NARROWING = true) and (narrow_int = '1')) then
                 if narrow_idx = '1' then
                     data_out_tdata(DATA_WIDTH-1 downto DATA_WIDTH/2) <= data_in_d((DATA_WIDTH/2) - 1 downto 0);
                 else

@@ -480,26 +480,32 @@ class Firmware:
                            f"hedgehog/proc_sys_reset_seq_clk/interconnect_aresetn")
             lite_crossbar_slave = 0
             
-            # Create an AXI Crossbar for more rapid access to cache and instruction memories
-            # 1 Master: PS AXI Master 1 (plus any DataMovers)
-            # 2 slaves: cache, instruction memory
-            create_ip(f, name="hedgehog/sequencer_memory_crossbar", vlnv="xilinx.com:ip:axi_crossbar:2.1")
-            set_property(f, name="hedgehog/sequencer_memory_crossbar", 
-                         properties={"NUM_SI": 1,
-                                     "NUM_MI": 2,
-                                     "STRATEGY": 1,
-                                     "CONNECTIVITY_MODE": "SAMD"})
-            connect_bd_net(f, 
-                           "hedgehog/sequencer_memory_crossbar/aclk", 
-                           "hedgehog/clk_wiz/" + self.config["sequencer_memory_crossbar"]["clock"])
-            connect_bd_net(f, 
-                           "hedgehog/sequencer_memory_crossbar/aresetn", 
-                           f"hedgehog/proc_sys_reset_{self.config['sequencer_memory_crossbar']['clock']}/interconnect_aresetn")
-            sequencer_memory_crossbar_target_address_spaces = ["/ps/Data"]
+            sequencer_memory_target_address_spaces = ["/ps/Data"]
+            if self.config["sequencer_cache_memory"]["axi_master"] == "crossbar":
+                # Create an AXI Crossbar for more rapid access to cache and instruction memories
+                # 1 Master: PS AXI Master 1 (plus any DataMovers)
+                # 2 slaves: cache, instruction memory
+                create_ip(f, name="hedgehog/sequencer_memory_crossbar", vlnv="xilinx.com:ip:axi_crossbar:2.1")
+                set_property(f, name="hedgehog/sequencer_memory_crossbar", 
+                            properties={"NUM_SI": 1,
+                                        "NUM_MI": 2,
+                                        "STRATEGY": 1,
+                                        "CONNECTIVITY_MODE": "SAMD"})
+                connect_bd_net(f, 
+                            "hedgehog/sequencer_memory_crossbar/aclk", 
+                            "hedgehog/clk_wiz/" + self.config["sequencer_memory_crossbar"]["clock"])
+                connect_bd_net(f, 
+                            "hedgehog/sequencer_memory_crossbar/aresetn", 
+                            f"hedgehog/proc_sys_reset_{self.config['sequencer_memory_crossbar']['clock']}/interconnect_aresetn")
+                
+                sequencer_memory_crossbar_master = 0
+                sequencer_memory_crossbar_slave = 0
 
-            # Connect it to the PS
-            connect_bd_intf_net(f, f"hedgehog/sequencer_memory_crossbar/S00_AXI", f"hedgehog/PS_M_AXI1")
-            sequencer_memory_crossbar_master = 1
+                # Connect it to the PS
+                connect_bd_intf_net(f, f"hedgehog/sequencer_memory_crossbar/S{sequencer_memory_crossbar_master:02d}_AXI", f"hedgehog/PS_M_AXI1")
+                sequencer_memory_crossbar_master += 1
+            elif self.config["sequencer_cache_memory"]["axi_master"] != "PS":
+                raise ValueError(f'Unrecognized cache master {self.config["sequencer_cache_memory"]["axi_master"]}')
             
             # Create a SmartConnect for most memory in the system
             # Number of masters determined entirely by the stream processing path
@@ -511,7 +517,7 @@ class Firmware:
             #           
             create_ip(f, name="hedgehog/memory_smartconnect", vlnv="xilinx.com:ip:smartconnect:1.0")
             set_property(f, name="hedgehog/memory_smartconnect", 
-                         properties={"NUM_MI": 14, 
+                         properties={"NUM_MI": 15, 
                                      "NUM_SI": self._memory_smartconnect_masters, 
                                      "NUM_CLKS": 4})
             connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk", f"hedgehog/clk_wiz/hs_clk")
@@ -731,14 +737,22 @@ class Firmware:
             # Add cache memory and connect it to the sequencer bus decoder
             create_module(f, f"hedgehog/cache_memory", f"cache_axi_memory")
             
-            # Connect the cache to the smartconnect
-            connect_bd_intf_net(f, f"hedgehog/cache_memory/s_axi", f"hedgehog/sequencer_memory_crossbar/M00_AXI")
+            # Connect the cache to its designated master
+            if self.config['sequencer_cache_memory']['axi_master'] == 'PS':
+                cache_master = f"hedgehog/PS_M_AXI1" 
+            elif self.config['sequencer_cache_memory']['axi_master'] == 'crossbar':
+                cache_master = f"hedgehog/sequencer_memory_crossbar/M{sequencer_memory_crossbar_slave:02d}_AXI"
+                sequencer_memory_crossbar_slave += 1
+            else:
+                raise ValueError(f"Unrecognized cache master {self.config['sequencer_cache_memory']['axi_master']}")
+                
+            connect_bd_intf_net(f, f"hedgehog/cache_memory/s_axi", cache_master)
             connect_bd_net(f, 
                            "hedgehog/cache_memory/s_axi_aclk", 
-                           "hedgehog/clk_wiz/" + self.config['sequencer_memory_crossbar']['clock'])
+                           "hedgehog/clk_wiz/" + self.config['sequencer_cache_memory']['clock'])
             connect_bd_net(f, 
                            "hedgehog/cache_memory/s_axi_aresetn", 
-                           f"hedgehog/proc_sys_reset_{self.config['sequencer_memory_crossbar']['clock']}/peripheral_aresetn")
+                           f"hedgehog/proc_sys_reset_{self.config['sequencer_cache_memory']['clock']}/peripheral_aresetn")
             
             # Connect the cache to the sequencer bus decoder
             connect_bd_intf_net(f, 
@@ -747,13 +761,14 @@ class Firmware:
             
             # ------------------- Sequencer Instruction Memory -------------------- #
             create_module(f, "hedgehog/instruction_memory", "instruction_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/instruction_memory/s_axi", f"hedgehog/sequencer_memory_crossbar/M01_AXI")
+            connect_bd_intf_net(f, f"hedgehog/instruction_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
+            memory_smartconnect_slave += 1
             connect_bd_net(f, 
                            "hedgehog/instruction_memory/s_axi_aclk", 
-                           "hedgehog/clk_wiz/" + self.config['sequencer_memory_crossbar']['clock'])
+                           f"hedgehog/clk_wiz/{self.config['sequencer_instruction_memory']['clock']}")
             connect_bd_net(f, 
                            "hedgehog/instruction_memory/s_axi_aresetn", 
-                           f"hedgehog/proc_sys_reset_{self.config['sequencer_memory_crossbar']['clock']}/peripheral_aresetn")
+                           f"hedgehog/proc_sys_reset_{self.config['sequencer_instruction_memory']['clock']}/peripheral_aresetn")
             
             # Connect it to the sequencer
             connect_bd_intf_net(f, f"hedgehog/sequencer/instruction_mem", f"hedgehog/instruction_memory/mem0")
@@ -788,6 +803,8 @@ class Firmware:
                 set_property(f, 
                              f"hedgehog/dac{channel}_dma", 
                              properties={
+                                "HAS_DECIMATION": self.config[f"rfdc"]["dac"]["dma_has_decimation"][channel],
+                                "HAS_NARROWING": self.config[f"rfdc"]["dac"]["dma_has_narrowing"][channel],
                                 "ADDRESS_WIDTH": next_highest_power_of_2(
                                                     self.config[f"dac_tile{tile}_sample_memory"]["size_bits"] 
                                                     // self.config[f"rfdc"]["dac"]["channel_interface_width"][channel], 
@@ -838,8 +855,11 @@ class Firmware:
                 create_module(f, f"hedgehog/adc{d}_dma", "acadia_dma")
                 set_property(f, 
                              name=f"hedgehog/adc{d}_dma", 
-                             properties={"DATA_WIDTH": self.config["stream_processing_path"]["width"],
-                                         "DESCRIPTOR_MEM_ADDR_WIDTH": next_highest_power_of_2(self.config["adc_dma_descriptor_memory"]["size_bits"] // 64, log=True)})
+                             properties={
+                                "HAS_DECIMATION": self.config[f"rfdc"]["adc"]["dma_has_decimation"][channel],
+                                "HAS_NARROWING": self.config[f"rfdc"]["adc"]["dma_has_narrowing"][channel],
+                                "DATA_WIDTH": self.config["stream_processing_path"]["width"],
+                                "DESCRIPTOR_MEM_ADDR_WIDTH": next_highest_power_of_2(self.config["adc_dma_descriptor_memory"]["size_bits"] // 64, log=True)})
                 connect_bd_net(f, 
                                f"hedgehog/adc{d}_dma/clk", 
                                f"hedgehog/clk_wiz/seq_clk")
@@ -1587,6 +1607,12 @@ class Firmware:
                     offset=self.config["rfdc"]["axi_address"], 
                     range=self.config["rfdc"]["axi_size_bits"] // 8)
                 
+                assign_bd_address(f, 
+                    target_address_space=target_address_space, 
+                    offset=self.config["sequencer_instruction_memory"]["address"], 
+                    range=self.config["sequencer_instruction_memory"]["size_bits"] // 8, 
+                    addr_seg=f"hedgehog/instruction_memory/" + self.config["sequencer_instruction_memory"]["segment"])
+                
                 # Exclude the QSPI
                 for gp in range(4):
                     exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HPC0_QSPI")
@@ -1594,17 +1620,12 @@ class Firmware:
                     exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HP0_QSPI")
                     exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HP1_QSPI")            
                     
-            for target_address_space in sequencer_memory_crossbar_target_address_spaces:
+            for target_address_space in sequencer_memory_target_address_spaces:
                 assign_bd_address(f, 
                     target_address_space=target_address_space, 
                     offset=self.config["sequencer_cache_memory"]["address"], 
                     range=self.config["sequencer_cache_memory"]["size_bits"] // 8, 
                     addr_seg=f"hedgehog/cache_memory/" + self.config["sequencer_cache_memory"]["segment"])
-                assign_bd_address(f, 
-                    target_address_space=target_address_space, 
-                    offset=self.config["sequencer_instruction_memory"]["address"], 
-                    range=self.config["sequencer_instruction_memory"]["size_bits"] // 8, 
-                    addr_seg=f"hedgehog/instruction_memory/" + self.config["sequencer_instruction_memory"]["segment"])
                 
     def stream_inputs(self):
         """
