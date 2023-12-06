@@ -68,7 +68,8 @@ entity acadia_dma is
 
         -- Auxiliary signals
         trigger        : in  std_logic;
-        running        : out std_logic
+        running        : out std_logic;
+        fifo_occupancy : out std_logic_vector(LOG2_DESCRIPTOR_FIFO_DEPTH downto 0)
     );
 
 end acadia_dma;
@@ -107,7 +108,8 @@ architecture rtl of acadia_dma is
 
     signal rst_int : std_logic;
     signal narrow_int : std_logic;
-    signal data_in_d : std_logic_vector(DATA_WIDTH-1 downto 0);
+    signal data_out_p : std_logic_vector(DATA_WIDTH-1 downto 0);
+    signal address_out_p : std_logic_vector(ADDRESS_WIDTH-1 downto 0);
     signal narrow_idx : std_logic;
 
     -- Run state
@@ -179,6 +181,7 @@ begin
     -- once we've already started the descriptor
     fifo_rd_en_int <= (trigger and not running_int) or (descriptor_done and running_int);
     fifo_wr_en_int <= (master_bus_we and master_bus_en) when master_bus_addr(0) = '0' else '0';
+    fifo_occupancy <= fifo_occupancy_int;
 
     -- Establish some progress flags
     -- These should ideally be mapped into the DSP slice pattern detector
@@ -250,13 +253,13 @@ begin
     output_proc: process(clk) begin
         if rising_edge(clk) then
             -- Data output gets pipelined so that it's aligned with the handshake signals
-            data_in_d <= data_in;
+            data_out_p <= data_in;
 
             -- Update the address outputs depending on whether the descriptor is fixed or not
             if(descriptor_fixed = '1') then                
-                address_out_tdata <= std_logic_vector(descriptor_addr);
+                address_out_p <= std_logic_vector(descriptor_addr);
             else
-                address_out_tdata <= std_logic_vector(address_out_tdata_next);
+                address_out_p <= std_logic_vector(address_out_tdata_next);
             end if;
 
             -- Set the valid outputs depending on run state and decimation mode
@@ -278,20 +281,22 @@ begin
             
             if((HAS_NARROWING = true) and (narrow_int = '1')) then
                 if narrow_idx = '1' then
-                    data_out_tdata(DATA_WIDTH-1 downto DATA_WIDTH/2) <= data_in_d((DATA_WIDTH/2) - 1 downto 0);
+                    data_out_tdata(DATA_WIDTH-1 downto DATA_WIDTH/2) <= data_out_p((DATA_WIDTH/2) - 1 downto 0);
                 else
-                    data_out_tdata((DATA_WIDTH/2) - 1 downto 0) <= data_in_d((DATA_WIDTH/2) - 1 downto 0);
+                    data_out_tdata((DATA_WIDTH/2) - 1 downto 0) <= data_out_p((DATA_WIDTH/2) - 1 downto 0);
                 end if;
                 
                 data_out_tvalid    <= valid_int and narrow_idx;
                 data_out_tlast     <= last_int and narrow_idx;
+                address_out_tdata <= address_out_p;
                 address_out_tvalid <= valid_int and narrow_idx;
                 address_out_tlast  <= last_int and narrow_idx;
                 data_address_invalid <= not (valid_int and narrow_idx);
             else
-                data_out_tdata     <= data_in_d;
+                data_out_tdata     <= data_out_p;
                 data_out_tvalid    <= valid_int;
                 data_out_tlast     <= last_int;
+                address_out_tdata <= address_out_p;
                 address_out_tvalid <= valid_int;
                 address_out_tlast  <= last_int;
                 data_address_invalid <= not valid_int;

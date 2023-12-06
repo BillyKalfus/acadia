@@ -116,7 +116,9 @@ begin
             if unsigned(descriptor_mem_addr) = 0 then
                 descriptor_mem_dout <= x"000000000000007C";
             elsif unsigned(descriptor_mem_addr) = 1 then
-                descriptor_mem_dout <= x"00000000000001F3";
+                descriptor_mem_dout <= x"400000FA000000F9";
+            elsif unsigned(descriptor_mem_addr) = 2 then
+                descriptor_mem_dout <= x"0000007D0000007C";
             else
                 descriptor_mem_dout <= (others => '0');
             end if;
@@ -135,34 +137,37 @@ begin
         
         for i in 0 to 3 loop wait until rising_edge(clk); end loop;
         
-        master_bus_addr <= x"00000000";
-        master_bus_mosi <= x"00000000";
-        master_bus_we <= '1';
-        master_bus_en <= '1';
-        wait until rising_edge(clk);
-
-        master_bus_addr <= x"00000000";
-        master_bus_mosi <= x"00000001";
-        master_bus_we <= '1';
-        master_bus_en <= '1';
-        wait until rising_edge(clk);
-
-        master_bus_addr <= x"00000000";
-        master_bus_mosi <= x"00000000";
-        master_bus_we <= '1';
-        master_bus_en <= '1';
-        wait until rising_edge(clk);
-
-        master_bus_we <= '0';
-        master_bus_en <= '0';
+        for k in 0 to 10 loop 
         
-        for i in 0 to 9 loop wait until rising_edge(clk); end loop;
-        trigger <= '1';
-        wait until rising_edge(clk);
-        trigger <= '0';
-        
+            master_bus_addr <= x"00000000";
+            master_bus_mosi <= x"00000000";
+            master_bus_we <= '1';
+            master_bus_en <= '1';
+            wait until rising_edge(clk);
     
-        for i in 0 to 1999 loop wait until rising_edge(clk); end loop;
+            master_bus_addr <= x"00000000";
+            master_bus_mosi <= x"00000001";
+            master_bus_we <= '1';
+            master_bus_en <= '1';
+            wait until rising_edge(clk);
+    
+            master_bus_addr <= x"00000000";
+            master_bus_mosi <= x"00000002";
+            master_bus_we <= '1';
+            master_bus_en <= '1';
+            wait until rising_edge(clk);
+    
+            master_bus_we <= '0';
+            master_bus_en <= '0';
+            
+            for i in 0 to 9 loop wait until rising_edge(clk); end loop;
+            trigger <= '1';
+            wait until rising_edge(clk);
+            trigger <= '0';
+            
+            for i in 0 to 799 loop wait until rising_edge(clk); end loop;
+        end loop;
+
 
     end process stimulus_proc;
 
