@@ -1482,19 +1482,19 @@ class Acadia:
         sim_string = ""
         for s in self._sequencer_type.instances:
             for idx_instr,instr in enumerate(s._compiled_program):
-                assembled = instr.assemble()
+                assembled = ''.join([f'{b:02X}' for b in instr.assemble()])
                 address = (s._resource_id + idx_instr)*16
-                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{address + self._firmware['sequencer_instruction_memory']['address']: X}, 16, 128'h{assembled:032X}, resp);\n"
+                sim_string += f"acadia_tb.uut.ps.inst.write_data(40'h{address + self._firmware['sequencer_instruction_memory']['address']: X}, 16, 128'h{assembled}, resp);\n"
     
         for i,dma in enumerate(self._dac_dmas):
             for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = instr.assemble()
-                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['dac_dma_descriptor_memory']['address'] + i*(self._firmware['dac_dma_descriptor_memory']['size_bits']//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"
+                assembled = f"{instr.assemble():016X}"
+                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['dac_dma_descriptor_memory']['address'] + i*(self._firmware['dac_dma_descriptor_memory']['size_bits']//8) + idx_instr*8: X}, 8, 64'h{assembled}, resp);\n"
             
         for i,dma in enumerate(self._adc_dmas):
             for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = instr.assemble()
-                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['adc_dma_descriptor_memory']['address'] + i*(self._firmware['adc_dma_descriptor_memory']['size_bits']//8) + idx_instr*8: X}, 8, 64'h{assembled:016X}, resp);\n"      
+                assembled = f"{instr.assemble():016X}"
+                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['adc_dma_descriptor_memory']['address'] + i*(self._firmware['adc_dma_descriptor_memory']['size_bits']//8) + idx_instr*8: X}, 8, 64'h{assembled}, resp);\n"      
             
         return sim_string
 
