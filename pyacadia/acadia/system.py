@@ -55,6 +55,12 @@ class DMASynchronizer(Synchronizer):
         # yet) so that when we do add one, we can know where to add it
         channel_lengths = {}
         
+        # Keep track of when every channel in the synchronizer had its first 
+        # entry pushed to the FIFO. We need to know this because we'll have a
+        # problem if we push to the FIFO too close to when we trigger
+        latest_first_call = 0
+        channels_used = []
+        
         self.dma_mask = 0
 
         for idx_call,call in enumerate(self._calls):
@@ -90,6 +96,9 @@ class DMASynchronizer(Synchronizer):
                     
                 self.dma_mask |= acadia.get_dma(channel).mask
                 descriptor = acadia.channel_dma_stream(**kwargs)
+                if channel not in channels_used:
+                    latest_first_call = idx_call
+                    channels_used.append(channel)
                 
             elif function == DMASynchronizer.BARRIER:
                 # We first need to figure out the time in the block at which 
@@ -117,6 +126,9 @@ class DMASynchronizer(Synchronizer):
                                                 length=delay_length,
                                                 word_address=0,
                                                 blank=True)
+                    if channel not in channels_used:
+                        latest_first_call = idx_call
+                        channels_used.append(channel)
                     
                 # Reset channel lengths so that when we hit the next barrier 
                 # (if any) it only adds delays after this one
@@ -128,8 +140,39 @@ class DMASynchronizer(Synchronizer):
         if self.dma_mask == 0:
             raise ValueError("Empty synchronizer")
         
-        # Add instructions to do so now
         if self._dma_trigger:
+            # There's a certain latency associated with pushing to the DMA FIFO and 
+            # before the descriptor actually exits the memory, so we need to wait for this
+            required_latency = 0
+            
+            # Figure out if at least one of the channels in the calls is pipelined;
+            # if so, we'll need an extra cycle of trigger latency
+            for call in self._calls:
+                channel = call["kwargs"]['channel']
+                idx = channel.num + (16 if not channel.is_dac else 0)
+                if self._acadia._firmware["sequencer_bus"]["dma_pipeline"][idx]:
+                    required_latency += 1
+                    break
+            
+            # 1 cycle for the data to propagate from the FIFO input to output 
+            # (this is when the address will appear at the descriptor memory read port)
+            required_latency += 1
+            
+            # Extra cycles for descriptor memory input and output pipeline cycles
+            # TODO: make this smarter, but for now we'll use the DAC pipeline latencies
+            required_latency += self._acadia._firmware["dac_dma_descriptor_memory"]["dma_port_input_pipeline"]
+            required_latency += self._acadia._firmware["dac_dma_descriptor_memory"]["dma_port_output_pipeline"]
+            
+            # We only need as much latency as is necessary to appropriately separate 
+            # the first FIFO push for a given channel and its corresponding trigger. 
+            # However, if we write multiple times to a FIFO, this counts as cycles that
+            # separate the first push from the trigger, so we don't need to add as many
+            # NOPs
+            nops = required_latency - (len(self._calls) - latest_first_call)
+            for _ in range(nops):
+                proc.nop(comment=f"Trigger latency (latest first call at {latest_first_call},"
+                                 f" required latency {required_latency})")
+            
             # The only parent object that we could have had was an Acadia object,
             # so we know on which object we should call dma_trigger
             dma_trigger_device = self._acadia._firmware.sequencer_bus_decoder["dma_trigger"]
@@ -1482,9 +1525,9 @@ class Acadia:
         sim_string = ""
         for s in self._sequencer_type.instances:
             for idx_instr,instr in enumerate(s._compiled_program):
-                assembled = ''.join([f'{b:02X}' for b in instr.assemble()])
+                assembled = ''.join(reversed([f'{b:02X}' for b in instr.assemble()]))
                 address = (s._resource_id + idx_instr)*16
-                sim_string += f"acadia_tb.uut.ps.inst.write_data(40'h{address + self._firmware['sequencer_instruction_memory']['address']: X}, 16, 128'h{assembled}, resp);\n"
+                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{address + self._firmware['sequencer_instruction_memory']['address']: X}, 16, 128'h{assembled}, resp);\n"
     
         for i,dma in enumerate(self._dac_dmas):
             for idx_instr,instr in enumerate(dma._compiled_program):
