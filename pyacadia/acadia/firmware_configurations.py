@@ -145,7 +145,7 @@ DEFAULT_CONFIG = {
     "sequencer_instruction_memory": {
         "clock": "seq_clk",
         "primitive": "block",
-        "address": 0x10_b080_0000, 
+        "address": 0x00_A880_0000, 
         "segment": "s_axi/reg0",
         "size_bits": 128*4096,
         "synchronous": False,
@@ -160,7 +160,7 @@ DEFAULT_CONFIG = {
         "primitive": "ultra",
         "interface_width": 128,
         "controller_width": 128,
-        "address": 0x10_0000_0000,
+        "address": 0x00_A800_0000,
         "size_bits": 2**20,
         "segment": "s_axi/reg0",
         "synchronous": True,
@@ -174,7 +174,7 @@ DEFAULT_CONFIG = {
         "primitive": "ultra",
         "interface_width": 128,
         "controller_width": 128,
-        "address": 0x10_0008_0000,
+        "address": 0x00_A808_0000,
         "size_bits": 2**20,
         "segment": "s_axi/reg0",
         "synchronous": True,
@@ -188,7 +188,7 @@ DEFAULT_CONFIG = {
         "primitive": "ultra",
         "interface_width": 128,
         "controller_width": 128,
-        "address": 0x10_0010_0000,
+        "address": 0x00_A810_0000,
         "size_bits": 2**20,
         "segment": "s_axi/reg0",
         "synchronous": True,
@@ -202,7 +202,7 @@ DEFAULT_CONFIG = {
         "primitive": "ultra",
         "interface_width": 128,
         "controller_width": 128,
-        "address": 0x10_0018_0000,
+        "address": 0x00_A818_0000,
         "size_bits": 2**20,
         "segment": "s_axi/reg0",
         "synchronous": True,
@@ -214,7 +214,7 @@ DEFAULT_CONFIG = {
 
     "dac_dma_descriptor_memory": {
         "primitive": "block",
-        "address": 0x10_0020_0000, 
+        "address": 0x00_A820_0000, 
         "size_bits": 1024*64,
         "segment": "s_axi/reg0",
         "synchronous": True,
@@ -227,7 +227,7 @@ DEFAULT_CONFIG = {
         
     "adc_dma_descriptor_memory": {
         "primitive": "block",
-        "address": 0x10_0030_0000, 
+        "address": 0x00_A830_0000, 
         "size_bits": 1024*64,
         "segment": "s_axi/reg0",
         "synchronous": True,
@@ -299,14 +299,14 @@ DEFAULT_CONFIG = {
         # processing path input switch. It provides a small number of outputs, 
         # which are then connected to the stream processing path input switch. 
         "input_switch": {
-            "axi_address": 0x10_0040_0000, 
+            "axi_address": 0x00_A840_0000, 
             "axi_size_bits": 8 * 2**18,
             "axi_segment": "S_AXI_CTRL/Reg",
             "axi_clk": "seq_clk"
         },
         
         "adc_input_switch": {
-            "axi_address": 0x10_0050_0000, 
+            "axi_address": 0x00_A850_0000, 
             "axi_size_bits": 8 * 2**18,
             "axi_segment": "S_AXI_CTRL/Reg",
             "axi_clk": "seq_clk"
@@ -401,7 +401,7 @@ DEFAULT_CONFIG = {
         # Some shared settings for any CMACCs used
         # If there are no CMACCs, these are ignored
         "cmacc_kernel_memory_controller": {
-            "base_address": 0x10_0060_0000, 
+            "base_address": 0x00_A860_0000, 
             "segment": "s_axi/reg0",
             "controller_width": 32,
             "controller_port_input_pipeline": 2,
@@ -416,7 +416,7 @@ DEFAULT_CONFIG = {
         # if axi_synchronous is true then this must be the sequencer clock frequency
         "axi_clk_freq_hz": 250e6,
         
-        "axi_address": 0x10_0070_0000, 
+        "axi_address": 0x00_A870_0000, 
         "axi_size_bits": 8 * 2**18,
         "axi_segment": "s_axi/reg",
 
