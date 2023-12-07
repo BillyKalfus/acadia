@@ -737,22 +737,37 @@ class Firmware:
             # Add cache memory and connect it to the sequencer bus decoder
             create_module(f, f"hedgehog/cache_memory", f"cache_axi_memory")
             
-            # Connect the cache to its designated master
-            if self.config['sequencer_cache_memory']['axi_master'] == 'PS':
-                cache_master = f"hedgehog/PS_M_AXI1" 
-            elif self.config['sequencer_cache_memory']['axi_master'] == 'crossbar':
-                cache_master = f"hedgehog/sequencer_memory_crossbar/M{sequencer_memory_crossbar_slave:02d}_AXI"
-                sequencer_memory_crossbar_slave += 1
-            else:
-                raise ValueError(f"Unrecognized cache master {self.config['sequencer_cache_memory']['axi_master']}")
-                
-            connect_bd_intf_net(f, f"hedgehog/cache_memory/s_axi", cache_master)
             connect_bd_net(f, 
                            "hedgehog/cache_memory/s_axi_aclk", 
                            "hedgehog/clk_wiz/" + self.config['sequencer_cache_memory']['clock'])
             connect_bd_net(f, 
                            "hedgehog/cache_memory/s_axi_aresetn", 
                            f"hedgehog/proc_sys_reset_{self.config['sequencer_cache_memory']['clock']}/peripheral_aresetn")
+            
+            # Connect the cache to its designated master
+            if self.config['sequencer_cache_memory']['axi_master'] == 'PS':
+                # Connect through a register slice
+                create_ip(f, "hedgehog/cache_memory_reg", "xilinx.com:ip:axi_register_slice:2.1")
+                connect_bd_net(f, 
+                               f"hedgehog/cache_memory_reg/aclk", 
+                               f"hedgehog/clk_wiz/{self.config['sequencer_cache_memory']['clock']}")
+                connect_bd_net(f, 
+                               f"hedgehog/cache_memory_reg/aresetn", 
+                               f"hedgehog/proc_sys_reset_{self.config['sequencer_cache_memory']['clock']}/peripheral_aresetn")
+                connect_bd_intf_net(f, 
+                                    f"hedgehog/PS_M_AXI1" , 
+                                    f"hedgehog/cache_memory_reg/S_AXI")
+                connect_bd_intf_net(f, 
+                                    f"hedgehog/cache_memory_reg/M_AXI", 
+                                    f"hedgehog/cache_memory/s_axi")
+                
+            elif self.config['sequencer_cache_memory']['axi_master'] == 'crossbar':
+                connect_bd_intf_net(f, 
+                                    f"hedgehog/cache_memory/s_axi", 
+                                    f"hedgehog/sequencer_memory_crossbar/M{sequencer_memory_crossbar_slave:02d}_AXI")
+                sequencer_memory_crossbar_slave += 1
+            else:
+                raise ValueError(f"Unrecognized cache master {self.config['sequencer_cache_memory']['axi_master']}")
             
             # Connect the cache to the sequencer bus decoder
             connect_bd_intf_net(f, 
@@ -761,14 +776,29 @@ class Firmware:
             
             # ------------------- Sequencer Instruction Memory -------------------- #
             create_module(f, "hedgehog/instruction_memory", "instruction_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/instruction_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
-            memory_smartconnect_slave += 1
             connect_bd_net(f, 
                            "hedgehog/instruction_memory/s_axi_aclk", 
                            f"hedgehog/clk_wiz/{self.config['sequencer_instruction_memory']['clock']}")
             connect_bd_net(f, 
                            "hedgehog/instruction_memory/s_axi_aresetn", 
                            f"hedgehog/proc_sys_reset_{self.config['sequencer_instruction_memory']['clock']}/peripheral_aresetn")
+            
+            # Connect it to the smartconnect through a register slice
+            # Connect through a register slice
+            create_ip(f, "hedgehog/instruction_memory_reg", "xilinx.com:ip:axi_register_slice:2.1")
+            connect_bd_net(f, 
+                            f"hedgehog/instruction_memory_reg/aclk", 
+                            f"hedgehog/clk_wiz/{self.config['sequencer_instruction_memory']['clock']}")
+            connect_bd_net(f, 
+                            f"hedgehog/instruction_memory_reg/aresetn", 
+                            f"hedgehog/proc_sys_reset_{self.config['sequencer_instruction_memory']['clock']}/peripheral_aresetn")
+            connect_bd_intf_net(f, 
+                                f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI", 
+                                f"hedgehog/instruction_memory_reg/S_AXI")
+            connect_bd_intf_net(f, 
+                                f"hedgehog/instruction_memory_reg/M_AXI", 
+                                f"hedgehog/instruction_memory/s_axi")
+            memory_smartconnect_slave += 1
             
             # Connect it to the sequencer
             connect_bd_intf_net(f, f"hedgehog/sequencer/instruction_mem", f"hedgehog/instruction_memory/mem0")
