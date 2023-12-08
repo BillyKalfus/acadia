@@ -225,10 +225,11 @@ class Array:
         
         return self._resource
     
-    def flush(self):
+    def flush(self, **kwargs):
         """
         Transfer any data in an internal cache into hardware. If there is no
-        buffer, no action is taken.
+        buffer, no action is taken. Subclasses may add custom behavior that 
+        accepts keyword arguments, but by default these are ignored.
         """
         if self.buffered and self.allocated():
             tmp = self._buffer_mode
@@ -286,11 +287,7 @@ class Array:
             raise AttributeError(f"Attempted to obtain word address of"
                                  f" non-managed resource of type"
                                  f" {type(self._resource)}.")
-            
-        # if self._buffer_mode:
-        #     raise ValueError(f"Attempted to access word address of `Array` in"
-        #                      f" buffer mode.")
-            
+
         return self._resource.word_address()
     
     def byte_address(self):
@@ -390,11 +387,13 @@ class ProceduralArrayMixin:
         
         self._generator = generator
         
-    def populate(self, *args, **kwargs):
+    def populate(self, *args, flush_params={}, **kwargs):
         """
         Populate the underlying array resource, passing any arguments to the
         encapsulated generator function. The object instance must implement
         the method ``memory`` with a similar signature to ``Array.memory``.
+        By default, :meth:`flush` is called with any keyword arguments passed
+        in `flush_params`. This can be set to `None` to disable this behavior.
         
         :raises: ``ValueError`` if the array does not have a generator
         """    
@@ -421,7 +420,8 @@ class ProceduralArrayMixin:
                             self.axis().ctypes.data,
                             *args, **kwargs)   
             
-        self.flush()
+        if flush_params is not None:
+            self.flush(**flush_params)
         
 class Waveform(Array):
     """
@@ -592,7 +592,7 @@ class Waveform(Array):
         arrays = super().split(split_idx)
         return tuple(Waveform(self._sample_rate_or_channel, data=arr) for arr in arrays)
         
-    def unpack(self, out=None):
+    def unpack(self, out=None, scale=1):
         """
         Unpack the integer sample data in memory into complex floating-point 
         numbers.
@@ -610,17 +610,17 @@ class Waveform(Array):
             with self.unbuffer():
                 np.copyto(dst=out.view(self._float_type), 
                         src=self.memory.view(self._int_type))
-            out /= 2**15
+            out /= scale * (2**15)
             
             return out
 
         with self.unbuffer():
             buf = self.memory.view(self._int_type).astype(self._float_type)
             
-        buf /= 2**15
+        buf /= scale * (2**15)
         return buf.view(self._complex_type)
     
-    def pack(self, out=None):
+    def pack(self, out=None, scale=1):
         """
         Pack the complex floating-point data in an array into integer samples.
         """
@@ -632,23 +632,24 @@ class Waveform(Array):
                                 f" {out.dtype}")
                 
             with self.buffer():
-                np.rint(self.memory.view(self._float_type) * 2**15, 
+                np.rint(self.memory.view(self._float_type) * (scale * (2**15)), 
                         out=out.view(self._int_type),
                         casting="unsafe")
             return out
         
         with self.buffer():
-            buf = self.memory.view(self._float_type) * 2**15
+            buf = self.memory.view(self._float_type) * (scale * (2**15))
             
         return buf.astype(self._int_type).view(self._sample_type)
     
-    def flush(self):
+    def flush(self, **kwargs):
         # Get a reference to the internal memory that we can pack
         # data into
         self.buffered = False
         mem = self.memory
         self.buffered = True
-        self.pack(out=mem)
+        self.pack(out=mem,
+                  scale=(kwargs["scale"] if "scale" in kwargs else 1))
         
         
 class DecimatedWaveform(Waveform):
@@ -799,22 +800,14 @@ class WindowedConstantWaveform(Waveform, ProceduralArrayMixin):
                          length_seconds=window_length_seconds, 
                          region=channel.memory_type)
         self.set_generator(window_function, window_function_signature)
-        self._rectangle = ConstantWaveform(channel, constant_length_seconds)
-        
-        # if split_time is None:
-        #     split_time = window_length_seconds / 2
-        
-        # if split_time > window_length_seconds:
-        #     raise ValueError(f"Split time must be within the window duration"
-        #                      f" (received split time {split_time} with window"
-        #                      f" duration {window_length_seconds})")
+        self._constant = ConstantWaveform(channel, constant_length_seconds)
         
         # `seconds_to_bytes` will check whether we have an integer number of cycles    
         self.split_cycle = channel.seconds_to_bytes(window_length_seconds / 2) // channel.interface_width_bytes
         
-    def populate(self, rectangle_amplitude=None, rectangle_length_seconds=None, *args, **kwargs):
-        self._rectangle.populate(rectangle_amplitude, rectangle_length_seconds)
-        super().populate(*args, **kwargs)
+    def populate(self, amplitude=None, constant_length_seconds=None, *args, **kwargs):
+        super().populate(*args, flush_params={"scale": amplitude}, **kwargs)
+        self._constant.populate(amplitude, constant_length_seconds)
         
     def dma_parameters(self):
         ramp_first = super().dma_parameters()
@@ -824,5 +817,5 @@ class WindowedConstantWaveform(Waveform, ProceduralArrayMixin):
         ramp_second[0]["length"] -= self.split_cycle
         ramp_second[0]["word_address"] += self.split_cycle
         
-        return ramp_first + self._rectangle.dma_parameters() + ramp_second
+        return ramp_first + self._constant.dma_parameters() + ramp_second
     
