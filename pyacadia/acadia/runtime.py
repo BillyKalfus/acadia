@@ -10,7 +10,7 @@ import json
 
 from datetime import datetime, timezone
 from threading import Thread, Event
-from abc import ABC, abstractclassmethod
+from abc import ABC
 from dataclasses import asdict, is_dataclass
 
 import numpy as np
@@ -413,6 +413,7 @@ class Runtime(ABC):
                         if isinstance(mgr[group_name], DisplayMixin):
                             if group_name in initialized_display_retvals:
                                 try:
+                                    logging.debug(f"Updating display for group {group_name}")
                                     mgr[group_name].update_display(initialized_display_retvals[group_name])
                                 except:
                                     logging.error(f"Exception in display initialization"
@@ -420,6 +421,7 @@ class Runtime(ABC):
                                     stop_event.set()
                             else:
                                 try:
+                                    logging.debug(f"Initializing display for group {group_name}")
                                     initialized_display_retvals[group_name] = mgr[group_name].initialize_display()
                                 except:
                                     logging.error(f"Exception in display update for"
