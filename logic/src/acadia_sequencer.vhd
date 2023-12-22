@@ -32,8 +32,8 @@ use work.all;
 
 entity acadia_sequencer is
     generic (
-        STACK_SIZE                  : natural := 32;
-        LOG2_STACK_SIZE             : natural := 5;
+        STACK_SIZE                  : natural := 8;
+        LOG2_STACK_SIZE             : natural := 3;
         NUM_DSP                     : natural := 8;
         WORD_SIZE                   : natural := 32;
         PIPELINE_DSP_INPUTS         : boolean := false;
@@ -91,6 +91,7 @@ architecture rtl of acadia_sequencer is
     constant SRC_REG         : std_logic_vector(3 downto 0) := "0000";
     constant SRC_REG_LO      : std_logic_vector(3 downto 0) := "0001";
     constant SRC_REG_HI      : std_logic_vector(3 downto 0) := "0010";
+    constant SRC_OP          : std_logic_vector(3 downto 0) := "0011";
     constant SRC_PC          : std_logic_vector(3 downto 0) := "0100";
     constant SRC_IMM         : std_logic_vector(3 downto 0) := "0101";
     constant SRC_EXT         : std_logic_vector(3 downto 0) := "0110";
@@ -99,16 +100,17 @@ architecture rtl of acadia_sequencer is
     constant SRC_DSP_PATTERN : std_logic_vector(3 downto 0) := "1001";
     constant SRC_DSP_DATA    : std_logic_vector(3 downto 0) := "1010";
     
-    constant DEST_REG        : std_logic_vector(3 downto 0) := "0000";
-    constant DEST_PC         : std_logic_vector(3 downto 0) := "0001";
-    constant DEST_MASK       : std_logic_vector(3 downto 0) := "0010";
-    constant DEST_EXT        : std_logic_vector(3 downto 0) := "0011";
-    constant DEST_STACK      : std_logic_vector(3 downto 0) := "0100";
-    constant DEST_BUS_DATA   : std_logic_vector(3 downto 0) := "0101";
-    constant DEST_BUS_ADDR   : std_logic_vector(3 downto 0) := "0110";
-    constant DEST_DSP_CFG    : std_logic_vector(3 downto 0) := "0111";
-    constant DEST_DSP_AB     : std_logic_vector(3 downto 0) := "1000";
-    constant DEST_DSP_C      : std_logic_vector(3 downto 0) := "1001";
+    constant DEST_NONE       : std_logic_vector(3 downto 0) := "0000";
+    constant DEST_REG        : std_logic_vector(3 downto 0) := "0001";
+    constant DEST_PC         : std_logic_vector(3 downto 0) := "0010";
+    constant DEST_MASK       : std_logic_vector(3 downto 0) := "0011";
+    constant DEST_EXT        : std_logic_vector(3 downto 0) := "0100";
+    constant DEST_STACK      : std_logic_vector(3 downto 0) := "0101";
+    constant DEST_BUS_DATA   : std_logic_vector(3 downto 0) := "0110";
+    constant DEST_BUS_ADDR   : std_logic_vector(3 downto 0) := "0111";
+    constant DEST_DSP_CFG    : std_logic_vector(3 downto 0) := "1000";
+    constant DEST_DSP_AB     : std_logic_vector(3 downto 0) := "1001";
+    constant DEST_DSP_C      : std_logic_vector(3 downto 0) := "1010";
 
     constant OPCODE_STP      : std_logic_vector(0 downto 0) := "0";
     constant OPCODE_STC      : std_logic_vector(0 downto 0) := "1";
@@ -142,7 +144,8 @@ architecture rtl of acadia_sequencer is
     
     -- Conditionality testing signals
     signal mask              : std_logic_vector(WORD_SIZE-1 downto 0);
-    signal cond_val          : std_logic_vector(WORD_SIZE-1 downto 0);
+    signal src2_preinverted  : std_logic_vector(WORD_SIZE-1 downto 0);
+    signal src2_masked          : std_logic_vector(WORD_SIZE-1 downto 0);
     signal cond_satisfied    : std_logic;
     
     -- Instruction control signals
@@ -160,7 +163,7 @@ architecture rtl of acadia_sequencer is
     signal instr_dsp_cep     : std_logic_vector(2 downto 0);
     signal instr_dsp_cep_en  : std_logic;
     signal instr_push_return : std_logic;
-    signal instr_op_sel      : std_logic_vector(2 downto 0);
+    signal instr_op_sel      : std_logic_vector(3 downto 0);
                              
     -- Instruction subfields
     signal instr_src1_maj    : std_logic_vector(3 downto 0);
@@ -301,20 +304,23 @@ begin
     instr_src2        <= instruction(95 downto 88);
     instr_dest1       <= instruction(87 downto 80);
     instr_dest2       <= instruction(79 downto 72);
-    instr_dsp_cep_en  <= instruction(68);
+    instr_op_sel      <= instruction(71 downto 68);
+    instr_dsp_cep_en  <= instruction(67);
     instr_dsp_cep     <= instruction(66 downto 64);
     instr_imm1        <= instruction(63 downto 32);
     instr_imm2        <= instruction(31 downto 0);
-    instr_op_sel      <= instruction(74 downto 72);
     
     -- Enable or disable the destination decoders depending on the instruction opcode and the condition satisfaction
-    dest1_en <= cond_satisfied when instr_opcode = OPCODE_STC else '1';
-    dest2_en <= '0' when instr_opcode = OPCODE_STC else '1';
+    dest1_en <= '0'            when instr_dest1_maj = DEST_NONE else 
+                cond_satisfied when instr_opcode = OPCODE_STC   else 
+                '1';
+    dest2_en <= '0' when instr_dest2_maj = DEST_NONE else '1';
                             
     -- Multiplex the input source according to the instruction field
     src1 <= r(to_integer(unsigned(instr_src1_min)))         when instr_src1_maj = SRC_REG      else
             x"0000" & r(to_integer(unsigned(instr_src1_min)))(15 downto 0)         when instr_src1_maj = SRC_REG_LO      else
             x"0000" & r(to_integer(unsigned(instr_src1_min)))(31 downto 16)        when instr_src1_maj = SRC_REG_HI      else
+            src2_masked                                     when instr_src1_maj = SRC_OP       else
             x"0000" & pc                                    when instr_src1_maj = SRC_PC       else
             instr_imm1                                      when instr_src1_maj = SRC_IMM      else
             ext_in                                          when instr_src1_maj = SRC_EXT      else
@@ -326,6 +332,7 @@ begin
     src2 <= r(to_integer(unsigned(instr_src2_min)))         when instr_src2_maj = SRC_REG      else
             x"0000" & r(to_integer(unsigned(instr_src2_min)))(15 downto 0)         when instr_src2_maj = SRC_REG_LO      else
             x"0000" & r(to_integer(unsigned(instr_src2_min)))(31 downto 16)        when instr_src2_maj = SRC_REG_HI      else
+            src2_masked                                     when instr_src2_maj = SRC_OP       else
             x"0000" & pc                                    when instr_src2_maj = SRC_PC       else
             instr_imm2                                      when instr_src2_maj = SRC_IMM      else
             ext_in                                          when instr_src2_maj = SRC_EXT      else
@@ -403,22 +410,24 @@ begin
         end if;
     end process mask_proc;
     
-    cond_val <= src2 and mask when instr_op_sel(1 downto 0) = "00" else
-                src2 xor mask when instr_op_sel(1 downto 0) = "01" else
-                (not src2) and mask when instr_op_sel(1 downto 0) = "10" else
-                src2;
+    src2_preinverted <= (not src2) when instr_op_sel(0) = '1' else src2;
+
+    src2_masked <= (src2_preinverted xor mask) when instr_op_sel(2 downto 1) = "01" else
+                   (src2_preinverted and mask) when instr_op_sel(2 downto 1) = "10" else
+                   src2_preinverted;
                 
-    cond_satisfied <= or_reduce(cond_val) xor instr_op_sel(2);
+    cond_satisfied <= or_reduce(src2_masked) xor instr_op_sel(2);
    
     -- Implement the stack
     -- Assign some various combinational signals
-    stack_pop       <= '1' when (instr_src1_maj = SRC_STACK and dest1_en = '1') 
-                             or (instr_src2_maj = SRC_STACK and dest2_en = '1') else '0';
+    stack_pop  <= '1' when (instr_src1_maj = SRC_STACK and dest1_en = '1') 
+                        or (instr_src2_maj = SRC_STACK and dest2_en = '1') 
+                      else '0';
                    
-    stack_push      <= '1' when (instr_dest1_maj = DEST_STACK and dest1_en = '1') 
-                             or (instr_dest2_maj = DEST_STACK and dest2_en = '1') 
-                             or instr_push_return = '1'
-                        else '0';
+    stack_push <= '1' when ((instr_dest1_maj = DEST_STACK and dest1_en = '1') 
+                         or (instr_dest2_maj = DEST_STACK and dest2_en = '1') 
+                         or instr_push_return = '1')
+                      else '0';
                              
     stack_overflow  <= '1' when to_integer(unsigned(stack_ptr)) = STACK_SIZE-1 and stack_push = '1' else '0';
     stack_underflow <= '1' when to_integer(unsigned(stack_ptr)) = 0 and stack_pop = '1' else '0';

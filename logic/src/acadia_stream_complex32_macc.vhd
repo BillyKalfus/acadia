@@ -14,7 +14,7 @@
 --     interpreted as packed 32-bit complex numbers (with two 
 --     16-bit quadratures) and multiplied against a second stream
 --     of complex numbers driven by a dedicated block RAM. The
---     result is accumulated internally as a 64-bit complex number
+--     result is accumulated internally as a 96-bit complex number
 --     and exposed to the sequencer via a register. The status 
 --     signals allow fast access to the completion state of the 
 --     accumulator as well as the most significant bit of the 
@@ -38,19 +38,22 @@
 --                 calculation. After being set, this signal is latched
 --                 until the module is reset.
 --             Bit 17 (R)     : Output FIFO Overflow
---             Bit 18 (R)     : Accumulator Done
+--             Bit 18 (RW)    : Accumulator Done
 --                 The stream has completed its path through the 
 --                 accumulator and the accumulation results are 
---                 available.
+--                 available. Writing this value will be necessary
+--                 to clear it.
 --             Bit 19 (R)     : Accumulator Real MSB
 --             Bit 20 (R)     : Accumulator Imaginary MSB
 --             Bits 22-21 (RW): Write mode
---                 When 1, a copy of the input data is written
---                 When 2, the product data is written
---                 Otherwise, nothing is written
+--                 When 00, nothing is written
+--                 When 01, the upper 32 bits of the accumulator value is written
+--                 When 10, the lower 32 bits of the accumulator value is written
+--                 When 11, the input value is written
+--                
 --             Bit 23 (RW)    : Write last
 --                 When set, only the last value is presented on the output stream.           
---             Bit 24 (W)     : Reset
+--             Bit 24 (W)     : FIFO Reset
 -- 
 -- Dependencies: 
 -- 
@@ -103,11 +106,11 @@ entity acadia_stream_complex32_macc is
             
         -- Output data stream
         data_out_aclk   : in  std_logic;
-        data_out_tdata  : out std_logic_vector(31 downto 0);
+        data_out_tdata  : out std_logic_vector(63 downto 0);
         data_out_tvalid : out std_logic;
         data_out_tready : in  std_logic;
         data_out_tlast  : out std_logic;
-        data_out_tkeep  : out std_logic_vector(3 downto 0);
+        data_out_tkeep  : out std_logic_vector(7 downto 0);
 
         -- Register access (synchronous to data_clk)
         registers_mosi  : in  std_logic_vector(31 downto 0);
@@ -162,31 +165,31 @@ architecture rtl of acadia_stream_complex32_macc is
     signal a_im : signed(17 downto 0);
     signal b_re : signed(15 downto 0);
     signal b_im : signed(15 downto 0);
-    
-    -- Products
-    signal a_re_b_re : signed(33 downto 0);
-    signal a_im_b_re : signed(33 downto 0);
-    signal a_re_b_im : signed(33 downto 0);
-    signal a_im_b_im : signed(33 downto 0);
 
-    -- Sign extended products for accumulator
-    signal a_re_b_re_sign : signed(12 downto 0);
-    signal a_im_b_re_sign : signed(12 downto 0);
-    signal a_re_b_im_sign : signed(12 downto 0);
-    signal a_im_b_im_sign : signed(12 downto 0);
-    
     -- Accumulator components
     signal accumulator_re : signed(46 downto 0);
     signal accumulator_im : signed(46 downto 0);
-    signal accumulator_re_d : std_logic_vector(46 downto 0);
-    signal accumulator_im_d : std_logic_vector(46 downto 0);
+    signal accumulator_re_d : std_logic_vector(accumulator_re'high downto 0);
+    signal accumulator_im_d : std_logic_vector(accumulator_im'high downto 0);
+    
+    -- Products
+    signal a_re_b_re : signed(a_re'length + b_re'length - 1 downto 0);
+    signal a_im_b_re : signed(a_im'length + b_re'length - 1 downto 0);
+    signal a_re_b_im : signed(a_re'length + b_im'length - 1 downto 0);
+    signal a_im_b_im : signed(a_im'length + b_im'length - 1 downto 0);
 
+    -- Sign extended products for accumulator
+    signal a_re_b_re_sign : signed(accumulator_im'high - a_re_b_re'length downto 0);
+    signal a_im_b_re_sign : signed(accumulator_re'high - a_im_b_re'length downto 0);
+    signal a_re_b_im_sign : signed(accumulator_re'high - a_re_b_im'length downto 0);
+    signal a_im_b_im_sign : signed(accumulator_im'high - a_im_b_im'length downto 0);
+    
     -- Kernel memory access signals
     signal kernel_memory_pointer : std_logic_vector(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
     signal kernel_memory_data    : std_logic_vector(31 downto 0);
     
     -- Reset signal (controlled by registers)
-    signal rst  : std_logic;
+    signal fifo_rst  : std_logic;
 
     -- Output write control
     signal write_mode      : std_logic_vector(1 downto 0);
@@ -195,7 +198,7 @@ architecture rtl of acadia_stream_complex32_macc is
     signal buffer_overflow : std_logic;
 
     -- Output data
-    signal output_data  : std_logic_vector(31 downto 0);
+    signal output_data  : std_logic_vector(63 downto 0);
     signal output_valid : std_logic;
     signal output_last  : std_logic;
 
@@ -204,6 +207,7 @@ architecture rtl of acadia_stream_complex32_macc is
     signal input_last           : std_logic;
     signal product_valid        : std_logic;
     signal product_last         : std_logic;
+    signal accumulator_valid    : std_logic;
     signal accumulator_done_int : std_logic;
     
 begin
@@ -276,9 +280,7 @@ begin
     -- Process to manage the kernel memory pointer
     kernel_memory_pointer_proc: process(clk) begin
         if rising_edge(clk) then
-            if(rst = '1') then
-                kernel_memory_pointer <= (others => '0');
-            elsif(registers_we = '1' and registers_en = '1' and registers_addr(1 downto 0) = "10") then
+            if(registers_we = '1' and registers_en = '1' and registers_addr(1 downto 0) = "10") then
                 kernel_memory_pointer <= registers_mosi(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
             elsif(data_in_tvalid = '1') then
                 kernel_memory_pointer <= std_logic_vector(unsigned(kernel_memory_pointer) + 1);
@@ -305,21 +307,21 @@ begin
     data_in_tready <= '1';
 
     -- Alias the kernel memory output as quadrature values
-    b_re(15 downto 0)  <= signed(kernel_memory_data(15 downto 0));
-    b_im(15 downto 0)  <= signed(kernel_memory_data(31 downto 16));
+    b_re  <= signed(kernel_memory_data(15 downto 0));
+    b_im  <= signed(kernel_memory_data(31 downto 16));
 
     -- First pipeline stage: sum the individual components of the input signal
     input_narrowing_proc: process(clk) 
-       variable sum_re : signed(17 downto 0); 
-       variable sum_im : signed(17 downto 0); 
+       variable sum_re : signed(a_re'high downto 0); 
+       variable sum_im : signed(a_re'high downto 0); 
     begin
         if rising_edge(clk) then
             -- Use variables and a loop to sum all the inputs
             sum_re := (others => '0');
             sum_im := (others => '0');
             sum_loop: for i in 0 to INPUT_WORDS-1 loop
-                sum_re := sum_re + resize(signed(data_in_tdata((i*32) + 15 downto (i*32))), 18);
-                sum_im := sum_im + resize(signed(data_in_tdata((i*32) + 31 downto (i*32) + 16)), 18);
+                sum_re := sum_re + resize(signed(data_in_tdata((i*32) + 15 downto (i*32))), sum_re'length);
+                sum_im := sum_im + resize(signed(data_in_tdata((i*32) + 31 downto (i*32) + 16)), sum_im'length);
             end loop sum_loop;
 
             -- Now update the outputs with the varables
@@ -356,19 +358,18 @@ begin
         if rising_edge(clk) then
             accumulator_re_d <= std_logic_vector(accumulator_re);
             accumulator_im_d <= std_logic_vector(accumulator_im);
+            accumulator_valid <= product_valid;
 
-            if(rst = '1') then
-                accumulator_done_int <= '0';
-                accumulator_re       <= (others => '0');
-                accumulator_im       <= (others => '0');
-            elsif(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "00") then
-                accumulator_done_int <= '0';
-                accumulator_re(46 downto 15) <= signed(registers_mosi);
-                accumulator_re(14 downto 0)  <= (others => '0');
-            elsif(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "01") then
-                accumulator_done_int <= '0';
-                accumulator_im(46 downto 15) <= signed(registers_mosi);
-                accumulator_im(14 downto 0)  <= (others => '0');
+            if(registers_en = '1' and registers_we = '1') then
+                if(registers_addr(1 downto 0) = "00") then
+                    accumulator_re(46 downto 15) <= signed(registers_mosi);
+                    accumulator_re(14 downto 0)  <= (others => '0');
+                elsif(registers_addr(1 downto 0) = "01") then
+                    accumulator_im(46 downto 15) <= signed(registers_mosi);
+                    accumulator_im(14 downto 0)  <= (others => '0');
+                elsif(registers_addr(1 downto 0) = "10") then
+                    accumulator_done_int <= registers_mosi(18);
+                end if;
             elsif(product_valid = '1' and accumulator_done_int = '0') then
                 accumulator_done_int <= product_last;
                 accumulator_re       <= accumulator_re + (a_re_b_re_sign & a_re_b_re) - (a_im_b_im_sign & a_im_b_im);
@@ -379,17 +380,25 @@ begin
 
     output_select_proc: process(clk) begin
         if rising_edge(clk) then
-            case write_last & write_mode is
+            case write_mode is
                 when "01" =>
-                    output_data(15 downto 0)  <= std_logic_vector(a_im(a_im'high downto a_im'high-15));
-                    output_data(31 downto 16) <= std_logic_vector(a_re(a_re'high downto a_re'high-15));
-                    output_valid <= (input_valid and not write_last) or (input_valid and input_last and write_last);
-                    output_last  <= input_last;
+                    output_data(31 downto 0)  <= std_logic_vector(accumulator_re(accumulator_re'high downto accumulator_re'high-31));
+                    output_data(63 downto 32) <= std_logic_vector(accumulator_im(accumulator_im'high downto accumulator_im'high-31));
+                    output_valid              <= (accumulator_valid and not write_last) or (accumulator_valid and accumulator_done_int and write_last);
+                    output_last               <= accumulator_done_int;
+
                 when "10" =>
-                    output_data(15 downto 0)  <= std_logic_vector(a_re_b_re(a_re_b_re'high downto a_re_b_re'high-15) - a_im_b_im(a_im_b_im'high downto a_im_b_im'high-15));
-                    output_data(31 downto 16) <= std_logic_vector(a_re_b_im(a_re_b_im'high downto a_re_b_im'high-15) + a_im_b_re(a_im_b_re'high downto a_im_b_re'high-15));
-                    output_valid              <= (product_valid and not write_last) or (product_valid and product_last and write_last);
-                    output_last               <= product_last;
+                    output_data(31 downto 0)  <= std_logic_vector(accumulator_re(31 downto 0));
+                    output_data(63 downto 32) <= std_logic_vector(accumulator_im(31 downto 0));
+                    output_valid              <= (accumulator_valid and not write_last) or (accumulator_valid and accumulator_done_int and write_last);
+                    output_last               <= accumulator_done_int;
+
+                when "11" =>
+                    output_data(31 downto 0)  <= std_logic_vector(resize(a_re, 32));
+                    output_data(63 downto 32) <= std_logic_vector(resize(a_im, 32));
+                    output_valid              <= (input_valid and not write_last) or (input_valid and input_last and write_last);
+                    output_last               <= input_last;
+                
                 when others =>
                     output_data  <= (others => '0');
                     output_valid <= '0';
@@ -398,10 +407,9 @@ begin
         end if;
     end process output_select_proc;
 
-    -- Buffer a copy of the input signal if desired
     output_fifo: entity work.acadia_backpressure_fifo
         generic map (
-            WORD_WIDTH   => 32,
+            WORD_WIDTH   => 64,
             INPUT_WORDS  => 1,
             OUTPUT_WORDS => 1,
             INPUT_DEPTH  => DATA_OUTPUT_FIFO_DEPTH,
@@ -411,11 +419,11 @@ begin
         )
         port map (
             signal_in_clk    => clk,
-            signal_in_rst    => rst,
+            signal_in_rst    => fifo_rst,
 
             -- A port for monitoring the status of the FIFO and resetting it
             monitor_clk      => clk,
-            monitor_rst      => rst,
+            monitor_rst      => fifo_rst,
             monitor_overflow => buffer_overflow,
             monitor_misalignment => open,
             
@@ -455,24 +463,21 @@ begin
 
     write_mode_proc: process(clk) begin
         if rising_edge(clk) then
-            if(rst = '1') then
-                write_mode <= (others => '0');
-                write_last <= '0';
-            elsif(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "10") then
+            if(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "10") then
                 write_mode <= registers_mosi(22 downto 21);
                 write_last <= registers_mosi(23);
             end if;
         end if;
     end process write_mode_proc;
 
-    rst_proc: process(clk) begin
+    fifo_rst_proc: process(clk) begin
         if rising_edge(clk) then
-            if(rst = '1') then
-                rst  <= '0';
+            if(fifo_rst = '1') then
+                fifo_rst  <= '0';
             elsif(registers_en = '1' and registers_we = '1' and registers_addr(1 downto 0) = "10") then
-                rst  <= registers_mosi(24);
+                fifo_rst  <= registers_mosi(24);
             end if;
         end if;
-    end process rst_proc;
+    end process fifo_rst_proc;
 
 end rtl;

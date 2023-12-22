@@ -78,7 +78,7 @@ class Source(SequencerDatapathPort, metaclass=Operable):
         REG = 0
         REG_LO = 1
         REG_HI = 2
-        # 3 is skipped intentionally
+        OP = 3
         PC = 4
         IMM = 5
         EXT = 6
@@ -94,16 +94,17 @@ class Destination(SequencerDatapathPort):
     PC_RELATIVE_HOLD   = 0b11
     
     class Major(Enum):
-        REG = 0
-        PC = 1
-        MASK = 2
-        EXT = 3
-        STACK = 4
-        BUS_DATA = 5
-        BUS_ADDR = 6
-        DSP_CFG = 7
-        DSP_AB = 8
-        DSP_C = 9
+        NONE = 0
+        REG = 1
+        PC = 2
+        MASK = 3
+        EXT = 4
+        STACK = 5
+        BUS_DATA = 6
+        BUS_ADDR = 7
+        DSP_CFG = 8
+        DSP_AB = 9
+        DSP_C = 10
 
     def __str__(self):
         if self.major is Destination.Major.REG:
@@ -191,8 +192,12 @@ class DSPConfiguration:
 class STP:
     src1: Source = Source(Source.Major.REG)
     src2: Source = Source(Source.Major.REG)
-    dest1: Destination = Destination(Destination.Major.REG)
-    dest2: Destination = Destination(Destination.Major.REG)
+    dest1: Destination = None
+    dest2: Destination = None
+    op: str = None
+    premask_invert: bool = False
+    condition_invert: bool = False
+    conditional: bool = False
     imm1: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
     imm2: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
     dsp_cep: [Source, Destination, int] = None
@@ -253,6 +258,32 @@ class STP:
             else:
                 s += f"{self.src1}"
             s += f" -> {self.dest1}"
+        
+        if self.conditional:    
+            s += " if "
+
+            if self.op & 0b11 == 2:
+                s += "not("
+
+            if self.src_tval.major is Source.Major.IMM:
+                v = self.imm_tval.value() if isinstance(self.imm_tval, Symbol) else self.imm_tval
+                if isinstance(v, ProcessorInstruction):
+                    s += f"{v.__class__.__name__} @ {v.address.value():08X}"
+                elif isinstance(v, int):
+                    s += f"{v:08X}"
+                else:
+                    s += f"{v}"
+            else:
+                s += f"{self.src_tval}"
+
+            if self.op & 0b11 == 0:
+                s += " AND MASK"
+            elif self.op & 0b11 == 1:
+                s += " XOR MASK"
+            elif self.op & 0b11 == 2:
+                s += ") AND MASK"
+
+            s += f" {'' if self.op & 0b100 else '!'}= 0"
 
         s += "  |  "
 
@@ -271,15 +302,18 @@ class STP:
             else:
                 s += f"{self.src2}"
             s += f" -> {self.dest2}"
+            
+        if self.op is not None:
+            s += f" | OP = {self.op}"
 
         if self.dsp_cep is not None:
-            s += f"  | {self.dsp_cep} CEP"
+            s += f" | CEP {self.dsp_cep}"
 
         if self.push_return:
-            s += f"  | PUSH_RETURN"
+            s += f" | PUSH_RETURN"
 
         if self.comment is not None:
-            s += f"  ; {self.comment}"
+            s += f" ; {self.comment}"
 
         return s
 
@@ -293,11 +327,20 @@ class STP:
 
         tmp = 0
         # Opcode = 0 for STP
+        tmp |= self.conditional << (112-64)
         tmp |= self.push_return << (104-64)
         tmp |= self.src1.value() << (96-64)
         tmp |= self.src2.value() << (88-64)
         tmp |= self.dest1.value() << (80-64)
         tmp |= self.dest2.value() << (72-64)
+        tmp |= self.condition_invert << (71-64)
+        
+        if self.op == "and":
+            tmp |= 1 << (69-64)
+        elif self.op == "xor":
+            tmp |= 1 << (69-64)
+        
+        tmp |= self.premask_invert << (68-64)
         tmp |= ((self.dsp_cep.value() | 0x8) << (64-64)) if self.dsp_cep is not None else 0
 
         imm1_value = self.imm1
@@ -332,166 +375,10 @@ class STP:
             
         return struct.pack("<IIQ", imm2_value, imm1_value, tmp)
 
-@dataclass
-class STC:
-    src_stval: Source = Source(Source.Major.REG)
-    src_tval: Source = Source(Source.Major.REG)
-    dest_stval: Destination = Destination(Destination.Major.REG)
-    op: int = 0
-    imm_stval: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
-    imm_tval: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
-    dsp_cep: [Source, Destination, int] = None
-    push_return: bool = False
-    comment: str = None
-
-    def __post_init__(self):
-        self.name = "STC"
-        # Check types
-        if is_numeric(self.src_stval):
-            self.imm_stval = self.src_stval
-            self.src_stval = Source(Source.Major.IMM)
-        if not isinstance(self.src_stval, Source):
-            raise TypeError(f"STP field src_stval must be of type Source;"
-                            f" received {self.src_stval}.")
-        
-        if is_numeric(self.src_tval):
-            self.imm_tval = self.src_tval
-            self.src_tval = Source(Source.Major.IMM)
-        if not isinstance(self.src_tval, Source):
-            raise TypeError(f"STP field src_tval must be of type Source;"
-                            f" received {self.src_tval}.")
-            
-        # Do basic type-checking
-        for field,field_type in get_type_hints(self).items(): 
-            field_value = getattr(self, field)
-            if field_value is not None:
-                if isinstance(field_type, list):
-                    found = False
-                    for t in field_type:
-                        if isinstance(field_value, t):
-                            found = True
-                            break
-                    if not found:
-                        raise TypeError(f"The type of field {field} must be one of"
-                                        f" {field_type}; received {field_value}.")
-                elif not isinstance(field_value, field_type):
-                    raise TypeError(f"Field {field} must be of type {field_type};"
-                                    f" received {field_value}.")
-                
-    def pprint(self):
-        """
-        Return a nicely-formatted (and non-exhaustive) description of this 
-        instruction.
-
-        """
-
-        s = ""
-        if (str(self.src_stval) == "REG0" 
-            and str(self.dest_stval) == "REG0"):
-            s += "NOP"
-        else:
-            if self.src_stval.major is Source.Major.IMM:
-                v = self.imm_stval.value() if isinstance(self.imm_stval, Symbol) else self.imm_stval
-                if isinstance(v, ProcessorInstruction):
-                    s += f"{v.__class__.__name__} @ {v.address.value():08X}"
-                elif isinstance(v, int):
-                    s += f"{v:08X}"
-                else:
-                    s += f"{v}"
-            else:
-                s += f"{self.src_stval}"
-            s += f" -> {self.dest_stval}"
-
-        s += " if "
-
-        if self.op & 0b11 == 2:
-            s += "not("
-
-        if self.src_tval.major is Source.Major.IMM:
-            v = self.imm_tval.value() if isinstance(self.imm_tval, Symbol) else self.imm_tval
-            if isinstance(v, ProcessorInstruction):
-                s += f"{v.__class__.__name__} @ {v.address.value():08X}"
-            elif isinstance(v, int):
-                s += f"{v:08X}"
-            else:
-                s += f"{v}"
-        else:
-            s += f"{self.src_tval}"
-
-        if self.op & 0b11 == 0:
-            s += " AND MASK"
-        elif self.op & 0b11 == 1:
-            s += " XOR MASK"
-        elif self.op & 0b11 == 2:
-            s += ") AND MASK"
-
-        s += f" {'' if self.op & 0b100 else '!'}= 0"
-
-        if self.dsp_cep is not None:
-            s += f"  | {self.dsp_cep} CEP"
-
-        if self.push_return:
-            s += f"  | PUSH_RETURN"
-
-        if self.comment is not None:
-            s += f"  ; {self.comment}"
-
-        return s
-
-    def assemble(self):
-        """
-        Assembles the instruction into a binary word.
-
-        :return: A binary word representing the machine instruction.
-        :rtype: int
-        """
-
-        tmp = 0
-        tmp |= 1 << (112-64) # Opcode for STC
-        tmp |= self.push_return << (104-64)
-        tmp |= self.src_stval.value() << (96-64)
-        tmp |= self.src_tval.value() << (88-64)
-        tmp |= self.dest_stval.value() << (80-64)
-        tmp |= self.op << (72-64)
-        tmp |= ((self.dsp_cep.value() | 0x8) << (64-64)) if self.dsp_cep is not None else 0
-
-        imm_stval_value = self.imm_stval
-        while hasattr(imm_stval_value, "value") or hasattr(imm_stval_value, "address"):
-            if hasattr(imm_stval_value, "null") and imm_stval_value.null:
-                return struct.pack("<IIQ", 0, 0, 0)
-            if hasattr(imm_stval_value, "value"):
-                if callable(imm_stval_value.value):
-                    imm_stval_value = imm_stval_value.value()
-                else:
-                    imm_stval_value = imm_stval_value.value
-            if hasattr(imm_stval_value, "address"):
-                if callable(imm_stval_value.address):
-                    imm_stval_value = imm_stval_value.address()
-                else:
-                    imm_stval_value = imm_stval_value.address
-
-        imm_tval_value = self.imm_tval
-        while hasattr(imm_tval_value, "value") or hasattr(imm_tval_value, "address"):
-            if hasattr(imm_tval_value, "null") and imm_tval_value.null:
-                return struct.pack("<IIQ", 0, 0, 0)
-            if hasattr(imm_tval_value, "value"):
-                if callable(imm_tval_value.value):
-                    imm_tval_value = imm_tval_value.value()
-                else:
-                    imm_tval_value = imm_tval_value.value
-            if hasattr(imm_tval_value, "address"):
-                if callable(imm_tval_value.address):
-                    imm_tval_value = imm_tval_value.address()
-                else:
-                    imm_tval_value = imm_tval_value.address
-            
-        return struct.pack("<IIQ", imm_tval_value, imm_stval_value, tmp)
-    
 class Sequencer(Processor):
     """
     A :class:`Processor` for the sequencer embedded in the Acadia control 
     system.
-
     """
     
     # The total number of general-purpose registers in the sequencer
@@ -660,16 +547,18 @@ class Sequencer(Processor):
         :param latency: Additional latency cycles to add after addressing the 
         bus
         """
+        if address is not None:
+            self.store(src=address, dest=Destination(Destination.Major.BUS_ADDR))
+        
+        for i in range(latency):
+            self.nop(**kwargs)
 
-        # Note: the behavior described above is carried out by the compiler
-        # when compiling an Operation with "bus_read"
-        return Operation("bus_read", address=address, latency=latency, **kwargs)
+        return Source(Source.Major.BUS_DATA)
     
     def bus_write(self, address, data, **kwargs):
         """
         Writes a value to the bus.
         """
-
         self.STP(src1=address, 
                 dest1=Destination(Destination.Major.BUS_ADDR),
                 src2=data, 
@@ -681,7 +570,6 @@ class Sequencer(Processor):
         Halts the sequencer. The reset pin must be toggled in order for the
         sequencer to execute any further instructions.
         """
-
         self.store(src=0, dest=Destination(Destination.Major.PC, 
                                            Destination.PC_RELATIVE_HOLD))
         
@@ -690,17 +578,14 @@ class Sequencer(Processor):
                                                 Destination.PC_ABSOLUTE_BRANCH))
         
     def nop(self, **kwargs):
-        self.store(src=Source(Source.Major.REG), 
-                   dest=Destination(Destination.Major.REG),
-                   **kwargs)
+        self.store(**kwargs)
             
     @Processor.instruction()
-    def STP(self, instruction_resource):
+    def STP(self, instruction_resource: ProcessorInstruction):
         """
         A direct abstraction of the STP instruction with additional source
         compilation.
         """
-
         kwargs = instruction_resource.kwargs
         instructions = []
         resources = []
@@ -739,57 +624,14 @@ class Sequencer(Processor):
             STP(src1=srcs[0],
                 dest1=dests[0],
                 src2=(srcs[1] if len(srcs) > 1 else Source(Source.Major.REG)),
-                dest2=(dests[1] if len(dests) > 1 else Source(Source.Major.REG)),
+                dest2=(dests[1] if len(dests) > 1 else Destination(Destination.Major.NONE)),
+                op=kwargs.get("op", 0),
+                conditional=kwargs.get("conditional", False),
                 dsp_cep=(kwargs["dsp_cep"].source() if "dsp_cep" in kwargs else None),
-                comment=(kwargs["comment"] if "comment" in kwargs else None),
-                push_return=(kwargs["push_return"] if "push_return" in kwargs else False))
+                comment=kwargs.get("comment", None),
+                push_return=kwargs.get("push_return", False))
         )
         
-
-        # Propagate any provided comment to the compiled instructions
-        if "comment" in kwargs:
-            for instr in instructions:
-                instr.comment = kwargs["comment"]
-
-        instruction_resource.compiled = instructions
-
-        for res in resources:
-            res._released = True
-            
-    @Processor.instruction()
-    def STC(self, instruction_resource):
-        """
-        A direct abstraction of the STC instruction with additional source
-        compilation.
-        """
-
-        kwargs = instruction_resource.kwargs
-        instructions = []
-        resources = []
-
-        # Compile the sources       
-        src_stval,extra_instrs,extra_resources = self.compile_source(kwargs[f"src_stval"])
-        instructions += extra_instrs
-        resources += extra_resources
-        
-        src_tval,extra_instrs,extra_resources = self.compile_source(kwargs[f"src_tval"])
-        instructions += extra_instrs
-        resources += extra_resources
-
-        # Compile the destination
-        dest_stval = kwargs["dest_stval"]
-        if isinstance(dest_stval, self.Register) or isinstance(dest_stval, self.DSP):
-            dest_stval = dest_stval.destination()
-
-        # Create the instruction itself
-        instructions.append(
-            STC(src_stval=src_stval,
-                dest_stval=dest_stval,
-                src_tval=src_stval,
-                op=kwargs["op"],
-                dsp_cep=(kwargs["dsp_cep"].source() if "dsp_cep" in kwargs else None),
-                comment=(kwargs["comment"] if "comment" in kwargs else None))
-        )
 
         # Propagate any provided comment to the compiled instructions
         if "comment" in kwargs:
@@ -812,9 +654,9 @@ class Sequencer(Processor):
 
         :param src: The source of the data to store.
         :param dest: The destination for the data.
-        :param when: The condition for the data to be stored. By default,
+        :param condition: The condition for the data to be stored. By default,
             ``store`` operations are unconditional.
-        :type when: :class:`Operation`\, optional
+        :type condition: :class:`Operation`\, optional
         :param mask: Specifies the value to load into the mask register.
         """
 
@@ -831,13 +673,6 @@ class Sequencer(Processor):
         kwargs = instruction_resource.kwargs
         src = kwargs["src"]
         dest = kwargs["dest"]
-        
-        # Some other optional settings; we don't want to pop these from kwargs
-        # because we want to keep the Instruction dict intact
-        when = kwargs["when"] if "when" in kwargs else None
-        mask = kwargs["mask"] if "mask" in kwargs else None
-        dsp_cep = kwargs["dsp_cep"] if "dsp_cep" in kwargs else None
-        push_return = kwargs["push_return"] if "push_return" in kwargs else False    
             
         # Check that we have valid destinations
         if isinstance(dest, self.Register):
@@ -851,22 +686,45 @@ class Sequencer(Processor):
             dsp_cep = dsp_cep.source()
         
         instructions = []
-        if when is not None:
-            stc_kwargs,condition_instructions,condition_resources = self.compile_condition(when, mask)
+        if "condition" in kwargs:
+            condition_kwargs,condition_instructions,condition_resources = self.compile_condition(kwargs["condition"], kwargs.get("mask", None))
             instructions += condition_instructions
+        else:
+            condition_kwargs = {}
+            condition_resources = []
         
         if isinstance(src, Operation):    
             # If the destination is a DSP, we may be able to do the calculation in-place
             if isinstance(dest, self.DSP):    
                 compiled_src,src_instructions,src_resources = self.compile_source(src, dsp=dest)
                 instructions += src_instructions
+            # Under certain conditions, the store may be done using the conditional
+            # test logic even when no testing is being performed
+            # Technically we can also support the operation ~src AND MASK, but 
+            # this is harder to find
+            elif (src._op == "and" or src._op == "xor") and "condition" not in kwargs:
+                mask_obj, other_obj = self._choose_mask(mask=kwargs.get("mask", None), *src._args)
+                
+                compiled_mask,mask_instructions,mask_resources = self.compile_source(mask_obj)
+                instructions += mask_instructions
+                compiled_src,src_instructions,src_resources = self.compile_source(other_obj)
+                instructions += src_instructions
+                
+                instructions.append(STP(src1=compiled_mask, 
+                                        dest1=Destination(Destination.Major.MASK)))
+                instructions.append(STP(src1=Source(Source.Major.OP),
+                                        dest1=dest,
+                                        src2=compiled_src,
+                                        dest2=None,
+                                        op=src._op))
+        
             else:
                 compiled_src,src_instructions,src_resources = self.compile_source(src)
                 instructions += src_instructions
                 instructions.append(STP(src1=compiled_src, 
                                          dest1=dest,
                                          dsp_cep=dsp_cep,
-                                         push_return=push_return))
+                                         push_return=kwargs.get("push_return", False)))
         else:
             # Otherwise, we can just directly generate a single write 
             # instruction (the dataclass will enforce types in __post_init__)     
@@ -874,7 +732,7 @@ class Sequencer(Processor):
             instructions += src_instructions
             
             if isinstance(dest, self.DSP):
-                if when is not None:
+                if "condition" in kwargs:
                     raise ValueError(f"Cannot conditionally write to DSP P port.")
                     
                 # Load P through AB
@@ -885,22 +743,16 @@ class Sequencer(Processor):
                                          src2=compiled_src, 
                                          dest2=dest["AB"],
                                          dsp_cep=dsp_cep,
-                                         push_return=push_return))
+                                         push_return=kwargs.get("push_return", False)))
             else:                
-                if when is not None:
-                    instructions.append(STC(src_stval=compiled_src, 
-                                             dest_stval=dest, 
-                                             dsp_cep=dsp_cep,
-                                             push_return=push_return,
-                                             **stc_kwargs))
-                else:
-                    instructions.append(STP(src1=compiled_src, 
-                                             dest1=dest,
-                                             dsp_cep=dsp_cep,
-                                             push_return=push_return))
-        if when is not None:
-            for res in condition_resources:
-                res._released = True
+                instructions.append(STP(src1=compiled_src, 
+                                        dest1=dest,
+                                        dsp_cep=dsp_cep,
+                                        push_return=kwargs.get("push_return", False),
+                                        conditional=("condition" in kwargs),
+                                        **condition_kwargs))
+        for res in condition_resources:
+            res._released = True
                 
         if "comment" in kwargs:
             if len(instructions) == 1:
@@ -910,6 +762,41 @@ class Sequencer(Processor):
                     instr.comment = f"({idx_instr+1}) " + kwargs["comment"]
 
         instruction_resource.compiled = instructions
+        
+    def _choose_mask(self, mask: str = None, *args):
+        """
+        Given two objects, choose which one would be more suitable as a mask 
+        value for conditional testing or fast operations.
+        
+        :param mask: Either "left" or "right"
+        :type mask: str
+        :raises ValueError: If an invalid mask directive is supplied
+        :raises TypeError: If unable to determine appropriate values
+        :return: Tuple of mask_obj, other_obj
+        """
+        # Next, let's look at the arguments and compile as necessary
+        # If one of them is a numeric or a register, we'll prefer to 
+        # put that in the mask since those don't need to be monitored 
+        # as closely        
+        if mask is not None:
+            if mask == "left":
+                return args
+            elif mask == "right":
+                return tuple(reversed(args))
+            
+            raise ValueError(f"Mask directive must be one of \"left\""
+                                f" or \"right\"; received {mask}.")
+        if is_numeric(args[0]):
+            return args
+        if is_numeric(args[1]):
+            return tuple(reversed(args))
+        if isinstance(args[0], self.Register):
+            return args
+        if isinstance(args[1], self.Register):
+            return tuple(reversed(args))
+        
+        raise TypeError(f"Unable to determine most appropriate mask role"
+                        f" arguments {args}")
     
     def compile_source(self, obj, dsp=None):
         """
@@ -940,17 +827,6 @@ class Sequencer(Processor):
         # The if statements above along with the "getitem" Operation form
         # the bases cases for the recursion
         if isinstance(obj, Operation):
-            # First check to see if we've received the special "bus_read" operation
-            if obj._op == "bus_read":
-                if "address" in obj._kwargs and obj._kwargs["address"] is not None:
-                    addr,addr_instructions,addr_resources = self.compile_source(obj._kwargs["address"])
-                    address_instr = STP(src1=addr, dest1=Destination(Destination.Major.BUS_ADDR))
-                    latency_instrs = [STP(comment=f"Latency for bus read from address {addr}") for i in range(obj._kwargs["latency"])]
-
-                    return Source(Source.Major.BUS_DATA), addr_instructions + [address_instr] + latency_instrs, addr_resources
-                
-                # If we haven't given it any address, just return the source associated with the bus
-                return Source(Source.Major.BUS_DATA), [], []
             # Check that we have the right argument structure. invert will take
             # exactly one argument, otherwise we need exactly two. In both 
             # cases, there should be no keyword arguments
@@ -1045,15 +921,15 @@ class Sequencer(Processor):
                 
             # Look at the operator encoded in the Operation and convert it into
             # an operating configuration for the DSP slice
-            if obj._op.__name__ == "add" or obj._op.__name__ == "iadd":
+            if obj._op == "add" or obj._op == "iadd":
                 dsp_mode_key = "{}+{}".format(*arg_inputs)
-            elif obj._op.__name__ == "sub" or obj._op.__name__ == "isub":
+            elif obj._op == "sub" or obj._op == "isub":
                 dsp_mode_key = "{}-{}".format(*arg_inputs) 
-            elif obj._op.__name__ == "or_" or obj._op.__name__ == "ior":
+            elif obj._op == "or" or obj._op == "ior":
                 dsp_mode_key = "{} OR {}".format(*arg_inputs) 
-            elif obj._op.__name__ == "and_" or obj._op.__name__ == "iand":
+            elif obj._op == "and" or obj._op == "iand":
                 dsp_mode_key = "{} AND {}".format(*arg_inputs) 
-            elif obj._op.__name__ == "xor" or obj._op.__name__ == "ixor":
+            elif obj._op == "xor" or obj._op == "ixor":
                 dsp_mode_key = "{} XOR {}".format(*arg_inputs)         
             else:
                 raise ValueError(f"Unable to find a DSP configuration for"
@@ -1111,73 +987,70 @@ class Sequencer(Processor):
         # Depending on what the condition ends up being, we'll populate a dict
         # with the eventual keyword arguments to the constructor for the 
         # instruction
-        stc_kwargs = {}
+        condition_kwargs = {}
         
         # We need to decode the provided condition into a test supported by the
         # sequencer's conditional store module
-        # The following computations are supported, omitting the implicit
-        # reduced OR across all bits of the result:
-        # 0: SRC AND MASK
-        # 1: SRC XOR MASK
-        # 2: (NOT SRC) AND MASK
-        # 3: SRC
+        # See the HDL for the sequencer to see the mapping between bitfields and
+        # operations
+        
         # If the condition is a primitive, we'll still insert the instructions
         # (in the future we may want to remove this for optimization, but for
         # now this could possibly be useful for testing and providing uniformity
         # in PS loops whose index variable is stored in a Symbol)
         if is_numeric(condition) or isinstance(condition, Source):
-            stc_kwargs["src_tval"] = condition
-            stc_kwargs["op"] = 0b11
-            return stc_kwargs,[],[]
+            condition_kwargs["src2"] = condition
+            condition_kwargs["op"] = None
+            return condition_kwargs,[],[]
         elif isinstance(condition, self.Register):
-            stc_kwargs["src_tval"] = Source(major=Source.Major.REG, 
+            condition_kwargs["src2"] = Source(major=Source.Major.REG, 
                                             minor=condition._resource_id)
-            stc_kwargs["op"] = 0b11
-            return stc_kwargs,[],[]
+            condition_kwargs["op"] = None
+            return condition_kwargs,[],[]
         elif isinstance(condition, self.DSP):
-            stc_kwargs["src_tval"] = Source(major=Source.Major.DSP_P, 
+            condition_kwargs["src2"] = Source(major=Source.Major.DSP_P, 
                                             minor=condition._resource_id)
-            stc_kwargs["op"] = 0b11
-            return stc_kwargs,[],[]
+            condition_kwargs["op"] = None
+            return condition_kwargs,[],[]
         elif isinstance(condition, Operation):
             # This Operation must be the comparison
             # Some operators can be recursively simplified
             if condition._op.__name__ == "invert":
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
+                condition_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
                 # Toggle the third bit, corresponding to the inverted condition
-                stc_kwargs["op"] ^= 0b100
-                return stc_kwargs,instructions,resources
+                condition_kwargs["condition_invert"] = not condition_kwargs["condition_invert"]
+                return condition_kwargs,instructions,resources
             elif condition._op.__name__ == "gt":
                 # We can only check if 0 > x
                 if condition._args[0] != 0:
                     raise ValueError("Greater-than comparisons can only check 0 > x or x >= 0.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
-                return stc_kwargs,instructions,resources
+                condition_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
+                return condition_kwargs,instructions,resources
             elif condition._op.__name__ == "lt":
                 # We can only check if x < 0
                 if condition._args[1] != 0:
                     raise ValueError("Less-than comparisons can only check x < 0 or 0 <= x.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
-                return stc_kwargs,instructions,resources
+                condition_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
+                return condition_kwargs,instructions,resources
             elif condition._op.__name__ == "ge":
                 # We can only check if x >= 0
                 if condition._args[1] != 0:
                     raise ValueError("Greater-than comparisons can only check 0 > x or x >= 0.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
-                stc_kwargs["op"] ^= 0b100
-                return stc_kwargs,instructions,resources
+                condition_kwargs,instructions,resources = self.compile_condition(condition._args[0] & (1 << 31), mask)
+                condition_kwargs["condition_invert"] = not condition_kwargs["condition_invert"]
+                return condition_kwargs,instructions,resources
             elif condition._op.__name__ == "le":
                 # We can only check if 0 <= x
                 if condition._args[0] != 0:
                     raise ValueError("Less-than comparisons can only check x < 0 or 0 <= x.")
-                stc_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
-                stc_kwargs["op"] ^= 0b100
-                return stc_kwargs,instructions,resources
+                condition_kwargs,instructions,resources = self.compile_condition(condition._args[1] & (1 << 31), mask)
+                condition_kwargs["condition_invert"] = not condition_kwargs["condition_invert"]
+                return condition_kwargs,instructions,resources
             elif condition._op.__name__ == "ne":
                 new_condition = Operation(operator.eq, *condition._args, **condition._kwargs)
-                stc_kwargs,instructions,resources = self.compile_condition(new_condition, mask)
-                stc_kwargs["op"] ^= 0b100
-                return stc_kwargs,instructions,resources
+                condition_kwargs,instructions,resources = self.compile_condition(new_condition, mask)
+                condition_kwargs["condition_invert"] = not condition_kwargs["condition_invert"]
+                return condition_kwargs,instructions,resources
             
             # Base cases for recursive operation simplification
             elif condition._op.__name__ == "eq":
@@ -1186,61 +1059,31 @@ class Sequencer(Processor):
                         and condition._args[0].assigned()
                         and condition._args[0].value_type() is int
                         and condition._args[0] == 0)):
-                    stc_kwargs,instructions,resources = self.compile_condition(condition._args[1], mask)
-                    stc_kwargs["op"] ^= 0b100
-                    return stc_kwargs,instructions,resources
+                    condition_kwargs,instructions,resources = self.compile_condition(condition._args[1], mask)
+                    condition_kwargs["condition_invert"] = not condition_kwargs["condition_invert"]
+                    return condition_kwargs,instructions,resources
                 elif ((isinstance(condition._args[1], int) and condition._args[1] == 0) 
                     or (isinstance(condition._args[1], Symbol) 
                         and condition._args[1].assigned()
                         and condition._args[1].value_type() is int
                         and condition._args[1] == 0)):
-                    stc_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
-                    stc_kwargs["op"] ^= 0b100
-                    return stc_kwargs,instructions,resources
+                    condition_kwargs,instructions,resources = self.compile_condition(condition._args[0], mask)
+                    condition_kwargs["condition_invert"] = not condition_kwargs["condition_invert"]
+                    return condition_kwargs,instructions,resources
                 
                 # not (SRC XOR MASK)
-                stc_kwargs["op"] = 0b101
+                condition_kwargs["condition_invert"] = True
+                condition_kwargs["op"] = "xor"
             elif condition._op.__name__ == "and_":
-                stc_kwargs["op"] = 0b00
+                condition_kwargs["op"] = "and"
             elif condition._op.__name__ == "xor":
-                stc_kwargs["op"] = 0b01
+                condition_kwargs["op"] = "xor"
             else:
                 # The Operation is computing something that is not a comparison,
                 # compile it as a source and test whether the result is nonzero
                 return self.compile_condition(condition != 0, mask)
                 
-            
-        # Next, let's look at the arguments and compile as necessary
-        # If one of them is a numeric or a register, we'll prefer to 
-        # put that in the mask since those don't need to be monitored 
-        # as closely        
-        if mask is not None:
-            if mask == "left":
-                mask_obj = condition._args[0]
-                test_obj = condition._args[1]
-            elif mask == "right":
-                mask_obj = condition._args[1]
-                test_obj = condition._args[0]
-            else:
-                raise ValueError(f"Mask directive must be one of \"left\" or \"right\"; received {mask}.")
-        elif is_numeric(condition._args[0]):
-            mask_obj = condition._args[0]
-            test_obj = condition._args[1]
-        elif is_numeric(condition._args[1]):
-            mask_obj = condition._args[1]
-            test_obj = condition._args[0]
-            
-        # We can't combine these conditions with those above because we want 
-        # to check for any numerics first
-        elif isinstance(condition._args[0], self.Register):
-            mask_obj = condition._args[0]
-            test_obj = condition._args[1]
-        elif isinstance(condition._args[1], self.Register):
-            mask_obj = condition._args[1]
-            test_obj = condition._args[0]
-        else:
-            raise TypeError(f"Unable to determine test and mask roles for"
-                            f" condition {condition}")
+        mask_obj, test_obj = self._choose_mask(mask=mask, *condition._args)
             
         instructions = []
             
@@ -1255,14 +1098,14 @@ class Sequencer(Processor):
         # the test value
         if (isinstance(test_obj, Operation) 
                 and test_obj._op == "invert" 
-                and stc_kwargs["op"] & 0b11 == 0b00):
-            stc_kwargs["op"] = 0b10
+                and condition_kwargs["op"] is None):
+            condition_kwargs["premask_invert"] = True
             test_obj = test_obj._args[0]
         
         compiled_src, src_instructions, src_resources = self.compile_source(test_obj)
-        stc_kwargs["src_tval"] = compiled_src
+        condition_kwargs["src2"] = compiled_src
         instructions += src_instructions
-        return stc_kwargs,instructions,src_resources
+        return condition_kwargs,instructions,src_resources
     
     def add_latencies(self):
         """
@@ -1304,13 +1147,8 @@ class Sequencer(Processor):
                                     f" `SequencerDatapathPort` or `int`;"
                                     f" received {instr.dsp_cep}.")
 
-            srcs = [instr.src_stval if isinstance(instr, STC) else instr.src1,
-                     instr.src_tval if isinstance(instr, STC) else instr.src2]
-            dests = [instr.dest_stval if isinstance(instr, STC) else instr.dest1,
-                     None if isinstance(instr, STC) else instr.dest2]
-            imms = [instr.imm_stval if isinstance(instr, STC) else instr.imm1,
-                     instr.imm_tval if isinstance(instr, STC) else instr.imm2]
-            for src,dest,imm in zip(srcs, dests, imms):
+            for src,dest,imm in [(instr.src1, instr.dest1, instr.imm1), 
+                                 (instr.src2, instr.dest2, instr.imm2)]:
                 # If we're configuring a DSP CFG register, it's very likely 
                 # that its CEP pin will be affected, so we'll reset the counter
                 # just in case
@@ -1382,14 +1220,14 @@ class Sequencer(Processor):
             # Jump past the block if the condition fails
             jump = self.store(dest=Destination(Destination.Major.PC, 
                                                Destination.PC_ABSOLUTE_BRANCH), 
-                              when=~condition,
+                              condition=~condition,
                               mask=mask)
         else:
             # Jump to the block and push the return location
             # if the condition passes
             jump = self.store(dest=Destination(Destination.Major.PC, 
                                                Destination.PC_ABSOLUTE_BRANCH), 
-                              when=condition,
+                              condition=condition,
                               mask=mask,
                               push_return=True)
             jump_target = self.Instruction.next_instance()
@@ -1432,7 +1270,7 @@ class Sequencer(Processor):
             # use the hold destination                
             hold_instruction = self.store(dest=Destination(Destination.Major.PC, 
                                                            Destination.PC_ABSOLUTE_HOLD),
-                                           when=~condition,
+                                           condition=~condition,
                                            mask=mask)
 
             # Call next_instance() again because store() will mean that
@@ -1445,7 +1283,7 @@ class Sequencer(Processor):
             self.store(src=return_instruction, 
                        dest=Destination(Destination.Major.PC, 
                                         Destination.PC_ABSOLUTE_BRANCH),
-                       when=~condition,
+                       condition=~condition,
                        mask=mask)
             
     @contextmanager
@@ -1515,7 +1353,7 @@ class Sequencer(Processor):
         self.store(src=loop_block_start.value(), 
                     dest=Destination(Destination.Major.PC, 
                                     Destination.PC_ABSOLUTE_BRANCH), 
-                    when=jump_condition,
+                    condition=jump_condition,
                     dsp_cep=dsp.source(),
                     comment="Branch back to loop start")
 

@@ -115,7 +115,7 @@ class Array:
             
         elif isinstance(dtype_or_resource, Array):
             Array.__init__(self, dtype_or_resource._resource, length, offset, region, buffer_dtype)
-            self._buffer = dtype_or_resource._buffer
+            self._buffer = np.copy(dtype_or_resource._buffer) if dtype_or_resource._buffer is not None else None
             self._buffer_mode = dtype_or_resource._buffer_mode
             
         else:
@@ -225,16 +225,28 @@ class Array:
         
         return self._resource
     
-    def flush(self, **kwargs):
+    def flush(self, *args, **kwargs):
         """
         Transfer any data in an internal cache into hardware. If there is no
         buffer, no action is taken. Subclasses may add custom behavior that 
-        accepts keyword arguments, but by default these are ignored.
+        accepts arguments, but by default these are ignored.
         """
         if self.buffered and self.allocated():
             tmp = self._buffer_mode
             self._buffer_mode = False
             self.memory[:] = self._buffer[:]
+            self._buffer_mode = tmp
+            
+    def unflush(self, *args, **kwargs):
+        """
+        Transfer any data from hardware into an internal cache. If there is no
+        buffer, no action is taken. Subclasses may add custom behavior that 
+        accepts arguments, but by default these are ignored.
+        """
+        if self.buffered and self.allocated():
+            tmp = self._buffer_mode
+            self._buffer_mode = False
+            self._buffer[:] = self.memory[:]
             self._buffer_mode = tmp
     
     @property
@@ -294,10 +306,6 @@ class Array:
         if not self.allocated():
             raise ValueError("Attempted address access of unallocated array")
         
-        # if self._buffer_mode:
-        #     raise ValueError(f"Attempted to access byte address of `Array` in"
-        #                      f" buffer mode.")
-        
         if not hasattr(self._resource, "byte_address"):
             raise AttributeError(f"Attempted to obtain byte address of"
                                  f" non-managed resource of type"
@@ -352,76 +360,6 @@ class Array:
         piece2.buffered = self.buffered
         
         return piece1,piece2
-    
-class ProceduralArrayMixin:
-    """
-    A mixin class for hardware arrays with efficient routines for dynamically
-    populating them.
-    """
-    
-    def set_generator(self, generator, signature):
-        """
-        Assign a generator.
-        
-        :param generator: A function that can be used to populate the array
-        :type generator: callable
-        :param signature: A string describing the call signature for the 
-            generator. Options are:
-            
-            - ``in_place``: f(memory, *args, **kwargs) -> None
-            - ``in_place_axis``: f(memory, axis, *args, **kwargs) -> None
-            - ``axis``: f(axis, *args, **kwargs) -> output
-            - ``scipy``: f(len(axis), *args, **kwargs) -> output
-            - ``ctypes``: f(len(axis), memory.ctypes.data, axis.ctypes.data, *args, **kwargs) -> None
-            
-        :type signature: str
-        """        
-        try:
-            self._signature_idx = ["in_place", 
-                             "in_place_axis", 
-                             "axis", 
-                             "scipy",
-                             "ctypes"].index(signature)
-        except ValueError:
-            raise ValueError(f"Invalid generator signature {signature}")
-        
-        self._generator = generator
-        
-    def populate(self, *args, flush_params={}, **kwargs):
-        """
-        Populate the underlying array resource, passing any arguments to the
-        encapsulated generator function. The object instance must implement
-        the method ``memory`` with a similar signature to ``Array.memory``.
-        By default, :meth:`flush` is called with any keyword arguments passed
-        in `flush_params`. This can be set to `None` to disable this behavior.
-        
-        :raises: ``ValueError`` if the array does not have a generator
-        """    
-        
-        if self._generator is None:
-            raise ValueError("Attempted to populate array without generator")
-        
-        if self._signature_idx == 0:
-            # in_place
-            self._generator(self.memory, *args, **kwargs)
-        elif self._signature_idx == 1:
-            # in_place_axis
-            self._generator(self.memory, self.axis(), *args, **kwargs)
-        elif self._signature_idx == 2:
-            # axis
-            self.memory[:] = self._generator(self.axis(), *args, **kwargs)
-        elif self._signature_idx == 3:
-            # scipy
-            self.memory[:] = self._generator(len(self.axis()), *args, **kwargs)
-        elif self._signature_idx == 4:
-            # ctypes    
-            self._generator(len(self.axis()), 
-                            self.memory.ctypes.data, 
-                            self.axis().ctypes.data,
-                            *args, **kwargs)   
-            
-        if flush_params is not None:
-            self.flush(**flush_params)
         
 class Waveform(Array):
     """
@@ -514,7 +452,6 @@ class Waveform(Array):
             # We can pass length_seconds to `__init__` because it'll only be used
             # as an argument to `allocate`
             self._axis = None
-            self._length_seconds = None
             
             self._int_type = np.dtype(f'<i{integer_width//8}')
             self._sample_type = np.dtype(f'V{2*self._int_type.itemsize}')
@@ -600,30 +537,27 @@ class Waveform(Array):
         :param precision: Floating-point precision used for numerical data.
             This must correspond to a numpy dtype.
         """
-        
+        scale *= 2**(self._int_type.itemsize*8 - 1) - 1 
         if out is not None:
             if out.dtype != self._complex_type:
                 raise TypeError(f"Expected output to have dtype"
                                 f" {self._complex_type}; found dtype"
                                 f" {out.dtype}")
 
-            with self.unbuffer():
-                np.copyto(dst=out.view(self._float_type), 
-                        src=self.memory.view(self._int_type))
-            out /= scale * (2**15)
-            
-            return out
-
         with self.unbuffer():
-            buf = self.memory.view(self._int_type).astype(self._float_type)
-            
-        buf /= scale * (2**15)
-        return buf.view(self._complex_type)
+            return np.divide(self.memory.view(self._int_type), 
+                        scale, 
+                        out=out, 
+                        dtype=self._float_type)
     
     def pack(self, out=None, scale=1):
         """
         Pack the complex floating-point data in an array into integer samples.
         """
+        
+        scale *= 2**(self._int_type.itemsize*8 - 1) - 1 
+        with self.buffer():
+            scaled = self.memory.view(self._float_type) * scale
         
         if out is not None:
             if out.dtype != self._sample_type:
@@ -631,25 +565,20 @@ class Waveform(Array):
                                 f" {self._sample_type}; found dtype"
                                 f" {out.dtype}")
                 
-            with self.buffer():
-                np.rint(self.memory.view(self._float_type) * (scale * (2**15)), 
-                        out=out.view(self._int_type),
-                        casting="unsafe")
-            return out
-        
-        with self.buffer():
-            buf = self.memory.view(self._float_type) * (scale * (2**15))
-            
-        return buf.astype(self._int_type).view(self._sample_type)
+        return np.rint(scaled, 
+                       out=out, 
+                       dtype=self._int_type, 
+                       casting="unsafe").view(self._sample_type)
     
-    def flush(self, **kwargs):
-        # Get a reference to the internal memory that we can pack
-        # data into
-        self.buffered = False
-        mem = self.memory
-        self.buffered = True
-        self.pack(out=mem,
-                  scale=(kwargs["scale"] if "scale" in kwargs else 1))
+    def flush(self, *args, **kwargs):
+        scale = kwargs.pop("scale", 1)
+        with self.unbuffer():
+            self.pack(out=self.memory, scale=scale)
+            
+    def unflush(self, *args, **kwargs):
+        scale = kwargs.pop("scale", 1)
+        with self.buffer():
+            self.unpack(out=self.memory, scale=scale)
         
         
 class DecimatedWaveform(Waveform):
@@ -663,6 +592,7 @@ class DecimatedWaveform(Waveform):
                  region=None, 
                  decimation=None, 
                  data=None, 
+                 integer_width=32,
                  float_width=32):   
         
         if decimation is not None:
@@ -682,7 +612,7 @@ class DecimatedWaveform(Waveform):
                          length_seconds=length_seconds, 
                          region=region, 
                          data=data,
-                         integer_width=32,
+                         integer_width=integer_width,
                          float_width=float_width)  
     
     def allocate(self, length_seconds):
@@ -708,53 +638,34 @@ class DecimatedWaveform(Waveform):
         # which has been reduced by the decimation factor in our overridden `allocate`
         params[0]["length"] *= self._decimation
         return params
+    
         
-class ConstantWaveform(Array):
+class ConstantWaveform(Waveform):
     """
     A waveform with a constant value.
     """
     
     def __init__(self, 
                  channel: Channel, 
-                 length_seconds: float = None):
+                 length_seconds: float):
         """
         :param channel: Channel for the waveform
         :type channel: :class:`Channel`
         :param length: Length of the constant in seconds
         :type length: float or :class:`Symbol` wrapping a float
         """
-        self._channel = channel
         self._length_seconds = length_seconds
-        super().__init__(np.dtype('V4'), 
-                         length=channel.interface_width_bytes // 4, 
-                         region=channel.memory_type)
-        
-    def populate(self, 
-                 amplitude: float = None, 
-                 length_seconds: float = None):
-        """
-        Set the complex amplitude and length of the constant.
-        
-        :param value: Waveform value
-        :type value: complex
-        
-        """
-        # Load the DAC memory with the new amplitude
-        if amplitude is not None:
-            arr = np.empty(self._channel.bytes_to_samples(self._channel.interface_width_bytes), np.complex64)
-            arr.fill(amplitude)
-            Channel.to_samples(arr, out=self.memory)
-        if length_seconds is not None:
-            self._length_seconds = length_seconds
+        self._channel = channel
+        super().__init__(channel, 
+                         length=Channel.bytes_to_seconds(channel.interface_width_bytes), 
+                         region=channel)
+        with self.buffer():
+            self.memory.fill(1)
         
     def dma_parameters(self):
         """
         Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
-        """        
-        if self._length_seconds is None:
-            raise ValueError(f"Must provide length of `ConstantWaveform`"
-                             " prior to requesting DMA parameters")    
-        
+        """
         # We'll use an Operation to construct the length so that it can be dynamically
         # changed while only requiring reassembly
         length_cycles = Operation(Channel.seconds_to_bytes, 
@@ -769,45 +680,41 @@ class ConstantWaveform(Array):
         }]
         
         
-class WindowedConstantWaveform(Waveform, ProceduralArrayMixin):
+class WindowedConstantWaveform(Waveform):
     """
     A constant waveform whose sharp rise and fall events are tapered with a 
-    window function. In contrast to the
-    typical interface of :class:`ProceduralArrayMixin`, the signature of the 
-    window function is chosen to match that of ``scipy.signal.windows``.
+    window function. This is carried out by
     """
     def __init__(self, 
                  channel: Channel, 
-                 window_length_seconds: float = None, 
-                 window_function: callable = None, 
-                 window_function_signature: str = "scipy",
-                 constant_length_seconds: float = None):
+                 constant_length_seconds: float = None,
+                 window_length_seconds: float = None):
         """
         :param channel: Channel on which to apply the waveform
         :type channel: :class:`Channel`
         :param window_length_seconds: The total length of the windowed portion
             of the waveform (the sum of the regions before and after the 
             rectangular segment)
-        :type window_length_seconds: float
-        :param window_function: Callable with which to populate the window 
-            memory. 
         :param constant_length_seconds: The length of the rectangular portion
             of the waveform
         :type constant_length_seconds: float
+        :type window_length_seconds: float
+        :param window_function: Callable with which to populate the window 
+            memory. 
         """
 
         super().__init__(channel, 
                          length_seconds=window_length_seconds, 
                          region=channel.memory_type)
-        self.set_generator(window_function, window_function_signature)
         self._constant = ConstantWaveform(channel, constant_length_seconds)
         
         # `seconds_to_bytes` will check whether we have an integer number of cycles    
         self.split_cycle = channel.seconds_to_bytes(window_length_seconds / 2) // channel.interface_width_bytes
         
-    def populate(self, amplitude=None, constant_length_seconds=None, *args, **kwargs):
-        super().populate(*args, flush_params={"scale": amplitude}, **kwargs)
-        self._constant.populate(amplitude, constant_length_seconds)
+    def flush(self, *args, **kwargs):
+        scale = kwargs.get("amplitude", 1)
+        super().flush(scale=scale)
+        self._constant.flush(amplitude=scale)
         
     def dma_parameters(self):
         ramp_first = super().dma_parameters()

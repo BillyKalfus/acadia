@@ -9,7 +9,7 @@ from functools import wraps
 
 import numpy as np
 
-from .arrays import Waveform, DecimatedWaveform
+from .arrays import Array, Waveform, DecimatedWaveform
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
@@ -447,6 +447,11 @@ class Acadia:
     """
     A class that implements system-wide commands for the Acadia hardware.
     """
+    
+    CMACC_QUADRANT_1 = 0
+    CMACC_QUADRANT_2 = 1 << 19
+    CMACC_QUADRANT_3 = (1 << 19) | (1 << 20)
+    CMACC_QUADRANT_4 = 1 << 20
     
     def requires_sequencer(func):
         """
@@ -1121,83 +1126,306 @@ class Acadia:
                 "kwargs": params,
                 "retval": None})
             
-        
     @requires_sequencer
-    def capture(self, channel, dst):
+    def stream(self, src, dst: Array, configuration: StreamConfiguration = None):
         """
-        Capture a waveform on an ADC into memory. If any decimation other than
-        1 is specified, a DSP module will be requested instead of the default
-        direct memory module.
+        Stream data from a source to a destination array.
         
-        :param channel: ADC channel to stream from
-        :type channel: :class:`Channel`
-        :param dst: Array to stream into
-        
+        :param src: Data source. If a configuration is provided and this is of
+            type :class:`Channel`, the channel in the configuration must match.
+        :type src: :class:`Channel` or :class:`Array`
+        :param dst: Data destination
+        :type dst: :class:`Array`
+        :param configuration: Stream configuration to use. If `None`, a new one
+            will be requested.
+        :type configuration: :class:`StreamConfiguration`
+        :return: The configuration used for streaming
+        :rtype: :class:`StreamConfiguration`
         """
         
         path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
         
-        if isinstance(dst, DecimatedWaveform):
-                
-            cfg = self._request_stream_configuration(channel, "dsp")
-            
-            # Configure the DSP for decimation
-            # At packet start and counter start, we'll load in the input value
-            # Otherwise, when we receive valid data, we'll add it to P
-            dsp_address = self._firmware.sequencer_bus_decoder[f"module{cfg.input_switch_slave}_registers"].address().value()
-            
-            # P = multiplier: CIN = 0, W = 00, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
-            self.sequencer().bus_write(address=dsp_address + 9, data=int("00000001010000", 2)) # packet start config
-            self.sequencer().bus_write(address=dsp_address + 10, data=int("00000001010000", 2)) # counter start config
-            
-            # P = multiplier + P: CIN = 0, W = 01, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
-            self.sequencer().bus_write(address=dsp_address + 11, data=int("00100001010000", 2)) # counter run config
-            
-            # The DSP module output is bits 46 to 15 of P, so we'll multiply by 
-            # 2^15 for both quadratures
-            self.sequencer().bus_write(address=dsp_address + 1, data=(1 << 15))
-            self.sequencer().bus_write(address=dsp_address + 5, data=(1 << 15))
-            
-            # No pre-add to the input stream
-            self.sequencer().bus_write(address=dsp_address + 2, data=0)
-            self.sequencer().bus_write(address=dsp_address + 6, data=0)
-            
-            # load packet start config
-            self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
-            
-            # Counter period low and high
-            counter_value = (dst._decimation // path_width_samples) - 1
-            self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
-            self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
-            
-        elif isinstance(dst, Waveform):
-            if (dst.byte_length() // 4) % path_width_samples != 0:
-                raise ValueError(f"Destination size {dst.byte_length()} cannot"
-                                    f" be filled in an integer number of cycles"
-                                    f" (path width {path_width_samples} samples)")
-            
-            cfg = self._request_stream_configuration(channel, "memory")
-            
-        else:
-            raise TypeError(f"Capture destination must be of type `Waveform`"
-                            f" or `ProcessedWaveform` (received {type(dst)})")
+        if (dst.byte_length() // 4) % path_width_samples != 0:
+            raise ValueError(f"Destination size {dst.byte_length()} cannot"
+                                f" be filled in an integer number of cycles"
+                                f" (path width {path_width_samples} samples)")
         
-        # We only need to command the datamover and notify the synchronizer,
-        # which will then add the DMA command for us
-        self._command_datamover(cfg.output_datamover(), 
+        if configuration is None:
+            config_src = src if isinstance(src, Channel) else "memory"
+            configuration = self._request_stream_configuration(config_src, "memory")
+        
+        self._command_datamover(configuration.output_datamover(), 
                                    dst.byte_address(),
                                    dst.byte_length())
-        
-        for params in dst.dma_parameters():
+
+        if isinstance(src, Channel):
+            # notify the synchronizer, which will then add the DMA command for us        
             self.channel_synchronizer.add({
                 "function": DMASynchronizer.DMA, 
                 "self": self, 
                 "args": (), 
-                "kwargs": params,
+                "kwargs": {
+                    "channel": src,
+                    "length": dst.byte_length() // src.interface_width_bytes,
+                    "word_address": 0
+                },
                 "retval": None})
+        else:
+            self._command_datamover(f"input{configuration.input_switch_master}_s2mm_datamover", 
+                                   src.byte_address(),
+                                   dst.byte_length())
             
-        return cfg
+        return configuration
+            
+    @requires_sequencer
+    def stream_decimated(self, 
+                         src, 
+                         dst: DecimatedWaveform, 
+                         configuration: StreamConfiguration = None):
+        """
+        Stream data from a source to a destination array through a DSP module
+        configured to decimate the input stream.
         
+        :param src: Data source. If a configuration is provided and this is of
+            type :class:`Channel`, the channel in the configuration must match.
+        :type src: :class:`Channel` or :class:`Array`
+        :param dst: Data destination
+        :type dst: :class:`DecimatedWaveform`
+        :param configuration: Stream configuration to use. If `None`, a new one
+            will be requested.
+        :type configuration: :class:`StreamConfiguration`
+        :return: The configuration used for streaming
+        :rtype: :class:`StreamConfiguration`
+        """
+        
+        if configuration is None:
+            config_src = src if isinstance(src, Channel) else "memory"
+            configuration = self._request_stream_configuration(config_src, "dsp")
+            
+        # Configure the DSP for decimation
+        # At packet start and counter start, we'll load in the input value
+        # Otherwise, when we receive valid data, we'll add it to P
+        dsp_address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
+        
+        # P = multiplier: CIN = 0, W = 00, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
+        self.sequencer().bus_write(address=dsp_address + 9, data=int("00000001010000", 2)) # packet start config
+        self.sequencer().bus_write(address=dsp_address + 10, data=int("00000001010000", 2)) # counter start config
+        
+        # P = multiplier + P: CIN = 0, W = 01, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
+        self.sequencer().bus_write(address=dsp_address + 11, data=int("00100001010000", 2)) # counter run config
+        
+        # The DSP module output is bits 46 to 15 of P, so we'll multiply by 
+        # 2^15 for both quadratures
+        self.sequencer().bus_write(address=dsp_address + 1, data=(1 << 15))
+        self.sequencer().bus_write(address=dsp_address + 5, data=(1 << 15))
+        
+        # No pre-add to the input stream
+        self.sequencer().bus_write(address=dsp_address + 2, data=0)
+        self.sequencer().bus_write(address=dsp_address + 6, data=0)
+        
+        # load packet start config
+        self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
+        
+        # Counter period low and high
+        path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
+        counter_value = (dst._decimation // path_width_samples) - 1
+        self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
+        self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
+        
+        self.stream(src, dst, configuration)
+        
+    @requires_sequencer
+    def stream_accumulated(self, 
+                            src, 
+                            dst: DecimatedWaveform, 
+                            length_seconds: float,
+                            cmacc_preload: complex = 0,
+                            write_mode: str = "upper", 
+                            last_only: bool = True, 
+                            reset_fifo: bool = False,
+                            accumulator_done: bool = True,
+                            kernel: DecimatedWaveform = None,
+                            configuration: StreamConfiguration = None):
+        """
+        Stream data from a source to a destination array through a CMACC 
+        module. Because the CMACC is dynamically allocated, memory for the 
+        kernel is allocated internally and returned with the configuration.
+        
+        :param src: Data source. If a configuration is provided and this is of
+            type :class:`Channel`, the channel in the configuration must match.
+        :type src: :class:`Channel` or :class:`Array`
+        :param dst: Data destination
+        :type dst: :class:`DecimatedWaveform`
+        :param length_seconds: The length of data to accumulate.
+        :type length_seconds: float
+        :param cmacc_preload: Value to load into the accumulator prior to 
+            beginning accumulation. If `None`, nothing is written.
+        :type cmacc_preload: complex
+        :param write_mode: Controls the value streamed out of the CMACC. If
+            "upper" or "lower", the upper/lower 32 bits of the accumulator are
+            written. If "input", a copy of the input (after the initial 
+            decimation) is written. If `None`, nothing is written.
+        :type write_mode: str
+        :param last_only: If `True`, only the last value of the stream is 
+            written 
+        :type last_only: bool
+        :param reset_fifo: If `True`, the output FIFO is reset.
+        :type reset_fifo: bool
+        :param accumulator_done: The internal accumulator completion signal
+            is set to this value during configuration.
+        :type accumulator_done: bool
+        :param configuration: Stream configuration to use. If `None`, a new one
+            will be requested.
+        :type configuration: :class:`StreamConfiguration`
+        :return: The configuration used for streaming and the kernel memory
+        :rtype: tuple of :class:`StreamConfiguration` and Waveform
+        """
+        
+        if configuration is None:
+            config_src = src if isinstance(src, Channel) else "memory"
+            configuration = self._request_stream_configuration(config_src, "dsp")
+            
+        # Allocate kernel memory if needed
+        if kernel is None:
+            if isinstance(src, Channel):
+                path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
+                kernel = DecimatedWaveform(src, 
+                                length_seconds=length_seconds, 
+                                decimation=path_width_samples,
+                                integer_width=16,
+                                region=self.CMACCKernelArray[configuration.module_resource._resource_id])
+            elif isinstance(src, Array):
+                length_cycles = src.byte_length() // (self._firmware["stream_processing_path"]["width"] // 8)
+                    
+                kernel = Array(np.dtype("V4"), 
+                                length=length_cycles, 
+                                region=self.CMACCKernelArray[configuration.module_resource._resource_id]) 
+            else:
+                raise TypeError(f"Source must be Array or Channel; received {src}")
+        
+        registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
+        if cmacc_preload is not None:
+            self.sequencer().bus_write(address=registers, data=cmacc_preload.real)
+            self.sequencer().bus_write(address=registers+1, data=cmacc_preload.imag)
+            
+        control_reg = 0
+        control_reg |= kernel.word_address()
+        
+        if accumulator_done:
+            control_reg |= 1 << 18
+            
+        if write_mode is not None and dst is None:
+            raise TypeError("dst must not be `None` if write_mode is not `None`")
+            
+        if write_mode == "upper":
+            control_reg |= 1 << 21
+        elif write_mode == "lower":
+            control_reg |= 2 << 21
+        elif write_mode == "input":
+            control_reg |= 3 << 21
+        elif write_mode is None:
+            if dst is not None:
+                raise TypeError("dst must be `None` when write_mode is `None`")
+        else:
+            raise ValueError(f"Unexpected value for write_mode: {write_mode}")
+        
+        if last_only:
+            control_reg |= 1 << 23
+            
+        if reset_fifo:
+            control_reg |= 1 << 24
+            
+        self.sequencer().bus_write(address=registers+2, data=control_reg)
+        
+        self.stream(src, dst, configuration)
+        
+        return configuration, kernel
+    
+    @requires_sequencer
+    def cmacc_done(self, configuration: StreamConfiguration):
+        """
+        Create a condition to check whether the CMACC accumulation for a given
+        stream configuration is done.
+
+        :param configuration: Configuration whose CMACC should be checked
+        :type configuration: :class:`StreamConfiguration`
+        :return: A condition for checking whether the CMACC for the given
+            configuration has completed its accumulation
+        """
+        if not isinstance(configuration.module_resource, 
+                          self._stream_module_resources["cmacc"]):
+            raise TypeError(f"CMACC completion can only be checked for stream" 
+                            f" configurations that drive CMACC modules"
+                            f" (found module resource type"
+                            f" {type(configuration.module_resource)})")
+            
+        module_name = f"module{configuration.input_switch_slave}_registers"
+        registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
+        
+        return self.sequencer().bus_read(registers+2, 
+                                         latency=self._bus_latency(module_name)) & (1 << 18)
+        
+    @requires_sequencer
+    def cmacc_get_quadrant(self, 
+                           configuration: StreamConfiguration, 
+                           wait_for_completion: bool = True):
+        """
+        Get the quadrant of the CMACC value. By default, we'll wait for the 
+        CMACC value to be available and then return the quadrant information
+        in a way which optimizes latency (because the bus address for 
+        checking completion is the same for checking quadrant, we don't need
+        to incur the bus latency overhead a second time). Otherwise, a regular
+        bus read will be performed with all typical latency overheads.
+        
+        A different constant is returned depending on the quadrant; refer to
+        the constants Acadia.CMACC_QUADRANT_1/2/3/4 for their values.
+        """
+        
+        if wait_for_completion:
+            with self.sequencer().repeat_until(self.cmacc_done(configuration)):
+                pass
+            
+        module_name = f"module{configuration.input_switch_slave}_registers"    
+        registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
+        latency = 0 if wait_for_completion else self._bus_latency(module_name)
+        value = self.sequencer().bus_read(registers+2, latency=latency)
+        return value & ((1 << 20) | (1 << 19))
+    
+    @requires_sequencer
+    def cmacc_get_quadrature(self, 
+                           configuration: StreamConfiguration, 
+                           wait_for_completion: bool = True,
+                           imag=False):
+        """
+        Get a quadrature of the CMACC value. By default, we'll wait for the 
+        CMACC value to be available and then return the quadrant information
+        in a way which optimizes latency (because the bus address for 
+        checking completion is the same for checking quadrant, we don't need
+        to incur the bus latency overhead a second time). Otherwise, a regular
+        bus read will be performed with all typical latency overheads.
+        """
+        
+        if wait_for_completion:
+            with self.sequencer().repeat_until(self.cmacc_done(configuration)):
+                pass
+            
+        module_name = f"module{configuration.input_switch_slave}_registers"    
+        registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
+        latency = 0 if wait_for_completion else self._bus_latency(module_name)
+        return self.sequencer().bus_read(registers+imag, latency=latency)
+    
+    @requires_sequencer
+    def cmacc_load(self, 
+                    configuration: StreamConfiguration, 
+                    value: complex = 0):
+        """
+        Load a value into the accumulator of the given CMACC.
+        """
+        module_name = f"module{configuration.input_switch_slave}_registers"    
+        registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
+        self.sequencer().bus_write(address=registers, data=value.real)
+        self.sequencer().bus_write(address=registers+1, data=value.imag)
+    
     @requires_sequencer
     def generate_blank(self, channel, length):
         """

@@ -1403,7 +1403,7 @@ class Firmware:
                         "c_enable_s2mm": 1,
                         "c_include_s2mm": "Full",
                         "c_m_axi_s2mm_data_width": module['AXI_width'],
-                        "c_s_axis_s2mm_tdata_width": 32,
+                        "c_s_axis_s2mm_tdata_width": 64,
                         "c_s2mm_btt_used": 23,
                         "c_s2mm_burst_size": module['datamover_burst_size'],
                         "c_s2mm_support_indet_btt": "true",

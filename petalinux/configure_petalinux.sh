@@ -2,10 +2,10 @@
 
 REPO_DIR="/home/billy/device-tree-xlnx"
 VIVADO_PROJ_DIR="/home/billy/acadia-build"
-BSP="/home/billy/xilinx-zcu216-v2020.2-final.bsp"
-BSP_NAME="xilinx-zcu216-2020.2"
+BSP="/home/billy/xilinx-zcu216-v2023.2-10140544.bsp"
+BSP_NAME="xilinx-zcu216-2023.2"
 SRC_DIR="/home/billy/acadia/petalinux"
-PETALINUX_TOOLS="/home/billy/PetaLinux"
+PETALINUX_TOOLS="/home/billy/petalinux2023"
 
 # Load petalinux tools
 source $PETALINUX_TOOLS/settings.sh
