@@ -24,7 +24,14 @@ class Array:
     references to it enclosed within other objects).
     """
     
-    def __init__(self, dtype_or_resource, length=None, offset=None, region=None, buffer_dtype=None):
+    def __init__(self, 
+                 dtype_or_resource, 
+                 length: int = None, 
+                 offset: int = None, 
+                 region = None, 
+                 buffer_dtype = None,
+                 axis_dtype = np.float32,
+                 axis_interval: float = 1):
         """
         Create an empty reference to an array.
         
@@ -58,7 +65,13 @@ class Array:
             created with the same number of elements as the underlying 
             resource, but with a dtype specified by this parameter
         :type buffer_dtype: Any valid argument to the initializer of
-            ``numpy.dtype``        
+            ``numpy.dtype``    
+        :param axis_dtype: The datatype for the axis array. If ``None``, no
+            axis will be allocated
+        :type axis_dtype: Any valid argument to the initializer of
+            ``numpy.dtype``   
+        :param axis_interval: The spacing between two points on the axis
+        :type axis_interval: float 
         """
         if isinstance(region, Channel):
             if not region.is_dac:
@@ -81,6 +94,8 @@ class Array:
         self._buffer = None
         self._buffer_dtype = buffer_dtype
         self._buffer_mode = False
+        self._axis_dtype = axis_dtype
+        self._axis_interval = axis_interval
         
         if isinstance(dtype_or_resource, (str, np.dtype, type, dict)):
             if offset is not None:
@@ -103,7 +118,6 @@ class Array:
                     self._resource = dtype_or_resource
                     
             self._dtype = dtype_or_resource.dtype if isinstance(dtype_or_resource, np.ndarray) else np.uint8
-            self._axis = np.arange(len(self._resource), dtype=np.float32)
             
         elif isinstance(type(dtype_or_resource), ManagedMemory):
             byte_offset = (dtype_or_resource.word_width*offset) if offset is not None else 0
@@ -111,7 +125,6 @@ class Array:
             
             self._resource = dtype_or_resource.view(byte_offset=byte_offset, byte_length=byte_length)
             self._dtype = np.dtype(f"V{dtype_or_resource.word_width // 8}")
-            self._axis = np.arange(self._resource.word_length(), dtype=np.float32)
             
         elif isinstance(dtype_or_resource, Array):
             Array.__init__(self, dtype_or_resource._resource, length, offset, region, buffer_dtype)
@@ -138,7 +151,11 @@ class Array:
         if self.allocated():
             raise ValueError("Attempted re-allocation of non-free memory")
                 
-        self._axis = np.arange(length, dtype=np.float32)
+        if self._axis_dtype is not None:
+            self._axis = np.linspace(start=0, 
+                                     stop=length*self._axis_interval, 
+                                     num=length,
+                                     dtype=self._axis_dtype) 
                 
         if self._class is None:
             self._resource = np.empty(shape=length, dtype=self._dtype)
@@ -264,32 +281,19 @@ class Array:
         if not self.allocated():
             raise ValueError(f"Unable to retrieve axis of unallocated array.")
         
+        if self._axis_dtype is None:
+            raise ValueError(f"Attempted to retrieve axis of array without any.")
+        
         return self._axis
                 
     def __getitem__(self, k):
-        if not self.allocated():
-            raise ValueError("Attempted access of unallocated array")
-        
-        if self._buffer_mode:
-            return self._buffer[k]
-        
-        return self._resource[k]
+        return self.memory[k]
     
     def __setitem__(self, k, v):
-        if not self.allocated():
-            raise ValueError("Attempted access of unallocated array")
-        
-        if self._buffer_mode:
-            self._buffer[k] = v
-        
-        self._resource[k] = v
+        self.memory[k] = v
         
     def __len__(self):
-        """
-        :return: The length of the array in elements.
-        :rtype: int
-        """
-        return self.word_length()
+        return len(self.memory)
     
     def word_address(self):
         if not self.allocated():
@@ -349,8 +353,14 @@ class Array:
         if idx == 0 or idx == self.word_length():
             return (self,)
         
-        piece1 = Array(self._resource, idx, 0, buffer_dtype=self._buffer_dtype)
-        piece2 = Array(self._resource, self.word_length()-idx, idx, buffer_dtype=self._buffer_dtype)
+        piece1 = Array(self._resource, 
+                       length=idx, 
+                       offset=0, 
+                       buffer_dtype=self._buffer_dtype)
+        piece2 = Array(self._resource, 
+                       length=self.word_length()-idx, 
+                       offset=idx, 
+                       buffer_dtype=self._buffer_dtype)
         
         if self._buffer is not None:
             piece1._buffer = self._buffer[:idx]
@@ -376,7 +386,9 @@ class Waveform(Array):
                  region = None, 
                  data = None,
                  integer_width: int = 16,
-                 float_width: int = 32):
+                 float_width: int = 32,
+                 buffered: bool = True,
+                 axis_dtype = np.float32):
         """
         :param sample_rate_or_channel: When of type ``float``, this is the sample rate
             used to derive axis values and allocate memory. Alternatively, 
@@ -405,6 +417,11 @@ class Waveform(Array):
         
         self._sample_rate_or_channel = sample_rate_or_channel
         
+        if isinstance(self._sample_rate_or_channel, Channel):
+            sample_period = self._sample_rate_or_channel.samples_to_seconds(1)
+        else:
+            sample_period = 1 / self._sample_rate_or_channel
+            
         if data is not None:
             if length_seconds is not None:
                 raise ValueError(f"When initializing with data the length must"
@@ -417,13 +434,19 @@ class Waveform(Array):
                     self._sample_type = np.dtype(f'V{2*self._int_type.itemsize}')
                     self._float_type = np.dtype(f'<f{float_width//8}')
                     self._complex_type = np.dtype(f'<c{2*float_width//8}')
-                    super().__init__(data, buffer_dtype=self._complex_type)
+                    super().__init__(data, 
+                                     buffer_dtype=self._complex_type, 
+                                     axis_dtype=axis_dtype,
+                                     axis_interval=sample_period)
                 elif data.dtype.kind == "V":
                     self._sample_type = data.dtype
                     self._int_type = np.dtype(f'<i{self._sample_type.itemsize//2}')
                     self._float_type = np.dtype(f'<f{float_width//8}')
                     self._complex_type = np.dtype(f'<c{2*float_width//8}')
-                    super().__init__(data, buffer_dtype=self._complex_type)
+                    super().__init__(data, 
+                                     buffer_dtype=self._complex_type, 
+                                     axis_dtype=axis_dtype,
+                                     axis_interval=sample_period)
                 elif data.dtype.kind == "c":
                     self._int_type = np.dtype(f'<i{integer_width//8}')
                     self._sample_type = np.dtype(f'V{2*self._int_type.itemsize}')
@@ -431,7 +454,9 @@ class Waveform(Array):
                     self._complex_type = data.dtype
                     super().__init__(self._sample_type, 
                                      length=len(data), 
-                                     buffer_dtype=data.dtype)
+                                     buffer_dtype=data.dtype, 
+                                     axis_dtype=axis_dtype,
+                                     axis_interval=sample_period)
                     self._buffer = data
                 else:
                     raise TypeError(f"Unable to construct Waveform from"
@@ -440,66 +465,49 @@ class Waveform(Array):
                 raise TypeError(f"Waveforms can only be constructed from"
                                 f" numpy arrays (received type {type(data)})")
             
-            if isinstance(self._sample_rate_or_channel, float):
-                self._axis = np.arange(len(data)) / self._sample_rate_or_channel
-            elif isinstance(self._sample_rate_or_channel, Channel):
-                sample_time = self._sample_rate_or_channel.samples_to_seconds(1)
-                self._axis = np.arange(len(data)) * sample_time
-            else:
-                self._axis = None
-            
-        else:
-            # We can pass length_seconds to `__init__` because it'll only be used
-            # as an argument to `allocate`
-            self._axis = None
-            
+        else:           
             self._int_type = np.dtype(f'<i{integer_width//8}')
             self._sample_type = np.dtype(f'V{2*self._int_type.itemsize}')
             self._float_type = np.dtype(f'<f{float_width//8}')
             self._complex_type = np.dtype(f'<c{2*float_width//8}')
             
+            if length_seconds is None:
+                length_samples = None
+            elif isinstance(self._sample_rate_or_channel, Channel):
+                length_samples = self._sample_rate_or_channel.seconds_to_samples(length_seconds)
+            else:
+                length_samples = self._sample_rate_or_channel * length_seconds
+            
             super().__init__(self._sample_type, 
-                             length=length_seconds, 
+                             length=length_samples, 
                              region=region, 
-                             buffer_dtype=self._complex_type)
-        
-        # Waveforms must be buffered so that the buffer can convert between
-        # floating-point and fixed-point values    
-        self.buffered = True
-               
-    def allocate(self, length_seconds):
-        """
-        Create an instance of the underlying memory type, thereby reserving a
-        resource ID for that type and notifying the compiler to reserve memory
-        (in the case of a hardware array).
-        
-        :param length: Waveform length in seconds
-        :type length: float
-        """
-        if isinstance(self._sample_rate_or_channel, float):
-            samples = self._sample_rate_or_channel * length_seconds
-            if round(samples, 2) != samples:
-                raise ValueError(f"Obtained non-integer number of samples"
-                                 f" ({samples}) for Waveform length"
-                                 f" {length_seconds} at sample rate"
-                                 f" {self._sample_rate_or_channel}")
-            super().allocate(samples)
-        elif isinstance(self._sample_rate_or_channel, Channel):
-            # ``seconds_to_samples`` will make sure that it's an integer number of cycles
-            super().allocate(self._sample_rate_or_channel.seconds_to_samples(length_seconds))
-        else:
-            raise ValueError(f"Unable to allocate `Waveform` with sample"
-                             f" rate/channel of type {type(self._sample_rate_or_channel)}.")
-        
-        # Scale the element axis by the sample time
-        self._axis = np.arange(len(self._axis)) * (length_seconds / len(self._axis))
+                             buffer_dtype=self._complex_type,
+                             axis_dtype=axis_dtype,
+                             axis_interval=sample_period)
+            
+        # Waveforms are buffered by default so that the buffer can convert between
+        # floating-point and fixed-point values, but this can be disabled 
+        self.buffered = buffered
     
     def dma_parameters(self):
         """
-        Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
+        Generate a `dict` of parameters for the :class:`Acadia` `generate` 
+        method.
         """
         if not isinstance(self._sample_rate_or_channel, Channel):
-            raise TypeError(f"DMA parameters may only be requested for `Waveform` objects instantiated with `Channel` instances")
+            raise TypeError(f"DMA parameters may only be requested for"
+                            " `Waveform` objects instantiated with `Channel`"
+                            " instances")
+            
+        if self.word_address() % (self._sample_rate_or_channel.interface_width_bytes // 4) != 0:
+            raise ValueError("Requested DMA parameters for Waveform with"
+                             f" misaligned word address (address"
+                             f" {self.word_address():X})")
+            
+        if self.byte_length() % self._sample_rate_or_channel.interface_width_bytes != 0:
+            raise ValueError("Requested DMA parameters for Waveform with"
+                             f" misaligned length ("
+                             f" {self.byte_length():X} bytes)")
         
         return [{
             "channel": self._sample_rate_or_channel,
@@ -512,19 +520,16 @@ class Waveform(Array):
         Produce two new instances that wrap disparate segments of the 
         underlying memory.
         """
+        if isinstance(self._sample_rate_or_channel, Channel):
+            split_idx = self._sample_rate_or_channel.seconds_to_samples(split_time)
         # ``seconds_to_samples`` will make sure that it's an integer number of cycles
-        if isinstance(self._sample_rate_or_channel, float):
+        else:
             split_idx = self._sample_rate_or_channel * split_time
-            if round(split_idx, 2) != split_idx:
+            if round(split_idx, 5) != split_idx:
                 raise ValueError(f"Obtained non-integer sample time"
                                  f" ({split_idx}) for Waveform split time"
                                  f" {split_time} at sample rate"
                                  f" {self._sample_rate_or_channel}")
-        elif isinstance(self._sample_rate_or_channel, Channel):
-            split_idx = self._sample_rate_or_channel.seconds_to_samples(split_time)
-        else:
-            raise TypeError(f"Can't split Waveform with sample rate/Channel of"
-                            f" type {type(self._sample_rate_or_channel)}")
             
         arrays = super().split(split_idx)
         return tuple(Waveform(self._sample_rate_or_channel, data=arr) for arr in arrays)
@@ -538,17 +543,20 @@ class Waveform(Array):
             This must correspond to a numpy dtype.
         """
         scale *= 2**(self._int_type.itemsize*8 - 1) - 1 
-        if out is not None:
-            if out.dtype != self._complex_type:
-                raise TypeError(f"Expected output to have dtype"
-                                f" {self._complex_type}; found dtype"
-                                f" {out.dtype}")
+        if out is None:
+            out = np.empty(len(self), dtype=self._complex_type)
+        elif out.dtype != self._complex_type:
+            raise TypeError(f"Expected output to have dtype"
+                            f" {self._complex_type}; found dtype"
+                            f" {out.dtype}")
 
         with self.unbuffer():
-            return np.divide(self.memory.view(self._int_type), 
+            np.divide(self.memory.view(self._int_type), 
                         scale, 
-                        out=out, 
+                        out=out.view(self._float_type), 
                         dtype=self._float_type)
+            
+        return out
     
     def pack(self, out=None, scale=1):
         """
@@ -559,16 +567,15 @@ class Waveform(Array):
         with self.buffer():
             scaled = self.memory.view(self._float_type) * scale
         
-        if out is not None:
-            if out.dtype != self._sample_type:
-                raise TypeError(f"Expected output to have dtype"
-                                f" {self._sample_type}; found dtype"
-                                f" {out.dtype}")
+        if out is None:
+            out = np.empty(len(self), dtype=self._sample_type)
+        elif out.dtype != self._sample_type:
+            raise TypeError(f"Expected output to have dtype"
+                            f" {self._sample_type}; found dtype"
+                            f" {out.dtype}")
                 
-        return np.rint(scaled, 
-                       out=out, 
-                       dtype=self._int_type, 
-                       casting="unsafe").view(self._sample_type)
+        np.rint(scaled, out=out.view(self._int_type), casting="unsafe")
+        return out
     
     def flush(self, *args, **kwargs):
         scale = kwargs.pop("scale", 1)
@@ -613,24 +620,21 @@ class DecimatedWaveform(Waveform):
                          region=region, 
                          data=data,
                          integer_width=integer_width,
-                         float_width=float_width)  
+                         float_width=float_width,
+                         axis_dtype = np.float32)  
     
-    def allocate(self, length_seconds):
-        """
-        Create an instance of the underlying memory type, thereby reserving a
-        resource ID for that type and notifying the compiler to reserve memory
-        (in the case of a hardware array).
-        
-        :param length_seconds: Waveform length in seconds
-        :type length_seconds: float
-        """
-        
+    def allocate(self, length):
         if self._decimation is None:
             raise ValueError(f"May not allocate DecimatedWaveform without"
                              f" a decimation value.")
+            
+        if length % self._decimation != 0:
+            raise ValueError(f"Decimation results in non-integer number of"
+                             f" samples (sample length {length}, decimation"
+                             f" {self._decimation})")
         
-        super().allocate(length_seconds / self._decimation)
-        self._axis *= self._decimation
+        super().allocate(length // self._decimation)
+        self._axis_interval *= self._decimation
         
     def dma_parameters(self):
         params = super().dma_parameters()
@@ -657,7 +661,7 @@ class ConstantWaveform(Waveform):
         self._length_seconds = length_seconds
         self._channel = channel
         super().__init__(channel, 
-                         length=Channel.bytes_to_seconds(channel.interface_width_bytes), 
+                         length_seconds=channel.bytes_to_seconds(channel.interface_width_bytes), 
                          region=channel)
         with self.buffer():
             self.memory.fill(1)

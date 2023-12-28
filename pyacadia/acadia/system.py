@@ -1642,10 +1642,14 @@ class Acadia:
             signals completion.
         """
         if assemble:
+            logging.debug("Assembling")
             self.load(*self.assemble())
         if configure_streams:
             for cfg in self._stream_configurations:
+                logging.debug(f"Applying stream configuration {cfg}")
                 self.configure_stream(cfg)
+                
+        logging.debug("Running sequencer")
         self.sequencer_reset()
         self.sequencer_run()
         
@@ -1740,7 +1744,7 @@ class Acadia:
         if adc_dma_programs is not None:
             for idx,program in enumerate(adc_dma_programs):
                 if len(program) > 0:
-                    logging.debug(f"Loading DAC{idx} descriptor memory ({len(program)} bytes)")
+                    logging.debug(f"Loading ADC{idx} descriptor memory ({len(program)} bytes)")
                     self._adc_dma_descriptor_memory[idx][:len(program)] = program
         
                         
@@ -1951,15 +1955,44 @@ class Acadia:
             default_getitem=False)
         
     def _create_dac_arrays(self):
-        self.DACArray = [ManagedMemory(f"DAC{i}Array", (), {},
+        def _getitem(mem_self, key):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to get item from unattached memory.")
+            return mem_self.memory[key]
+            
+        def _setitem(mem_self, key, value):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to set item of unattached memory.")
+            mem_self.memory[key] = value
+            
+        self.DACArray = [ManagedMemory(f"DAC{i}Array", 
+            (), 
+            {"OPERATORS": [], 
+             "__getitem__": _getitem, 
+             "__setitem__": _setitem},
             base_word_address=0,
             base_byte_address=(self._firmware[f"dac_tile{i // 4}_sample_memory"]["address"] 
                                + (i % 4)*(self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8)),
             word_width=32,
-            memory_size=self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8) for i in range(self._firmware.NUM_DACS)]
+            memory_size=self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8,
+            default_getitem=False) for i in range(self._firmware.NUM_DACS)]
         
     def _create_cmacc_kernel_arrays(self):
-        self.CMACCKernelArray = [ManagedMemory(f"CMACC{i}KernelArray", (), {},
+        def _getitem(mem_self, key):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to get item from unattached memory.")
+            return mem_self.memory[key]
+            
+        def _setitem(mem_self, key, value):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to set item of unattached memory.")
+            mem_self.memory[key] = value
+            
+        self.CMACCKernelArray = [ManagedMemory(f"CMACC{i}KernelArray", 
+            (), 
+            {"OPERATORS": [], 
+             "__getitem__": _getitem, 
+             "__setitem__": _setitem},
             base_word_address=0,
             base_byte_address=(self._firmware["stream_processing_path"]["cmacc_kernel_memory_controller"]["base_address"] 
                                + i*(self._firmware._max_cmacc_memory * 32 // 8)),
@@ -1967,28 +2000,74 @@ class Acadia:
             memory_size=self._firmware._max_cmacc_memory * 32 // 8) for i in range(self._firmware._num_cmaccs)]
         
     def _create_pl_ddr_arrays(self):
-        self.PLDDR0Array = ManagedMemory(f"PLDDR0Array", (), {},
+        def _getitem(mem_self, key):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to get item from unattached memory.")
+            return mem_self.memory[key]
+            
+        def _setitem(mem_self, key, value):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to set item of unattached memory.")
+            mem_self.memory[key] = value
+            
+        self.PLDDR0Array = ManagedMemory(f"PLDDR0Array", 
+            (),
+            {"OPERATORS": [], 
+             "__getitem__": _getitem, 
+             "__setitem__": _setitem},
             base_word_address=self._firmware["memory"]["ddr4_c0"]["address"],
             base_byte_address=self._firmware["memory"]["ddr4_c0"]["address"],
             word_width=8,
             memory_size=self._firmware["memory"]["ddr4_c0"]["size_bits"] // 8)
         
-        self.PLDDR1Array = ManagedMemory(f"PLDDR1Array", (), {},
+        self.PLDDR1Array = ManagedMemory(f"PLDDR1Array", 
+            (), 
+            {"OPERATORS": [], 
+             "__getitem__": _getitem, 
+             "__setitem__": _setitem},
             base_word_address=self._firmware["memory"]["ddr4_c1"]["address"],
             base_byte_address=self._firmware["memory"]["ddr4_c1"]["address"],
             word_width=8,
             memory_size=self._firmware["memory"]["ddr4_c1"]["size_bits"])
         
     def _create_ps_ddr_arrays(self):
+        def _getitem(mem_self, key):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to get item from unattached memory.")
+            return mem_self.memory[key]
+            
+        def _setitem(mem_self, key, value):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to set item of unattached memory.")
+            mem_self.memory[key] = value
+            
         # PS DDR
-        self.PSDDRArray = ManagedMemory(f"PSDDRArray", (), {},
+        self.PSDDRArray = ManagedMemory(f"PSDDRArray", 
+            (),
+            {"OPERATORS": [], 
+             "__getitem__": _getitem, 
+             "__setitem__": _setitem},
             base_word_address=0x8_0000_0000,
             base_byte_address=0x8_0000_0000,
             word_width=8,
             memory_size=2**30)
         
     def _create_ocm_arrays(self):
-        self.OCMArray = ManagedMemory(f"OCMArray", (), {},
+        def _getitem(mem_self, key):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to get item from unattached memory.")
+            return mem_self.memory[key]
+            
+        def _setitem(mem_self, key, value):
+            if not hasattr(mem_self, "memory"):
+                raise AttributeError(f"Attempted to set item of unattached memory.")
+            mem_self.memory[key] = value
+            
+        self.OCMArray = ManagedMemory(f"OCMArray", 
+            (), 
+            {"OPERATORS": [], 
+             "__getitem__": _getitem, 
+             "__setitem__": _setitem},
             base_word_address=0xFFFC_0000,
             base_byte_address=0xFFFC_0000,
             word_width=8,

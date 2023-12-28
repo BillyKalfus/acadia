@@ -1,0 +1,1 @@
+write_hw_platform -fixed -include_bit -force -file acadia_bd_wrapper.xsa

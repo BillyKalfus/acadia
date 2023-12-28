@@ -416,7 +416,7 @@ begin
                    (src2_preinverted and mask) when instr_op_sel(2 downto 1) = "10" else
                    src2_preinverted;
                 
-    cond_satisfied <= or_reduce(src2_masked) xor instr_op_sel(2);
+    cond_satisfied <= or_reduce(src2_masked) xor instr_op_sel(3);
    
     -- Implement the stack
     -- Assign some various combinational signals
