@@ -45,4 +45,4 @@ sed -i -e 's/UsePAM/#UsePAM/g' /etc/ssh/sshd_config
 /etc/init.d/sshd restart
 
 # Start a Jupyter lab
-screen -dm bash -c "jupyter lab --no-browser --port=8070 --allow-root --ip=\"*\" --LabApp.token='' --LabApp.password=''"
+# screen -dm bash -c "jupyter lab --no-browser --port=8070 --allow-root --ip=\"*\" --LabApp.token='' --LabApp.password=''"

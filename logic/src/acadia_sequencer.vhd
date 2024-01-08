@@ -332,7 +332,7 @@ begin
     src2 <= r(to_integer(unsigned(instr_src2_min)))         when instr_src2_maj = SRC_REG      else
             x"0000" & r(to_integer(unsigned(instr_src2_min)))(15 downto 0)         when instr_src2_maj = SRC_REG_LO      else
             x"0000" & r(to_integer(unsigned(instr_src2_min)))(31 downto 16)        when instr_src2_maj = SRC_REG_HI      else
-            src2_masked                                     when instr_src2_maj = SRC_OP       else
+            (others => '0')                                     when instr_src2_maj = SRC_OP       else
             x"0000" & pc                                    when instr_src2_maj = SRC_PC       else
             instr_imm2                                      when instr_src2_maj = SRC_IMM      else
             ext_in                                          when instr_src2_maj = SRC_EXT      else

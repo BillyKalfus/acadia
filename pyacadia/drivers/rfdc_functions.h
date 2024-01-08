@@ -40,269 +40,13 @@ struct metal_device {
 * @param    Block_Id indicates Block number (0-3).
 * @param    StatusEvent indicates one or more interrupt occurred.
 */
-typedef void (*XRFdc_StatusHandler)(void *CallBackRef, u32 Type, u32 Tile_Id, u32 Block_Id, u32 StatusEvent);
-
-#pragma pack()
-
-/**
- * MTS DTC Settings.
- */
-typedef struct {
-	u32 RefTile;
-	u32 IsPLL;
-	int Target[4];
-	int Scan_Mode;
-	int DTC_Code[4];
-	int Num_Windows[4];
-	int Max_Gap[4];
-	int Min_Gap[4];
-	int Max_Overlap[4];
-} XRFdc_MTS_DTC_Settings;
-
-/**
- * MTS Sync Settings.
- */
-typedef struct {
-	u32 RefTile;
-	u32 Tiles;
-	int Target_Latency;
-	int Offset[4];
-	int Latency[4];
-	int Marker_Delay;
-	int SysRef_Enable;
-	XRFdc_MTS_DTC_Settings DTC_Set_PLL;
-	XRFdc_MTS_DTC_Settings DTC_Set_T1;
-} XRFdc_MultiConverter_Sync_Config;
-
-/**
- * MTS Marker Struct.
- */
-typedef struct {
-	u32 Count[4];
-	u32 Loc[4];
-} XRFdc_MTS_Marker;
-
-/**
- * ADC Signal Detect Settings.
- */
-typedef struct {
-	u8 Mode;
-	u8 TimeConstant;
-	u8 Flush;
-	u8 EnableIntegrator;
-	u16 Threshold;
-	u16 ThreshOnTriggerCnt; /* the number of times value must exceed Threshold before turning on*/
-	u16 ThreshOffTriggerCnt; /* the number of times value must be less than Threshold before turning off*/
-	u8 HysteresisEnable;
-} XRFdc_Signal_Detector_Settings;
-/**
- * QMC settings.
- */
-typedef struct {
-	u32 EnablePhase;
-	u32 EnableGain;
-	double GainCorrectionFactor;
-	double PhaseCorrectionFactor;
-	s32 OffsetCorrectionFactor;
-	u32 EventSource;
-} XRFdc_QMC_Settings;
-
-/**
- * Coarse delay settings.
- */
-typedef struct {
-	u32 CoarseDelay;
-	u32 EventSource;
-} XRFdc_CoarseDelay_Settings;
-
-/**
- * Mixer settings.
- */
-typedef struct {
-	double Freq;
-	double PhaseOffset;
-	u32 EventSource;
-	u32 CoarseMixFreq;
-	u32 MixerMode;
-	u8 FineMixerScale; /* NCO output scale, valid values 0,1 and 2 */
-	u8 MixerType;
-} XRFdc_Mixer_Settings;
-
-/**
- * ADC block Threshold settings.
- */
-typedef struct {
-	u32 UpdateThreshold; /* Selects which threshold to update */
-	u32 ThresholdMode[2]; /* Entry 0 for Threshold0 and 1 for Threshold1 */
-	u32 ThresholdAvgVal[2]; /* Entry 0 for Threshold0 and 1 for Threshold1 */
-	u32 ThresholdUnderVal[2]; /* Entry 0 for Threshold0 and 1 for Threshold1 */
-	u32 ThresholdOverVal[2]; /* Entry 0 is for Threshold0 and 1 for Threshold1 */
-} XRFdc_Threshold_Settings;
-
-/**
- * RFSoC Calibration coefficients generic struct
- */
-typedef struct {
-	u32 Coeff0;
-	u32 Coeff1;
-	u32 Coeff2;
-	u32 Coeff3;
-	u32 Coeff4;
-	u32 Coeff5;
-	u32 Coeff6;
-	u32 Coeff7;
-} XRFdc_Calibration_Coefficients;
-
-/**
- * RFSoC Power Mode settings
- */
-typedef struct {
-	u32 DisableIPControl; /*Disables IP RTS control of the power mode*/
-	u32 PwrMode; /*The power mode*/
-} XRFdc_Pwr_Mode_Settings;
-
-/**
- * RFSoC DSA settings
- */
-typedef struct {
-	u32 DisableRTS; /*Disables RTS control of DSA attenuation*/
-	float Attenuation; /*Attenuation*/
-} XRFdc_DSA_Settings;
-
-/**
- * RFSoC Calibration freeze settings struct
- */
-typedef struct {
-	u32 CalFrozen; /*Status indicates calibration freeze state*/
-	u32 DisableFreezePin; /*Disable the calibration freeze pin*/
-	u32 FreezeCalibration; /*Setter for freezing*/
-} XRFdc_Cal_Freeze_Settings;
-
-/**
- * RFSoC Tile status.
- */
-typedef struct {
-	u32 IsEnabled; /* 1, if tile is enabled, 0 otherwise */
-	u32 TileState; /* Indicates Tile Current State */
-	u8 BlockStatusMask; /* Bit mask for block status, 1 indicates block enable */
-	u32 PowerUpState;
-	u32 PLLState;
-} XRFdc_TileStatus;
-
-/**
- * RFSoC Data converter IP status.
- */
-typedef struct {
-	XRFdc_TileStatus DACTileStatus[4];
-	XRFdc_TileStatus ADCTileStatus[4];
-	u32 State;
-} XRFdc_IPStatus;
-
-/**
- * status of DAC or ADC blocks in the RFSoC Data converter.
- */
-typedef struct {
-	double SamplingFreq;
-	u32 AnalogDataPathStatus;
-	u32 DigitalDataPathStatus;
-	u8 DataPathClocksStatus; /* Indicates all required datapath
-				clocks are enabled or not, 1 if all clocks enabled, 0 otherwise */
-	u8 IsFIFOFlagsEnabled; /* Indicates FIFO flags enabled or not,
-				 1 if all flags enabled, 0 otherwise */
-	u8 IsFIFOFlagsAsserted; /* Indicates FIFO flags asserted or not,
-				 1 if all flags asserted, 0 otherwise */
-} XRFdc_BlockStatus;
-
-/**
- * DAC Block Analog DataPath Structure.
- */
-typedef struct {
-	u32 Enabled; /* DAC Analog Data Path Enable */
-	u32 MixedMode;
-	double TerminationVoltage;
-	double OutputCurrent;
-	u32 InverseSincFilterEnable;
-	u32 DecoderMode;
-	void *FuncHandler;
-	u32 NyquistZone;
-	u8 AnalogPathEnabled;
-	u8 AnalogPathAvailable;
-	XRFdc_QMC_Settings QMC_Settings;
-	XRFdc_CoarseDelay_Settings CoarseDelay_Settings;
-} XRFdc_DACBlock_AnalogDataPath;
-
-/**
- * DAC Block Digital DataPath Structure.
- */
-typedef struct {
-	u32 MixerInputDataType;
-	u32 DataWidth;
-	int ConnectedIData;
-	int ConnectedQData;
-	u32 InterpolationFactor;
-	u8 DigitalPathEnabled;
-	u8 DigitalPathAvailable;
-	XRFdc_Mixer_Settings Mixer_Settings;
-} XRFdc_DACBlock_DigitalDataPath;
-
-/**
- * ADC Block Analog DataPath Structure.
- */
-typedef struct {
-	u32 Enabled; /* ADC Analog Data Path Enable */
-	XRFdc_QMC_Settings QMC_Settings;
-	XRFdc_CoarseDelay_Settings CoarseDelay_Settings;
-	XRFdc_Threshold_Settings Threshold_Settings;
-	u32 NyquistZone;
-	u8 CalibrationMode;
-	u8 AnalogPathEnabled;
-	u8 AnalogPathAvailable;
-} XRFdc_ADCBlock_AnalogDataPath;
-
-/**
- * ADC Block Digital DataPath Structure.
- */
-typedef struct {
-	u32 MixerInputDataType;
-	u32 DataWidth;
-	u32 DecimationFactor;
-	int ConnectedIData;
-	int ConnectedQData;
-	u8 DigitalPathEnabled;
-	u8 DigitalPathAvailable;
-	XRFdc_Mixer_Settings Mixer_Settings;
-} XRFdc_ADCBlock_DigitalDataPath;
-
-/**
- * DAC Tile Structure.
- */
-typedef struct {
-	u32 TileBaseAddr; /* Tile  BaseAddress*/
-	u32 NumOfDACBlocks; /* Number of DAC block enabled */
-	XRFdc_PLL_Settings PLL_Settings;
-	u8 MultibandConfig;
-	XRFdc_DACBlock_AnalogDataPath DACBlock_Analog_Datapath[4];
-	XRFdc_DACBlock_DigitalDataPath DACBlock_Digital_Datapath[4];
-} XRFdc_DAC_Tile;
-
-/**
- * ADC Tile Structure.
- */
-typedef struct {
-	u32 TileBaseAddr;
-	u32 NumOfADCBlocks; /* Number of ADC block enabled */
-	XRFdc_PLL_Settings PLL_Settings;
-	u8 MultibandConfig;
-	XRFdc_ADCBlock_AnalogDataPath ADCBlock_Analog_Datapath[4];
-	XRFdc_ADCBlock_DigitalDataPath ADCBlock_Digital_Datapath[4];
-} XRFdc_ADC_Tile;
 
 /**
  * RFdc Structure.
  */
-typedef struct {
-	...;
-} XRFdc;
+// typedef struct {
+// 	...;
+// } XRFdc;
 
 /***************** Macros (Inline Functions) Definitions *********************/
 
@@ -318,6 +62,7 @@ typedef struct {
 // #define XRFDC_COMPONENT_IS_READY 0x11111111U
 // #define XRFDC_NUM_SLICES_HSADC 2
 // #define XRFDC_NUM_SLICES_LSADC 4
+// #ifndef __BAREMETAL__
 // #define XRFDC_PLATFORM_DEVICE_DIR "/sys/bus/platform/devices/"
 // #define XRFDC_BUS_NAME "platform"
 // #define XRFDC_SIGNATURE "usp_rf_data_converter" /* String in RFDC node name */
@@ -328,13 +73,23 @@ typedef struct {
 // #define XRFDC_DEVICE_ID_SIZE 4U
 // #define XRFDC_NUM_INST_SIZE 4U
 // #define XRFDC_CONFIG_DATA_SIZE sizeof(XRFdc_Config)
+// #else
+// #define XRFDC_BUS_NAME "generic"
+// #ifndef SDT
+// #define XRFDC_DEV_NAME XPAR_XRFDC_0_DEV_NAME
+// #endif
+// #endif
 // #define XRFDC_REGION_SIZE 0x40000U
 // #define XRFDC_IP_BASE 0x0U
-// #define XRFDC_DRP_BASE(type, tile) ((type) == XRFDC_ADC_TILE ? XRFDC_ADC_TILE_DRP_ADDR(tile) : XRFDC_DAC_TILE_DRP_ADDR(tile))
+// #define XRFDC_DRP_BASE(type, tile)                                                                                     \
+// 	((type) == XRFDC_ADC_TILE ? XRFDC_ADC_TILE_DRP_ADDR(tile) : XRFDC_DAC_TILE_DRP_ADDR(tile))
 
-// #define XRFDC_CTRL_STS_BASE(Type, Tile) ((Type) == XRFDC_ADC_TILE ? XRFDC_ADC_TILE_CTRL_STATS_ADDR(Tile) : XRFDC_DAC_TILE_CTRL_STATS_ADDR(Tile))
+// #define XRFDC_CTRL_STS_BASE(Type, Tile)                                                                                \
+// 	((Type) == XRFDC_ADC_TILE ? XRFDC_ADC_TILE_CTRL_STATS_ADDR(Tile) : XRFDC_DAC_TILE_CTRL_STATS_ADDR(Tile))
 
-// #define XRFDC_BLOCK_BASE(Type, Tile, Block) ((Type) == XRFDC_ADC_TILE ? (XRFDC_ADC_TILE_DRP_ADDR(Tile) + XRFDC_BLOCK_ADDR_OFFSET(Block)) : (XRFDC_DAC_TILE_DRP_ADDR(Tile) + XRFDC_BLOCK_ADDR_OFFSET(Block)))
+// #define XRFDC_BLOCK_BASE(Type, Tile, Block)                                                                            \
+// 	((Type) == XRFDC_ADC_TILE ? (XRFDC_ADC_TILE_DRP_ADDR(Tile) + XRFDC_BLOCK_ADDR_OFFSET(Block)) :                 \
+// 				    (XRFDC_DAC_TILE_DRP_ADDR(Tile) + XRFDC_BLOCK_ADDR_OFFSET(Block)))
 
 #define XRFDC_ADC_TILE 0U
 #define XRFDC_DAC_TILE 1U
@@ -354,10 +109,10 @@ typedef struct {
 
 #define XRFDC_CRSE_DLY_MAX 0x7U
 #define XRFDC_CRSE_DLY_MAX_EXT 0x28U
-#define XRFDC_NCO_FREQ_MULTIPLIER 0x1000000000000LLU // (0x1LLU << 48U) /* 2^48 */
-#define XRFDC_NCO_PHASE_MULTIPLIER 0x20000U // (1U << 17U) /* 2^17 */
-#define XRFDC_QMC_PHASE_MULT 0x800U // (1U << 11U) /* 2^11 */
-#define XRFDC_QMC_GAIN_MULT 0x4000U // (1U << 14U) /* 2^14 */
+// #define XRFDC_NCO_FREQ_MULTIPLIER (0x1LLU << 48U) /* 2^48 */
+// #define XRFDC_NCO_PHASE_MULTIPLIER (1U << 17U) /* 2^17 */
+// #define XRFDC_QMC_PHASE_MULT (1U << 11U) /* 2^11 */
+// #define XRFDC_QMC_GAIN_MULT (1U << 14U) /* 2^14 */
 
 #define XRFDC_DATA_TYPE_IQ 0x00000001U
 #define XRFDC_DATA_TYPE_REAL 0x00000000U
@@ -565,6 +320,7 @@ typedef struct {
 #define XRFDC_SM_STATE0 0x0U
 #define XRFDC_SM_STATE1 0x1U
 #define XRFDC_SM_STATE3 0x3U
+#define XRFDC_SM_STATE7 0x7U
 #define XRFDC_SM_STATE15 0xFU
 
 #define XRFDC_STATE_OFF 0x0U
@@ -630,7 +386,9 @@ typedef struct {
 #define XRFDC_CLK_DISTR_MUX9_SRC_INT 0x0000U
 #define XRFDC_CLK_DISTR_MUX5A_SRC_PLL 0x0800U
 #define XRFDC_CLK_DISTR_MUX5A_SRC_RX 0x0040U
-// #define XRFDC_CLK_DISTR_OFF (XRFDC_CLK_DISTR_MUX4A_SRC_INT | XRFDC_CLK_DISTR_MUX6_SRC_OFF | XRFDC_CLK_DISTR_MUX7_SRC_OFF | XRFDC_CLK_DISTR_MUX8_SRC_NTH | XRFDC_CLK_DISTR_MUX9_SRC_INT)
+// #define XRFDC_CLK_DISTR_OFF                                                                                            \
+// 	(XRFDC_CLK_DISTR_MUX4A_SRC_INT | XRFDC_CLK_DISTR_MUX6_SRC_OFF | XRFDC_CLK_DISTR_MUX7_SRC_OFF |                 \
+// 	 XRFDC_CLK_DISTR_MUX8_SRC_NTH | XRFDC_CLK_DISTR_MUX9_SRC_INT)
 #define XRFDC_CLK_DISTR_LEFTMOST_TILE 0x0000U
 #define XRFDC_CLK_DISTR_CONT_LEFT_EVEN 0x8208U
 #define XRFDC_CLK_DISTR_CONT_LEFT_ODD 0x8200U
@@ -749,17 +507,9 @@ typedef struct {
 
 #define XRFDC_GEN1_LOW_I 20000U
 #define XRFDC_GEN1_HIGH_I 32000U
-// #define XRFDC_MIN_I_UA(X) ((X == XRFDC_ES1_SI) ? 6425U : 2250U)
-// #define XRFDC_MAX_I_UA(X) ((X == XRFDC_ES1_SI) ? 32000U : 40500U)
-// #define XRFDC_MIN_I_UA_INT(X) ((X == XRFDC_ES1_SI) ? 6425U : 1400U)
-// #define XRFDC_MAX_I_UA_INT(X) ((X == XRFDC_ES1_SI) ? 32000U : 46000U)
-// #define XRFDC_STEP_I_UA(X) ((X == XRFDC_ES1_SI) ? 25.0 : 43.75)
-#define XRFDC_BLDR_GAIN 0x0000U
-#define XRFDC_CSCAS_BLDR 0xE000U
-#define XRFDC_OPCAS_BIAS 0x001BU
 
 // #define XRFDC_MAX_ATTEN(X) ((X == 0) ? 11.0 : 27.0)
-#define XRFDC_MIN_ATTEN 0
+// #define XRFDC_MIN_ATTEN 0
 // #define XRFDC_STEP_ATTEN(X) ((X == 0) ? 0.5 : 1.0)
 
 #define XRFDC_DAC_VOP_CTRL_REG_UPDT_MASK 0x2U
@@ -839,13 +589,6 @@ typedef struct {
 // #define XRFDC_CAL_DIV_CUTOFF_FREQ(X) (X ? 5.0 : 2.5)
 
 // ************************** Copied from xrfdc_hw.h *************************/
-
-
-/** @name Register Map
- *
- * Register offsets from the base address of an RFDC ADC and DAC device.
- * @{
- */
 
 #define XRFDC_CLK_EN_OFFSET 0x000U /**< ADC Clock Enable Register */
 #define XRFDC_ADC_DEBUG_RST_OFFSET 0x004U /**< ADC Debug Reset Register */
@@ -1055,6 +798,7 @@ typedef struct {
 #define XRFDC_PLL_FS 0x304U /**< Sampling rate register */
 #define XRFDC_CAL_TMR_MULT_OFFSET 0x30CU /**< Calibration timer register */
 #define XRFDC_CAL_DLY_OFFSET 0x310U /**< Calibration delay register */
+#define XRFDC_CPL_TYPE_OFFSET 0x314U /**< Coupling type register */
 #define XRFDC_FIFO_ENABLE 0x230U /**< FIFO Enable and Disable */
 #define XRFDC_PLL_SDM_CFG0 0x00U /**< PLL Configuration bits for sdm */
 #define XRFDC_PLL_SDM_SEED0 0x18U /**< PLL Bits for sdm LSB */
@@ -1911,18 +1655,6 @@ typedef struct {
 
 /* @} */
 
-/** @name TDD Configuration
- *
- * This register contains bits to manage the TDD Configuration
- * @{
- */
-
-#define XRFDC_TDD_ADC_CFG_MASK 0x00007CFFU /**< All ADC TDD config bits */
-#define XRFDC_TDD_DAC_CFG_MASK 0x00003FFFU /**< All DAC TDD config bits */
-// #define XRFDC_TDD_CFG_MASK(X) ((X == 0) ? XRFDC_TDD_ADC_CFG_MASK : XRFDC_TDD_DAC_CFG_MASK) /**< All TDD config bits */
-
-/* @} */
-
 /** @name FrontEnd Data Control
  *
  * This register contains bits to select raw data and cal coefficient to
@@ -2627,6 +2359,7 @@ typedef struct {
 
 #define XRFDC_CLOCK_DETECT_MASK 0x0000FFFFU /**< Clock detect mask */
 #define XRFDC_CLOCK_DETECT_SRC_MASK 0x00005555U /**< Clock detect mask */
+#define XRFDC_CLOCK_DETECT_DST_SHIFT 1U /**< Clock detect mask */
 
 /* @} */
 
@@ -2740,6 +2473,7 @@ typedef struct {
 
 #define XRFDC_FAB_CLK_DIV_MASK 0x0000000FU /**< clk div mask */
 #define XRFDC_FAB_CLK_DIV_CAL_MASK 0x000000F0U /**< clk div cal mask */
+#define XRFDC_FAB_CLK_DIV_SYNC_PULSE_MASK 0x00000400U /**< clk div cal mask */
 
 /* @} */
 
@@ -2798,6 +2532,7 @@ typedef struct {
 #define XRFDC_CLK_NETWORK_CTRL1_USE_PLL_MASK 0x1U /**< PLL clock mask */
 #define XRFDC_CLK_NETWORK_CTRL1_USE_RX_MASK 0x2U /**< PLL clock mask */
 #define XRFDC_CLK_NETWORK_CTRL1_REGS_MASK 0x3U /**< PLL clock mask */
+#define XRFDC_CLK_NETWORK_CTRL1_EN_SYNC_MASK 0x1000U /**< PLL clock mask */
 
 /* @} */
 
@@ -2916,7 +2651,7 @@ typedef struct {
 #define XRFDC_DAC_MC_CFG2_OPCSCAS_32MA 0x0000A0D8U
 #define XRFDC_DAC_MC_CFG3_CSGAIN_32MA 0x0000FFC0U
 #define XRFDC_DAC_MC_CFG2_GEN1_COMP_MASK 0x0020U
-// #define XRFDC_DAC_MC_CFG3_OPT_LUT_MASK(X) ((X == 0) ? 0x03E0U : 0x03F0U)
+#define XRFDC_DAC_MC_CFG3_OPT_LUT_MASK 0x03F0U
 #define XRFDC_DAC_MC_CFG3_OPT_MASK 0x001FU
 #define XRFDC_DAC_MC_CFG3_UPDATE_MASK 0x0020U
 #define XRFDC_DAC_MC_CFG0_CAS_BLDR_MASK 0xE000U
@@ -2927,7 +2662,7 @@ typedef struct {
 
 #define XRFDC_DAC_MC_CFG2_BLDGAIN_SHIFT 6U
 #define XRFDC_DAC_MC_CFG3_CSGAIN_SHIFT 6U
-// #define XRFDC_DAC_MC_CFG3_OPT_LUT_SHIFT(X) ((X == 0) ? 5U : 4U)
+#define XRFDC_DAC_MC_CFG3_OPT_LUT_SHIFT 4U
 #define XRFDC_ADC_OVR_VOL_RANGE_SHIFT 24U
 #define XRFDC_ADC_DAT_FIFO_OVR_SHIFT 16U
 #define XRFDC_DAT_FIFO_OVR_SHIFT 16U
@@ -3046,12 +2781,14 @@ u32 XRFdc_DynamicPLLConfig(XRFdc *InstancePtr, u32 Type, u32 Tile_Id, u8 Source,
 			   double SamplingRate);
 u32 XRFdc_SetInvSincFIR(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u16 Mode);
 u32 XRFdc_GetInvSincFIR(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u16 *ModePtr);
+
+u32 XRFdc_GetCoupling(XRFdc *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *ModePtr);
 u32 XRFdc_GetLinkCoupling(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 *ModePtr);
 u32 XRFdc_GetFabClkOutDiv(XRFdc *InstancePtr, u32 Type, u32 Tile_Id, u16 *FabClkDivPtr);
 u32 XRFdc_SetDither(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 Mode);
 u32 XRFdc_GetDither(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 *ModePtr);
 u32 XRFdc_SetClkDistribution(XRFdc *InstancePtr, XRFdc_Distribution_Settings *DistributionSettingsPtr);
-u32 XRFdc_GetClkDistribution(XRFdc *InstancePtr, XRFdc_Distribution_Settings *DistributionSettingsPtr);
+u32 XRFdc_GetClkDistribution(XRFdc *InstancePtr, XRFdc_Distribution_System_Settings *DistributionArrayPtr);
 u32 XRFdc_SetDataPathMode(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 Mode);
 u32 XRFdc_GetDataPathMode(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 *ModePtr);
 u32 XRFdc_SetIMRPassMode(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 Mode);
@@ -3077,7 +2814,7 @@ u32 XRFdc_ResetInternalFIFOWidthObs(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_I
 void XRFdc_ClrSetReg(XRFdc *InstancePtr, u32 BaseAddr, u32 RegAddr, u16 Mask, u16 Data);
 void XRFdc_ClrReg(XRFdc *InstancePtr, u32 BaseAddr, u32 RegAddr, u16 Mask);
 u16 XRFdc_RDReg(XRFdc *InstancePtr, u32 BaseAddr, u32 RegAddr, u16 Mask);
-u32 XRFdc_IsHighSpeedADC(XRFdc *InstancePtr, int Tile);
+u32 XRFdc_IsHighSpeedADC(XRFdc *InstancePtr, u32 Tile);
 u32 XRFdc_IsDACBlockEnabled(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id);
 u32 XRFdc_IsADCBlockEnabled(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id);
 u32 XRFdc_IsDACDigitalPathEnabled(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id);
@@ -3113,6 +2850,5 @@ u32 XRFdc_GetMTSEnable(XRFdc *InstancePtr, u32 Type, u32 Tile, u32 *EnablePtr);
 u32 XRFdc_SetDACDataScaler(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 Enable);
 u32 XRFdc_GetDACDataScaler(XRFdc *InstancePtr, u32 Tile_Id, u32 Block_Id, u32 *EnablePtr);
 u8 XRFdc_GetTileLayout(XRFdc *InstancePtr);
-s32 XRFdc_GetDeviceNameByDeviceId(char *DevNamePtr, u16 DevId);
 
 /** @} */

@@ -1,0 +1,3 @@
+#!/bin/sh
+
+sh /run/media/mmcblk0p1/autostart.sh

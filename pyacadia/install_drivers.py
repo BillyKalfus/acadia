@@ -3,10 +3,7 @@ import shutil
 import pathlib
 from cffi import FFI
 
-EMBEDDEDSW = "/media/sd-mmcblk0p1/embeddedsw-master"
-RFDC_SUBDIR = "XilinxProcessorIPLib/drivers/rfdc/src"
-RFCLK_SUBDIR = "XilinxProcessorIPLib/drivers/board_common/src/rfclk/src"
-PACKAGE_DIR = "/usr/lib/python3.7/site-packages"
+PACKAGE_DIR = "/usr/lib/python3.10/site-packages"
 
 HEADERS = {"rfdc": '#include "xrfdc.h"\n'
                     '#include <metal/sys.h>\n'
@@ -40,8 +37,8 @@ with open(os.path.join(script_dir, f"drivers/rfclk_functions.h")) as f:
     rfclk_ffibuilder.cdef(f.read())
 
 # Set sources and properties of the libraries
-for builder,lib,src_dir in [(rfdc_ffibuilder, "rfdc", f"{'../'*root_distance}{EMBEDDEDSW}/{RFDC_SUBDIR}"),
-                            (rfclk_ffibuilder, "rfclk", f"{'../'*root_distance}{EMBEDDEDSW}/{RFCLK_SUBDIR}")]:
+for builder,lib,src_dir in [(rfdc_ffibuilder, "rfdc", f"{'../'*root_distance}{script_dir}/drivers/rfdc/src"),
+                            (rfclk_ffibuilder, "rfclk", f"{'../'*root_distance}{script_dir}/drivers/rfclk/src")]:
     
     builder.set_source(f"pyx{lib}", 
             HEADERS[lib], 

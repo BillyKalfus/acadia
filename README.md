@@ -25,19 +25,18 @@ The new firmware will then be loaded the next time the board is rebooted.
 
 ### ZCU216 software installation
 
-First the first install, you must clone the Xilinx embeddedsw library onto the board's SD card so that the RF drivers can be built against it. Log into the board and execute
+1. Copy this repository onto your board.
+
+1. Install the hardware drivers.
 
 ```
-cd /mnt/sd-mmcblk0p1
-git clone https://github.com/Xilinx/embeddedsw.git
-cd embeddedsw
-git checkout release-2020.2
+python3 acadia/pyacadia/install_drivers.py
 ```
 
-Then, after cloning this repository on the board, execute
+1. Install the Python libraries using `pip`.
 
 ```
-pip3 install -e acadia/pyacadia --global-option=install_drivers
+pip3 install -e acadia/pyacadia
 ```
 
 ## Building a Linux image with integrated FPGA bitstream
@@ -67,20 +66,9 @@ cd ..
 1. Change directories into the Petalinux project
 
 1. Build PetaLinux and create a bootable image
-   1. Build the kernel. This will take a while and then fail.
+   1. Build the kernel, bootloader, and PMU firmware.
       ```
       petalinux-build
-      ```
-
-   1. Apply a patch to LAPACK by running
-      ```
-      patch -ru -d build/tmp/work/aarch64-xilinx-linux/lapack/3.8.0-r0/recipe-sysroot-native/usr/share/cmake-3.15/Modules/FortranCInterface < project-spec/meta-scipy/recipes-devtools/cmake/cmake-native/0001-FortranCInterface-Fix-broken-search-for-test-exe-whe.patch
-      ```
-
-   1. Run `petalinux-build` again. At the end, it should say that it successfully built the project but failed to copy built images to a TFTP directory; ignore this.
-
-   1. Build the bootloader and PMU firmware.
-      ```
       petalinux-build -c bootloader
       petalinux-build -c fsbl
       petalinux-build -c pmufw

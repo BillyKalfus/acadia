@@ -496,7 +496,7 @@ proc cr_bd_acadia_bd { parentCell hedgehogTclDir } {
   if { $bCheckIPs == 1 } {
      set list_check_ips "\ 
   xilinx.com:ip:ddr4:2.2\
-  xilinx.com:ip:zynq_ultra_ps_e:3.3\
+  xilinx.com:ip:zynq_ultra_ps_e:3.5\
   xilinx.com:ip:proc_sys_reset:5.0\
   xilinx.com:ip:axi_gpio:2.0\
   xilinx.com:ip:smartconnect:1.0\
@@ -1040,7 +1040,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   create_hier_cell_hedgehog [current_bd_instance .] hedgehog
 
   # Create instance: ps, and set properties
-  set ps [ create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:3.3 ps ]
+  set ps [ create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:3.5 ps ]
   set_property -dict [ list \
    CONFIG.PSU_BANK_0_IO_STANDARD {LVCMOS18} \
    CONFIG.PSU_BANK_1_IO_STANDARD {LVCMOS18} \
@@ -2017,7 +2017,6 @@ set_property EXCLUDE_DEBUG_LOGIC "0" [get_files acadia_bd.bd ]
 set_property GENERATE_SYNTH_CHECKPOINT "1" [get_files acadia_bd.bd ] 
 set_property IS_ENABLED "1" [get_files acadia_bd.bd ] 
 set_property IS_GLOBAL_INCLUDE "0" [get_files acadia_bd.bd ] 
-set_property IS_LOCKED "0" [get_files acadia_bd.bd ] 
 set_property LIBRARY "xil_defaultlib" [get_files acadia_bd.bd ] 
 set_property PATH_MODE "RelativeFirst" [get_files acadia_bd.bd ] 
 set_property PFM_NAME "" [get_files acadia_bd.bd ] 
@@ -2028,28 +2027,8 @@ set_property USED_IN_IMPLEMENTATION "1" [get_files acadia_bd.bd ]
 set_property USED_IN_SIMULATION "1" [get_files acadia_bd.bd ] 
 set_property USED_IN_SYNTHESIS "1" [get_files acadia_bd.bd ] 
 
-#call make_wrapper to create wrapper files
-# if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
-#   import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
-# } else {
-#   set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
-#   add_files -norecurse -fileset sources_1 $wrapper_path
-# }
-
-# if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
-#   import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
-# } else {
-#   set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
-#   add_files -norecurse -fileset sources_1 $wrapper_path
-# }
-
-# if { [get_property IS_LOCKED [ get_files -norecurse acadia_bd.bd] ] == 1  } {
-#   import_files -fileset sources_1 [file normalize "${origin_dir}/acadia/acadia.gen/sources_1/bd/acadia_bd/hdl/acadia_bd_wrapper.v" ]
-# } else {
 set wrapper_path [make_wrapper -fileset sources_1 -files [ get_files -norecurse acadia_bd.bd] -top]
 add_files -norecurse -fileset sources_1 $wrapper_path
-# }
-
 
 # Create 'synth_1' run (if not found)
 if {[string equal [get_runs -quiet synth_1] ""]} {
@@ -2089,7 +2068,6 @@ set_property -name "needs_refresh" -value "1" -objects $obj
 set_property -name "srcset" -value "sources_1" -objects $obj
 set_property -name "incremental_checkpoint" -value "" -objects $obj
 set_property -name "auto_incremental_checkpoint" -value "0" -objects $obj
-set_property -name "incremental_checkpoint.directive" -value "" -objects $obj
 set_property -name "rqs_files" -value "" -objects $obj
 set_property -name "incremental_checkpoint.more_options" -value "" -objects $obj
 set_property -name "include_in_archive" -value "1" -objects $obj
@@ -2546,7 +2524,6 @@ set_property -name "pr_configuration" -value "" -objects $obj
 set_property -name "srcset" -value "sources_1" -objects $obj
 set_property -name "incremental_checkpoint" -value "" -objects $obj
 set_property -name "auto_incremental_checkpoint" -value "0" -objects $obj
-set_property -name "incremental_checkpoint.directive" -value "" -objects $obj
 set_property -name "rqs_files" -value "" -objects $obj
 set_property -name "incremental_checkpoint.more_options" -value "" -objects $obj
 set_property -name "include_in_archive" -value "1" -objects $obj

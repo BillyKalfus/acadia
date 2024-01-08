@@ -1,4 +1,3 @@
-CONFIG_trd-autostart
 CONFIG_i2c-tools
 CONFIG_i2c-tools-dev
 CONFIG_i2c-tools-misc

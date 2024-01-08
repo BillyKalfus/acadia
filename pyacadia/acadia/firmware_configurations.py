@@ -37,17 +37,17 @@ DEFAULT_CONFIG = {
             "segment": "/ps/SAXIGP1/HPC1_LPS_OCM"
         },
 
-        "HP0_LPS_OCM": {
-            "address": 0x02_FF00_0000, 
-            "size_bits": 8 * 2 * 2**18, 
-            "segment": "/ps/SAXIGP2/HP0_LPS_OCM"
-        },
+        # "HP0_LPS_OCM": {
+        #     "address": 0x02_FF00_0000, 
+        #     "size_bits": 8 * 2 * 2**18, 
+        #     "segment": "/ps/SAXIGP2/HP0_LPS_OCM"
+        # },
 
-        "HP1_LPS_OCM": {
-            "address": 0x03_FF00_0000, 
-            "size_bits": 8 * 2**18, 
-            "segment": "/ps/SAXIGP3/HP1_LPS_OCM"
-        },
+        # "HP1_LPS_OCM": {
+        #     "address": 0x03_FF00_0000, 
+        #     "size_bits": 8 * 2**18, 
+        #     "segment": "/ps/SAXIGP3/HP1_LPS_OCM"
+        # },
 
         "HPC0_DDR_LOW": {
             "address": 0x04_0000_0000, 
@@ -61,17 +61,17 @@ DEFAULT_CONFIG = {
             "segment": "/ps/SAXIGP1/HPC1_DDR_LOW"
         },
 
-        "HP0_DDR_LOW": {
-            "address": 0x06_0000_0000, 
-            "size_bits": 8 * 2**31, 
-            "segment": "/ps/SAXIGP2/HP0_DDR_LOW"
-        },
+        # "HP0_DDR_LOW": {
+        #     "address": 0x06_0000_0000, 
+        #     "size_bits": 8 * 2**31, 
+        #     "segment": "/ps/SAXIGP2/HP0_DDR_LOW"
+        # },
 
-        "HP1_DDR_LOW": {
-            "address": 0x07_0000_0000, 
-            "size_bits": 8 * 2**31, 
-            "segment": "/ps/SAXIGP3/HP1_DDR_LOW"
-        },
+        # "HP1_DDR_LOW": {
+        #     "address": 0x07_0000_0000, 
+        #     "size_bits": 8 * 2**31, 
+        #     "segment": "/ps/SAXIGP3/HP1_DDR_LOW"
+        # },
 
         "HPC0_DDR_HIGH": {
             "address": 0x08_0000_0000, 
@@ -85,17 +85,17 @@ DEFAULT_CONFIG = {
             "segment": "/ps/SAXIGP1/HPC1_DDR_HIGH"
         },
 
-        "HP0_DDR_HIGH": {
-            "address": 0x28_0000_0000, 
-            "size_bits": 8 * 2**35, 
-            "segment": "/ps/SAXIGP2/HP0_DDR_HIGH"
-        },
+        # "HP0_DDR_HIGH": {
+        #     "address": 0x28_0000_0000, 
+        #     "size_bits": 8 * 2**35, 
+        #     "segment": "/ps/SAXIGP2/HP0_DDR_HIGH"
+        # },
 
-        "HP1_DDR_HIGH": {
-            "address": 0x38_0000_0000, 
-            "size_bits": 8 * 2**35, 
-            "segment": "/ps/SAXIGP3/HP1_DDR_HIGH"
-        },
+        # "HP1_DDR_HIGH": {
+        #     "address": 0x38_0000_0000, 
+        #     "size_bits": 8 * 2**35, 
+        #     "segment": "/ps/SAXIGP3/HP1_DDR_HIGH"
+        # },
 
         "ddr4_c0": {
             "address": 0x40_0000_0000, 
@@ -125,6 +125,15 @@ DEFAULT_CONFIG = {
         "PS_SAXIHPC1_FPD": "hs_clk",
         "PS_SAXIHP1_FPD": "hs_clk"
     },
+
+    "ps_axi_slaves": [
+        "PS_S_AXI_HPC0", 
+        "PS_S_AXI_HPC1", 
+        "PS_S_AXI_HP0",
+        "PS_S_AXI_HP1",
+        "DDR4_C0_S_AXI",
+        "DDR4_C1_S_AXI"
+    ],
 
     "sequencer_cache_memory": {
         "clock": "hs_clk",
@@ -454,7 +463,7 @@ DEFAULT_CONFIG = {
     },
 
     "ps_gpio": {
-        "sysfs_offset": 338 + 3*26,
+        "sysfs_offset": 334 + 3*26,
         "sequencer_run": 90,
         "sequencer_nrst": 89, # The GPIO bit connected to the sequencer run synchronizer
         "clk104_sync": 88,

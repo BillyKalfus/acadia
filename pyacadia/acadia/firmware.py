@@ -377,17 +377,17 @@ class Firmware:
 
             # The PL clock from the CLK104 is brought in through an HDIO bank, so we need to buffer
             # it with an IBUFDS before feeding it to the MMCM
-            create_ip(f, name="hedgehog/pl_clk_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            create_ip(f, name="hedgehog/pl_clk_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.2")
             set_property(f, name="hedgehog/pl_clk_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
             
-            create_ip(f, name="hedgehog/pl_clk_bufg", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            create_ip(f, name="hedgehog/pl_clk_bufg", vlnv="xilinx.com:ip:util_ds_buf:2.2")
             set_property(f, name="hedgehog/pl_clk_bufg", properties={"C_SIZE": 1, "C_BUF_TYPE": "BUFG"})
             
             connect_bd_intf_net(f, "hedgehog/CLK104_PL_CLK", "hedgehog/pl_clk_ibufds/CLK_IN_D")
             connect_bd_net(f, "hedgehog/pl_clk_ibufds/IBUF_OUT", "hedgehog/pl_clk_bufg/BUFG_I")
             
             # Connect a second input clock to the clocking wizard for the 8A34001
-            create_ip(f, name="hedgehog/clk_8A34001_out3_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.1")
+            create_ip(f, name="hedgehog/clk_8A34001_out3_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.2")
             set_property(f, name="hedgehog/clk_8A34001_out3_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
             connect_bd_intf_net(f, "hedgehog/CLK_8A34001_Q3_OUT", "hedgehog/clk_8A34001_out3_ibufds/CLK_IN_D")
             
@@ -547,18 +547,13 @@ class Firmware:
             connect_bd_intf_net(f, f"hedgehog/memory_smartconnect/M00_AXI", f"hedgehog/lite_crossbar/S00_AXI")
             memory_smartconnect_slave = 1
             
-            for m in [f"hedgehog/PS_S_AXI_HPC0", 
-                      f"hedgehog/PS_S_AXI_HPC1", 
-                      f"hedgehog/PS_S_AXI_HP0",
-                      f"hedgehog/PS_S_AXI_HP1",
-                      f"hedgehog/DDR4_C0_S_AXI",
-                      f"hedgehog/DDR4_C1_S_AXI"]:
-                connect_bd_intf_net(f, f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI", m)
+            for m in self.config["ps_axi_slaves"]:
+                connect_bd_intf_net(f, f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI", f"hedgehog/{m}")
                 memory_smartconnect_slave += 1
             
             # ------------------- RF Data Converters -------------------- #
 
-            create_ip(f, name="hedgehog/rfdc", vlnv="xilinx.com:ip:usp_rf_data_converter:2.4")
+            create_ip(f, name="hedgehog/rfdc", vlnv="xilinx.com:ip:usp_rf_data_converter:2.6")
             
             # Auto-generated config string by Vivado
             rfdc_config_string = ("CONFIG.ADC_DSA_RTS {true} "
@@ -1645,10 +1640,14 @@ class Firmware:
                 
                 # Exclude the QSPI
                 for gp in range(4):
-                    exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HPC0_QSPI")
-                    exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HPC1_QSPI")
-                    exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HP0_QSPI")
-                    exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HP1_QSPI")            
+                    if "PS_S_AXI_HPC0" in self.config["ps_axi_slaves"]:
+                        exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HPC0_QSPI")
+                    if "PS_S_AXI_HPC1" in self.config["ps_axi_slaves"]:
+                        exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HPC1_QSPI")
+                    if "PS_S_AXI_HP0" in self.config["ps_axi_slaves"]:
+                        exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HP0_QSPI")
+                    if "PS_S_AXI_HP1" in self.config["ps_axi_slaves"]:
+                        exclude_bd_addr_seg(f, target_address_space, f"/ps/SAXIGP{gp}/HP1_QSPI")            
                     
             for target_address_space in sequencer_memory_target_address_spaces:
                 assign_bd_address(f, 

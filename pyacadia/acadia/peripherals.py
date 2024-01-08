@@ -819,7 +819,7 @@ class RFClk:
         def chip_id(cls):
             return xrfclk.lib.RFCLK_LMX2594_1
         
-    class LMX_ADC(LMX):
+    class LMX_DAC(LMX):
         @classmethod
         def chip_id(cls):
             return xrfclk.lib.RFCLK_LMX2594_2
@@ -853,7 +853,7 @@ class PSGPIO:
             f.write(f"{value}\n")
 
     @staticmethod
-    def sysfs_read(gpio):
+    def sysfs_read(gpio) -> bool:
         with open(f"/sys/class/gpio/gpio{gpio}/value", "r") as f:
             v = f.read()
         return int(v) == 1

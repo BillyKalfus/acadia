@@ -1009,7 +1009,7 @@ class Acadia:
     
     # -------------- CHANNEL HELPERS ----------- #
 
-    def DAC(self, num):
+    def DAC(self, num: int) -> Channel:
         """
         :return: a :class:`Channel` representing a DAC.
         :rtype: :class:`Channel`
@@ -1017,7 +1017,7 @@ class Acadia:
 
         return self._DAC_channels[num]
 
-    def ADC(self, num):
+    def ADC(self, num: int) -> Channel:
         """
         :return: a :class:`Channel` representing an ADC.
         :rtype: :class:`Channel`
@@ -1025,7 +1025,7 @@ class Acadia:
 
         return self._ADC_channels[num]
     
-    def get_dma(self, channel):
+    def get_dma(self, channel: Channel):
         """
         Get the DMA for a given channel.
         
@@ -1127,7 +1127,11 @@ class Acadia:
                 "retval": None})
             
     @requires_sequencer
-    def stream(self, src, dst: Array, configuration: StreamConfiguration = None):
+    def stream(self, 
+               src, 
+               dst: Array, 
+               dst_offset = None,
+               configuration: StreamConfiguration = None):
         """
         Stream data from a source to a destination array.
         
@@ -1154,8 +1158,9 @@ class Acadia:
             config_src = src if isinstance(src, Channel) else "memory"
             configuration = self._request_stream_configuration(config_src, "memory")
         
+        dst_address = dst.byte_address() + (dst_offset if dst_offset is not None else 0)
         self._command_datamover(configuration.output_datamover(), 
-                                   dst.byte_address(),
+                                   dst_address,
                                    dst.byte_length())
 
         if isinstance(src, Channel):
@@ -1181,6 +1186,7 @@ class Acadia:
     def stream_decimated(self, 
                          src, 
                          dst: DecimatedWaveform, 
+                         dst_offset = None,
                          configuration: StreamConfiguration = None):
         """
         Stream data from a source to a destination array through a DSP module
@@ -1232,13 +1238,14 @@ class Acadia:
         self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
         self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
         
-        self.stream(src, dst, configuration)
+        self.stream(src, dst, dst_offset, configuration)
         
     @requires_sequencer
     def stream_accumulated(self, 
                             src, 
-                            dst: DecimatedWaveform, 
-                            length_seconds: float,
+                            dst: DecimatedWaveform,
+                            length_seconds: float, 
+                            dst_offset = None,
                             cmacc_preload: complex = 0,
                             write_mode: str = "upper", 
                             last_only: bool = True, 
@@ -1248,7 +1255,7 @@ class Acadia:
                             configuration: StreamConfiguration = None):
         """
         Stream data from a source to a destination array through a CMACC 
-        module. Because the CMACC is dynamically allocated, memory for the 
+        module. Because CMACC memory is dynamically allocated, memory for the 
         kernel is allocated internally and returned with the configuration.
         
         :param src: Data source. If a configuration is provided and this is of
@@ -1337,7 +1344,7 @@ class Acadia:
             
         self.sequencer().bus_write(address=registers+2, data=control_reg)
         
-        self.stream(src, dst, configuration)
+        self.stream(src, dst, dst_offset, configuration)
         
         return configuration, kernel
     
@@ -1628,7 +1635,7 @@ class Acadia:
         bus_address = self._firmware.dma_running.address().value()
 
         return self.sequencer().bus_read(bus_address, 
-                                               latency=self._bus_latency("dma_running_dataport"))
+                                        latency=self._bus_latency("dma_running_dataport"))
 
     # -------------- RUNTIME UTILITIES ----------- #
     
@@ -1657,7 +1664,7 @@ class Acadia:
             while not self.sequencer_done():
                 pass
         
-    def sequencer_done(self):
+    def sequencer_done(self) -> bool:
         """
         Determine whether the sequencer has completed.
         """
@@ -1691,7 +1698,7 @@ class Acadia:
         for dma in self._adc_dmas:
             dma.compile_all(overwrite)
 
-    def assemble(self):
+    def assemble(self) -> tuple:
         """
         Assembles instruction memory for the sequencer and all DMAs.
         """
@@ -1746,14 +1753,12 @@ class Acadia:
                 if len(program) > 0:
                     logging.debug(f"Loading ADC{idx} descriptor memory ({len(program)} bytes)")
                     self._adc_dma_descriptor_memory[idx][:len(program)] = program
-        
                         
-    def assemble_simulation(self):
+    def assemble_simulation(self) -> str:
         """
         Identical to :meth:`assemble`, but creates a string for loading memory
         in Verilog testbenches connected to the Zynq Ultrascale AXI VIP.
         """
-
         sim_string = ""
         for s in self._sequencer_type.instances:
             for idx_instr,instr in enumerate(s._compiled_program):
@@ -1779,7 +1784,6 @@ class Acadia:
             for the sequencer
         :rtype: str
         """
-
         idx = 0
         for idx_seq,s in enumerate(self._sequencer_type.instances):
             print(f"---- Program {idx_seq} ----")
@@ -1791,7 +1795,6 @@ class Acadia:
         """
         Runs the sequencer by driving its run pin high. 
         """
-
         PSGPIO.sysfs_write(self._sequencer_nrst, 1)
         PSGPIO.sysfs_write(self._sequencer_gpio, 1)
 
@@ -1799,15 +1802,16 @@ class Acadia:
         """
         Halts the sequencer by driving its run pin low.
         """
-
         PSGPIO.sysfs_write(self._sequencer_gpio, 0)
         
     def sequencer_reset(self):
         """
         Resets the sequencer.
         """
-
         PSGPIO.sysfs_write(self._sequencer_nrst, 0)
+
+    def sequencer_clock_frequency(self) -> float:
+        return self._firmware["clocks"]["generated_clocks"]["seq_clk"]
 
     # -------------- SYSTEM UTILITIES ----------- #
             

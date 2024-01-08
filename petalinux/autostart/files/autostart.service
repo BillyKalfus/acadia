@@ -1,0 +1,12 @@
+[Unit]
+Description=autostart
+After=systemd-networkd.service systemd-fsck@dev-mmcblk0p1.service run-media-mmcblk0p1.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/bin/autostart
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

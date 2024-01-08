@@ -44,7 +44,7 @@ class Runtime(ABC):
     
     # ---------------- Functions to be run on the host ---------------- #
     
-    def run(self, 
+    def deploy(self, 
             target_address, 
             filename=None,
             remote_server_port=6672,
@@ -54,7 +54,7 @@ class Runtime(ABC):
             username="root", 
             display=True,
             upload_timeout=5, 
-            log_level=logging.DEBUG,
+            log_level=logging.INFO,
             update_period=0.5,
             multiplex_ssh=False,
             remove_remote_directory=True,
@@ -134,7 +134,7 @@ class Runtime(ABC):
             code += f"        args = json.load(f)\n"
             
         code += f"    runtime = {self.__class__.__name__}({'**args' if is_dataclass(self) else ''})\n"
-        code += f"    runtime.remote_main(\"{self.remote_directory}\", {log_level})\n"
+        code += f"    runtime.run(\"{self.remote_directory}\", {log_level})\n"
 
         multiplex_flags = ""
         if multiplex_ssh:
@@ -438,7 +438,7 @@ class Runtime(ABC):
         
     # ----------------- Functions to be run on the target ----------------- #
 
-    def remote_main(self, directory, log_level):
+    def run(self, directory, log_level=logging.INFO):
         """
         This is the main entry point of the remote process. This should not 
         be called manually.

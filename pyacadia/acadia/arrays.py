@@ -381,7 +381,7 @@ class Waveform(Array):
     """
     
     def __init__(self, 
-                 sample_rate_or_channel: float = None, 
+                 sample_rate_or_channel: float = 1, 
                  length_seconds: float = None, 
                  region = None, 
                  data = None,
@@ -390,13 +390,12 @@ class Waveform(Array):
                  buffered: bool = True,
                  axis_dtype = np.float32):
         """
-        :param sample_rate_or_channel: When of type ``float``, this is the sample rate
-            used to derive axis values and allocate memory. Alternatively, 
-            this can be an object of type :class:`Channel` from which the 
-            sampling parameters will be extracted. This may be ``None``, in
-            which case no axis will be created.
+        :param sample_rate_or_channel: When of type ``float``, this is the 
+            sample rate used to derive axis values and allocate memory. 
+            Alternatively, this can be an object of type :class:`Channel` 
+            from which the sampling parameters will be extracted.
         :type sample_rate_or_channel: :class:`Channel`
-        :param length_seconds: The length of the waveform in seconds. If omitted,
+        :param length: The length of the waveform in seconds. If omitted,
             :meth:`allocate` must be called manually.
         :param region: The memory region in which to create the array. If an
             instance of :class:`Channel`, the type of the underlying memory 
@@ -534,7 +533,7 @@ class Waveform(Array):
         arrays = super().split(split_idx)
         return tuple(Waveform(self._sample_rate_or_channel, data=arr) for arr in arrays)
         
-    def unpack(self, out=None, scale=1):
+    def unpack(self, out: np.ndarray = None, scale: float = 1):
         """
         Unpack the integer sample data in memory into complex floating-point 
         numbers.
@@ -558,14 +557,14 @@ class Waveform(Array):
             
         return out
     
-    def pack(self, out=None, scale=1):
+    def pack(self, out: np.ndarray = None, scale: complex = 1):
         """
         Pack the complex floating-point data in an array into integer samples.
         """
         
         scale *= 2**(self._int_type.itemsize*8 - 1) - 1 
         with self.buffer():
-            scaled = self.memory.view(self._float_type) * scale
+            scaled = (self.memory * scale).view(self._float_type) 
         
         if out is None:
             out = np.empty(len(self), dtype=self._sample_type)
