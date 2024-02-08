@@ -8,16 +8,14 @@ import mmap
 
 from copy import copy
 from functools import reduce
-from itertools import count
+from typing import Tuple
 
 import numpy as np
 from numpy.lib.format import descr_to_dtype, dtype_to_descr
 
 __all__ = ["RecordGroupMeta", 
            "ArrayRecordGroup",
-           "CounterRecordGroup",
-           "PlotMixin",
-           "DisplayMixin", 
+           "CounterRecordGroup", 
            "DataManager"]
 
 WRLCK_STRUCT = struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0)
@@ -43,9 +41,10 @@ class RecordGroup:
         """
         self._name = name
         self._directory = directory
-        self._metadata = metadata
+        self._metadata = {"instantiator": self.__class__.__name__, "count": 0}
+        self._metadata.update(metadata)
     
-    def load(self, metadata=None, map=True):
+    def load(self, metadata=None):
         """
         Load data from files into the internal cache.
         
@@ -59,14 +58,7 @@ class RecordGroup:
         """
         self._metadata = metadata
     
-    def full(self):
-        """
-        For record groups containing an internal memory, this will determine
-        whether the internal memory is full.
-        """
-        return False
-    
-    def close(self):
+    def close(self) -> None:
         """
         Close any internally-loaded memory maps or open files.
         """
@@ -79,7 +71,17 @@ class RecordGroup:
         calling :meth:`save`.
         """
         pass
-    
+
+    @classmethod
+    def file_extension(self) -> str:
+        """
+        Return the name of the file storing data for this record group.
+        """
+        return "bin"
+
+    def filename(self) -> str:
+        return f"{self._name}.{self.file_extension()}"
+
     def metadata(self) -> dict:
         """
         :return: Metadata for the group. The returned data may be arbitrary
@@ -92,153 +94,34 @@ class RecordGroup:
         """
         return self._metadata
     
-    def add_metadata(self, key, value):
+    def add_metadata(self, key: str, value) -> None:
         """
         Add an arbitrary piece of metadata to the group to be saved alongside 
         it.
         """
         self._metadata[key] = value
     
-    def files(self) -> list:
-        """
-        :return: Lists files created by the group
-        :rtype: list
-        """
-        return []
-    
     @staticmethod
-    def filedeltas(metadata1, metadata2) -> dict:
+    def filedeltas(metadata1: dict, metadata2: dict) -> Tuple[int,int]:
         """
         Given two sets of metadata for the group, this method determines 
         which files have changed between the two instants at which the metadata
-        objects were generated. For each file, this will return a tuple whose
-        first element is the offset within file where changes begin and the 
+        objects were generated. This will return a tuple whose
+        first element is the offset within the file where changes begin and the 
         second element is the length of changed data. The implementation of
         this behavior will be specific to each subclass, but it must be 
-        guaranteed that for all the files with changes, if a file is copied at
+        guaranteed that if the file is copied at
         the time that `metadata1` is produced, then the offset returned by this
-        method for that file will be a valid seek location for that file.
+        method for the file will be a valid seek location.
         """
-        return {}
+        return (0, 0)
     
     def __len__(self) -> int:
         """
         :return: The number of records stored in the group
         :rtype: int
         """
-        return None
-    
-class DisplayMixin:
-    """
-    A mixin for :class:`RecordGroup` subclasses that are able to display their
-    data visually.
-    """
-
-    def initialize_display(self):
-        """
-        Create and store any internal objects needed to initialize the display.
-        The return value of this function will be cached in the display thread
-        and passed to :meth:`update_display` when called.
-        """
-        return None
-    
-    def update_display(self, init_retvals):
-        """
-        Update the display objects. The return value of 
-        :meth:`initialize_display` will be passed in through `init_retvals`.
-        """
-        pass
-    
-    def close_display(self, init_retvals):
-        """
-        Close any open display objects.
-        """
-        pass
-    
-class PlotMixin(DisplayMixin):
-    
-    def plot(self, fig):
-        """
-        Create plot objects and return a function that will update them.
-        Calling this function raises `NotImplementedError`, as this is expected
-        to be implemented by the user.
-        
-        :param fig: The live plot 
-        :type fig: matplotlib.Figure
-        :return: A function that accepts the animation object and frame number 
-            as arguments and sets the data of any updated objects in the figure
-        :rtype: callable
-        """
-        raise NotImplemented(f"No plotting implemented for group {self._name}")
-    
-    def initialize_display(self):
-        import matplotlib.pyplot as plt
-        from matplotlib.animation import Animation
-        
-        fig = plt.figure()
-        update_func = self.plot(fig)
-        
-        def init(anim_self, *args, **kwargs):
-            anim_self._framedata = count()
-            super(anim_self.__class__, anim_self).__init__(*args, **kwargs)
-        
-        test_animation_type = type(f"{self._name}Animation", 
-                                   (Animation, ), 
-                                   {"__init__": init, 
-                                    "_draw_frame": update_func})
-
-        def _dummy(*args, **kwargs):
-            pass
-        
-        DummyEvent = type("DummyEvent", (), {"add_callback": _dummy, "start": _dummy, "stop": _dummy})
-
-        
-        anim = test_animation_type(fig, event_source=DummyEvent)
-        anim._step()
-
-        return anim,fig
-    
-    def update_display(self, args):        
-        anim,fig = args
-        anim._step()
-        
-    def close_display(self, args):
-        import io
-        import matplotlib.pyplot as plt
-        from IPython.display import Image, display
-        
-        anim,fig = args
-        
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=400)
-        plt.close("all")
-        
-        buf.seek(0)
-        img = Image(data=buf.read(), format="png", embed=True, width=720)
-        display(img)
-        
-    @staticmethod
-    def update_line(plot_retval, xdata, ydata):
-        """
-        Update the data contained in a line created by calling `Axis.plot`. 
-        
-        :param plot_retval: Value returned by `plot`
-        :type plot_retval: tuple
-        """
-        plot_retval[0].set_data(xdata, ydata)
-        
-    @staticmethod
-    def update_yerrorbar(errorbar_retval, xdata, ydata, yerr):
-        """
-        Update the curve and error data on an errorbar.
-        """
-        ln,err,bars = errorbar_retval
-        ln.set_data(xdata, ydata)
-        
-        new_errorbars = [[[x,ydata[i]-yerr[i]],
-                          [x,ydata[i]+yerr[i]]] for i,x in enumerate(xdata)]
-        
-        bars[0].set_segments([np.array(points) for points in new_errorbars])
+        return self._metadata["count"]
     
 class RecordGroupMeta(type):
     """
@@ -250,7 +133,7 @@ class RecordGroupMeta(type):
     these constructors are called inside DataManager methods, any custom
     constructors will not be in the namespace.
     """
-    CLASSES = {}
+    CLASSES: dict[str, type] = {}
     
     def __new__(cls, name, bases, dct):
         if name in RecordGroupMeta.CLASSES:
@@ -277,8 +160,8 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                  name, 
                  directory,
                  dtype=None, 
-                 axes=None, 
                  overwrite=False,
+                 map=True,
                  **metadata):
         """
         :param name: Name of the group
@@ -301,69 +184,41 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         self._records = None
         self._loaded_elements = None
         self._open_objects = []
-        self._metadata.update({"files": {}, "axes": None, "shape": [], "count": 0})
-        
-        if axes is not None:
-            axis_descriptions = []
-            for i,ax in enumerate(axes):
-                if isinstance(ax, np.ndarray):
-                    filename = f"{self._name}_axis{i}.bin"
-                    axis_descriptions.append(filename)
-                    self._metadata["shape"].append(len(ax))
-                    full_path = os.path.join(self._directory, filename)
-                    
-                    with open(full_path, "wb") as f:
-                        ax.tofile(f)
-                        
-                    self._metadata["files"][filename] = {
-                        "descr": dtype_to_descr(ax.dtype),
-                        "length": len(ax),
-                        "overwriting": False
-                    }
-                elif isinstance(ax, int):
-                    axis_descriptions.append(ax)
-                    self._metadata["shape"].append(ax)
-                else:
-                    raise TypeError(f"Invalid axis description type {type(ax)}")
-        
-            self._metadata["axes"] = axis_descriptions
-    
-    def files(self):
-        return list(self._metadata["files"].keys())
+        self._metadata.update({"descr": None, 
+                               "shape": None, 
+                               "count": 0, 
+                               "overwriting": overwrite,
+                               "map": map})
     
     @staticmethod
-    def filedeltas(metadata1, metadata2):
-        deltas = {}
-        
-        # For every file in metadata2, if it's not contained in metadata1 then
-        # return the full size of the file at offset 0. Otherwise, return an
-        # offset given by the size of file 1 and a size given by the difference
-        # in file sizes
-        for filename,file_header2 in metadata2["files"].items():
-            dtype = descr_to_dtype(file_header2["descr"])
-            size_bytes2 = dtype.itemsize*file_header2["length"]
-            
-            if (metadata1 is None 
-                    or "files" not in metadata1
-                    or filename not in metadata1["files"] 
-                    or (not metadata1["files"][filename]["overwriting"])):
-                deltas[filename] = (0, size_bytes2)
-            else:
-                if json.dumps(metadata1["files"][filename]["descr"]) != json.dumps(file_header2["descr"]):
-                    raise TypeError(f"Descriptor mismatch between metadata for"
-                                    f" file {filename}:\n"
-                                    f"    metadata1: {metadata1}\n"
-                                    f"    metadata2: {metadata2}")
-                    
-                size_bytes1 = dtype.itemsize*metadata1["files"][filename]["length"]
-                deltas[filename] = (size_bytes1, size_bytes2-size_bytes1)
+    def filedeltas(metadata1: dict, metadata2: dict) -> Tuple[int, int]:
+        if metadata2 is None or metadata2["descr"] is None:
+            return (0, 0)
 
-        return deltas
-    
+        dtype = descr_to_dtype(metadata2["descr"])
+        size_bytes2 = metadata2["count"]*reduce(operator.mul, metadata2["shape"], dtype.itemsize)
+        
+        if (metadata1 is None or len(metadata1) == 0 or metadata1["overwriting"]):
+            return (0, size_bytes2)
+        
+        if ((metadata1["descr"] != metadata2["descr"]) 
+                or (metadata1["shape"] != metadata2["shape"])):
+            raise TypeError(f"Descriptor mismatch between metadata:\n"
+                            f"    metadata1: {metadata1}\n"
+                            f"    metadata2: {metadata2}")
+                
+        size_bytes1 = metadata1["count"]*reduce(operator.mul, metadata2["shape"], dtype.itemsize)
+        return (size_bytes1, size_bytes2-size_bytes1)
+
     def write(self, record):
+        if hasattr(record, "memory"):
+            record = record.memory 
+            
         if isinstance(record, np.ndarray):
             if self._dtype is None:
                 self._dtype = record.dtype
+                self._metadata["descr"] = dtype_to_descr(self._dtype)
+                self._metadata["shape"] = record.shape
             elif record.dtype != self._dtype:
                 raise TypeError(f"Received numpy array of incorrect dtype"
                                 f" (expected {self._dtype}, received array"
@@ -371,216 +226,87 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         elif isinstance(record, (float, int, complex, bool)):
             if self._dtype is None:
                 self._dtype = np.dtype(type(record))
+                self._metadata["descr"] = dtype_to_descr(self._dtype)
+                self._metadata["shape"] = tuple()
+            record = np.array(record, dtype=self._dtype)
+        elif isinstance(record, dict):
+            if self._dtype is None:
+                fields = [((k, v.dtype, v.shape) if isinstance(v, np.ndarray) else (k, np.dtype(type(v)))) 
+                                for k,v in record.items()]
+                self._dtype = np.dtype(fields)
+                self._metadata["descr"] = dtype_to_descr(self._dtype)
+                self._metadata["shape"] = tuple()
+            
+            record = np.array(tuple(record.values()), dtype=self._dtype)
         else:
             raise TypeError(f"Unable to write record of type {type(record)}"
                             f" into ArrayRecordGroup")
 
-        filename = f"{self._name}_records.bin"
-        full_path = os.path.join(self._directory, filename)
-        if not os.path.exists(full_path) or self._overwrite:
-            self._metadata["files"][filename] = {
-                "descr": dtype_to_descr(self._dtype),
-                "length": 0,
-                "overwriting": self._overwrite
-            }
-        
+        full_path = os.path.join(self._directory, self.filename())
+            
         with open(full_path, ("wb" if self._overwrite else "ab")) as f:
-            if isinstance(record, np.ndarray):
-                record.tofile(f)
-                self._metadata["files"][filename]["length"] += len(record)
-            else:
-                self._dtype(record).tofile(f)
-                self._metadata["files"][filename]["length"] += 1
-    
-            
-    def _load_array(self, filename, map=False) -> np.ndarray:
-        full_path = os.path.join(self._directory, filename)
+            record.tofile(f)
         
-        if not os.path.isfile(full_path):
-            logging.error(f"Unable to find array data for {filename} in"
-                          f" directory {self._directory}")
-            return None
-        
-        if "files" not in self._metadata:
-            logging.error(f"Incorrect header data format ('files' entry not found)")
-            return None
-        
-        if filename not in self._metadata["files"]:
-            logging.error(f"No header for {filename} found (have"
-                          f" {list(self._metadata['files'].keys())})")
-            return None
-        
-        dtype = descr_to_dtype(self._metadata["files"][filename]["descr"])
-        count = self._metadata["files"][filename]["length"]
-        
-        file_size = os.path.getsize(full_path)
-        if file_size % dtype.itemsize != 0:
-            logging.warning(f"File {filename} does not contain an integer"
-                            f" number of elements (file size {file_size}"
-                            f" bytes, loading dtype {dtype})")
-        
-        if map:
-            file = open(full_path, "rb")
-            m = mmap.mmap(file.fileno(), 
-                          length=count*dtype.itemsize, 
-                          prot=mmap.PROT_READ, 
-                          flags=mmap.MAP_SHARED)
-            self._open_objects += [m,file]
-            arr = np.ndarray(shape=(count,), dtype=dtype, buffer=m, order='C')
-        else:
-            arr = np.fromfile(full_path, dtype=dtype, count=count)
-            
-        return arr
-    
-    def load(self, metadata=None, map=True):
+        self._metadata["count"] += 1
+
+    @classmethod
+    def file_extension(cls):
+        return "bin"
+
+    def load(self, metadata: dict):
         """
-        Load records from a directory of files. 
+        Load records from a file. 
         
         :param metadata: Metadata for stored files, as would be returned by 
             calling :meth:`metadata`
-        :type header_data: dict
+        :type metadata: dict
         :param map: If `True`, data is memory-mapped instead of loaded into 
             memory.
         """
+        full_path = os.path.join(self._directory, self.filename())
         
-        # TODO: load the array and potentially apply a shape based on the axes. 
-        # potentially add an extra dimension to account for multiple rtecords of the 
-        # given shape
+        if not os.path.isfile(full_path):
+            logging.error(f"Unable to find array data for {self.filename()} in"
+                          f" directory {self._directory}")
+            return None
         
-        self._metadata = metadata
-        records_flattened = self._load_array(f"{self._name}_records.bin", map)
-        if records_flattened is None:
-            # Nothing to load
-            return
+        dtype = descr_to_dtype(metadata["descr"])
+        record_bytes = reduce(operator.mul, metadata["shape"], dtype.itemsize)
+        file_size = os.path.getsize(full_path)
+        records = file_size // record_bytes
+        leftover_bytes = file_size % record_bytes
+        if leftover_bytes != 0:
+            logging.warning(f"File {self.filename()} does not contain an integer"
+                            f" number of records (file size {file_size}"
+                            f" bytes, {records} complete records of dtype"
+                            f" {dtype} and shape {metadata['shape']})")
         
-        self._dtype = records_flattened.dtype
-        element_count = reduce(operator.mul, metadata["shape"], 1)
-        complete_records = len(records_flattened) // element_count
-        leftover_elements = len(records_flattened) % element_count
-        
-        if leftover_elements == 0:
-            self._loaded_elements = [complete_records] + [0]*len(metadata["shape"])
-            self._records = records_flattened.reshape(tuple([complete_records, *metadata['shape']]))
+        if metadata["map"]:
+            file = open(full_path, "rb")
+            m = mmap.mmap(file.fileno(), 
+                          length=records*record_bytes, 
+                          prot=mmap.PROT_READ, 
+                          flags=mmap.MAP_SHARED)
+            self._open_objects += [m,file]
+            self._records = np.ndarray(shape=(records,*metadata["shape"]), dtype=dtype, buffer=m, order='C')
         else:
-            self._loaded_elements = [complete_records] + list(np.unravel_index(leftover_elements, metadata["shape"]))
-            self._records = records_flattened
-        
+            self._records = np.fromfile(full_path, 
+                              dtype=dtype, 
+                              count=records*record_bytes//dtype.itemsize).reshape(records,*metadata["shape"])
+            
+        self._metadata = metadata
+        self._metadata["count"] = records
+        self._dtype = dtype
+            
     def close(self):
         for obj in self._open_objects:
             obj.close()
         self._open_objects = []
     
-    def loaded_elements(self):
-        """
-        Describes how much data has been loaded. Since arrays may not be ragged,
-        if the amount of loaded data is not an exact multiple of the number of 
-        elements in a record, 
-        """
-        return self._loaded_elements
+    def records(self):
+        return self._records
     
-    def records(self, partial=False):
-        """
-        Retrieve record data from a loaded record group.
-        
-        :param partial: If ``True``, all record data is loaded and returned as-is
-        :type partial: bool
-        """
-        if f"{self._name}_records.bin" not in self._metadata["files"]:
-            return None
-        
-        if partial:
-            return self._records
-        
-        elements = self._metadata["files"][f"{self._name}_records.bin"]["length"]
-        elements_per_record = reduce(operator.mul, self._metadata["shape"], 1)
-        
-        if elements < elements_per_record:
-            return None
-        
-        complete_records = elements // elements_per_record
-        records_flattened = self._records.flatten()[: complete_records*elements_per_record]
-        return records_flattened.reshape(tuple([complete_records, *self._metadata['shape']]))
-        
-    def axis(self, idx=0, map=False):
-        """
-        Get the axis for a given dimension. If there are no axes in the group,
-        an incrementing array is returned for the single array dimension.
-        
-        :param idx: Dimension to get axis for
-        :type idx: int
-        """
-        if self._metadata["axes"] is None:
-            return np.arange(self._metadata["count"])
-        
-        if isinstance(self._metadata["axes"][idx], int):
-            return np.arange(self._metadata["axes"][idx])
-        
-        if isinstance(self._metadata["axes"][idx], str):
-            return self._load_array(f"{self._name}_axis{idx}.bin", map)
-        
-        raise TypeError(f"Unable to load axis (metadata contains"
-                        f" {self._metadata['axes'][idx]})")
-
-    
-class NumericTableRecordGroup(ArrayRecordGroup):
-    """
-    A record group for storing data arranged in a table. The underlying data
-    is encoded in a structured numpy array.
-    
-    The record can be specified with one of the following formats, after which
-    the format must be consistent:
-    
-    - A tuple, in which names are not assigned and use the numpy default "f0", "f1", etc. names
-    - A dict, in which names are given by the keys
-    
-    In both cases, the type of the argument is inferred.
-    """
-    
-    def __init__(self, 
-                 name, 
-                 directory,
-                 dtype=None, 
-                 axes=None, 
-                 overwrite=False, 
-                 fields=None,
-                 **metadata):
-        """
-        :param fields: If not `None`, this should be a valid argument to 
-            `numpy.dtype` for constructing the data type of the record 
-            (see https://numpy.org/doc/stable/reference/arrays.dtypes.html#specifying-and-constructing-data-types 
-            for details)
-        """
-        super().__init__(name, directory, dtype, axes, overwrite, **metadata)
-        self._fields = fields
-        
-    def write(self, record):
-        if isinstance(record, np.ndarray):
-            # Act like a regular ArrayRecordGroup
-            super().write(record)
-            return 
-        
-        if self._fields is None:
-            if isinstance(record, dict):
-                self._fields = [((k, v.dtype, v.shape) if isinstance(v, np.ndarray) else (k, np.dtype(type(v)))) 
-                                for k,v in record.items()]
-            elif isinstance(record, tuple) or isinstance(record, list):
-                self._fields = [(('', v.dtype, v.shape) if isinstance(v, np.ndarray) else ('', np.dtype(type(v)))) 
-                                for v in record]
-            else:
-                raise TypeError(f"Unable to get fields from type {type(record)}")
-            
-        if isinstance(record, dict):
-            record_data = tuple(record.values())
-        elif isinstance(record, tuple) or isinstance(record, list):
-            record_data = tuple(record)
-        else:
-            raise TypeError(f"Unable to get fields from type {type(record)}")
-        
-        record_ndarray = np.array([record_data], dtype=np.dtype(self._fields))
-        super().write(record_ndarray)
-        
-    
-class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
+class CounterRecordGroup(metaclass=RecordGroupMeta):
     """
     A simple counter.
     """
@@ -592,47 +318,63 @@ class CounterRecordGroup(DisplayMixin, metaclass=RecordGroupMeta):
         `ipywidgets.IntProgress` instance.
         """
         super().__init__(name, directory, **metadata)
-        self._metadata["total"] = None
-        self._metadata["value"] = None
+
+    def __add__(self, v):
+        if not isinstance(v, int):
+            raise TypeError(f"Incompatible type for counter operation: {type(v)}")
+        return self.count + v
+
+    def __sub__(self, v):
+        if not isinstance(v, int):
+            raise TypeError(f"Incompatible type for counter operation: {type(v)}")
+        return self.count - v
+
+    def __iadd__(self, v):
+        if not isinstance(v, int):
+            raise TypeError(f"Incompatible type for counter operation: {type(v)}")
+        self.count = self.count + v
+        return self
+
+    def __isub__(self, v):
+        if not isinstance(v, int):
+            raise TypeError(f"Incompatible type for counter operation: {type(v)}")
+        self.count = self.count - v
+        return self
+
+    def __radd__(self, v):
+        if not isinstance(v, int):
+            raise TypeError(f"Incompatible type for counter operation: {type(v)}")
+        return v + self.count
+
+    def __rsub__(self, v):
+        if not isinstance(v, int):
+            raise TypeError(f"Incompatible type for counter operation: {type(v)}")
+        return v - self.count
         
     @property
-    def value(self):
-        return self._metadata["value"]
+    def count(self):
+        return self._metadata["count"]
     
-    @value.setter
-    def value(self, v):
-        if not isinstance(v, int) and not isinstance(v, float):
+    @count.setter
+    def count(self, v):
+        if not isinstance(v, int):
             raise TypeError(f"Incompatible type for counter value: {type(v)}")
             
-        self._metadata["value"] = v
+        self._metadata["count"] = v
         
     @property
     def total(self):
+        if "total" not in self._metadata:
+            return None
+        
         return self._metadata["total"]
     
     @total.setter
     def total(self, v):
-        if not isinstance(v, int) and not isinstance(v, float):
+        if not isinstance(v, int):
             raise TypeError(f"Incompatible type for counter total: {type(v)}")
             
         self._metadata["total"] = v
-        
-    def initialize_display(self):
-        if isinstance(self._metadata["value"], (int, float)):
-            from tqdm.notebook import tqdm
-            bar = tqdm(total=self._metadata["total"], desc=self._name)
-            bar.update(self._metadata["value"])
-        else:
-            raise TypeError(f"Incompatible type for progress display:"
-                            f" {type(self._metadata['value'])}")
-        return {"bar": bar, "last_value": self._metadata["value"]}
-        
-    def update_display(self, vals):
-        vals["bar"].update(self._metadata["value"] - vals["last_value"])
-        vals["last_value"] = self._metadata["value"]
-            
-    def close_display(self, vals):
-        vals["bar"].close()
 
 class DataManager:
     """
@@ -675,6 +417,11 @@ class DataManager:
             list will be saved. Otherwise, all groups will be saved.
         :type groups: list of str
         """   
+        if isinstance(groups, str):
+            groups = [groups]
+        elif groups is None:
+            groups = self._groups.keys()
+
         # logging.debug("Saving records...")
         metadata_path = os.path.join(self._directory, "metadata.json")
         if os.path.exists(metadata_path):
@@ -684,15 +431,9 @@ class DataManager:
                 fcntl.fcntl(file, fcntl.F_SETLK, copy(UNLCK_STRUCT))
         else:
             metadata = {}
-                
-        for name in (groups if groups is not None else self._groups.keys()):   
-            group = self._groups[name]                 
-            metadata[name] =  {
-                "type": group.__class__.__name__,
-                "files": group.files(),
-                "metadata": group.metadata()
-            }
-                    
+
+        metadata.update({name: self._groups[name].metadata() for name in groups})
+                                
         logging.debug(f"Saving metadata for groups {list(metadata.keys())}")
         with open(metadata_path, "w") as file:
             fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))            
@@ -726,7 +467,7 @@ class DataManager:
             
         return metadata
         
-    def load(self, groups=None, map=True, reload=False):
+    def load(self, groups=None, reload=False):
         """
         Map the data stored in an existing directory into the internal 
         structure of the DataManager.
@@ -748,21 +489,15 @@ class DataManager:
         metadata = DataManager.read_metadata(self._directory)
             
         for group_name in (groups if groups is not None else metadata.keys()):
-            for filename in metadata[group_name]["files"]:
-                if not os.path.exists(os.path.join(self._directory, filename)):
-                    raise FileNotFoundError(f"Unable to locate required file"
-                                            f" {filename} in directory"
-                                            f" {self._directory}")
-                            
             if reload and group_name in self._groups:
                 # Attempt to reload the group
                 self._groups[group_name].close()
-                self._groups[group_name].load(metadata[group_name]["metadata"], map)
+                self._groups[group_name].load(metadata[group_name])
             else:
                 # Create the group new. If we can't, add_group will throw an error
-                group_class = RecordGroupMeta.CLASSES[metadata[group_name]["type"]]                    
-                group = group_class(group_name, self._directory)
-                group.load(metadata[group_name]["metadata"], map)
+                instantiator = RecordGroupMeta.CLASSES[metadata[group_name]["instantiator"]]                    
+                group = instantiator(group_name, self._directory)
+                group.load(metadata[group_name])
                 self.add_group(group)
             
     def add_group(self, group: RecordGroup):
@@ -784,22 +519,40 @@ class DataManager:
             raise TypeError("Only `RecordGroup` instances can be added")
         
         self._groups[group._name] = group
+
+    def create_group(self, group_type, group_name, *args, **kwargs):
+        if not isinstance(group_type, RecordGroupMeta):
+            raise TypeError(f"Expected group type to be a subclass of"
+                            f" RecordGroupMeta, got type {group_type}")
         
-    def report_iterations(self, iter, name="Iterations"):
+        group = group_type(group_name, self._directory, *args, **kwargs)
+        self.add_group(group)
+        return group
+        
+    def count(self, iter, name="Counter"):
         """
         Report iterations through an iterable by creating a CounterRecordGroup
         and automatically increasing it for each item yielded by the iterable.
+        If this is called with a name of an existing counter, the counter is 
+        reset.
         """
-        group = CounterRecordGroup(name, self._directory)    
-        self.add_group(group)
+        if isinstance(iter, int):
+            iter = range(iter)
+
+        total = len(iter) if hasattr(iter, "__len__") else None
+        if name in self:
+            counter = self._groups[name]
+            if not isinstance(counter, CounterRecordGroup):
+                raise TypeError(f"Attemped to count using a non-counter"
+                                f" record group (name {name})")
+        else:
+            counter = self.create_group(CounterRecordGroup, name, total=total)      
         
-        group.value = 0
-        group.total = len(iter) if hasattr(iter, "__len__") else None
-        
+        counter.count = 0      
         for item in iter:
             yield item
-            group.value += 1
-            self.save([name])
+            counter += 1
+            self.save(name)
             
     def filedeltas(self, metadata):
         """
@@ -811,18 +564,21 @@ class DataManager:
         
         deltas = {}
         for group_name,group_metadata in metadata.items():
-            group_class = RecordGroupMeta.CLASSES[group_metadata["type"]]
+            group_class = RecordGroupMeta.CLASSES[group_metadata["instantiator"]]
             
             if group_name in self._groups:
-                if group_class != type(self._groups[group_name]):
-                    raise TypeError(f"Cannot resolve filedelta for {group_name}"
-                                    f" (current type {type(self._groups[group_name])},"
-                                    f" received {group_metadata['type']})")
+                # if group_class.__name__ != self._groups[group_name].metadata()["instantiator"]:
+                #     raise TypeError(f"Cannot resolve filedelta for {group_name}"
+                #                     f" (current type {type(self._groups[group_name])},"
+                #                     f" received instantiator {group_metadata['instantiator']})")
                 current_metadata = self._groups[group_name].metadata()
+                filename = self._groups[group_name].filename()
             else:
                 current_metadata = {}
+                filename = f"{group_name}.{group_class.file_extension()}"
             
-            deltas.update(group_class.filedeltas(current_metadata, group_metadata["metadata"]))
+            deltas[filename] = group_class.filedeltas(current_metadata, group_metadata)
+
         return deltas
             
     def __getitem__(self, k):

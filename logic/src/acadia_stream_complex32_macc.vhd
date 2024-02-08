@@ -32,7 +32,9 @@
 --             Identical to address 0, but for the imaginary 
 --             accumulator.
 --         Address 2: Control/Status
---             Bits 15-0 (RW) : Kernel Memory Pointer 
+--             Bit 0 (W) : Kernel Pointer Load Start
+--                 When this is 1, the kernel pointer register is loaded
+--                 with the value in the start addres register.
 --             Bit 16 (R)     : Range Error
 --                 An overflow or underflow has occurred in the 
 --                 calculation. After being set, this signal is latched
@@ -54,6 +56,11 @@
 --             Bit 23 (RW)    : Write last
 --                 When set, only the last value is presented on the output stream.           
 --             Bit 24 (W)     : FIFO Reset
+--         Address 3: 
+--             Bits 15-0: Kernel Memory Address Start
+--                 The first address of the kernel in memory.
+--             Bits 31-16: Kernel Memory Address End
+--                 The final address of the kernel in memory.
 -- 
 -- Dependencies: 
 -- 
@@ -185,7 +192,9 @@ architecture rtl of acadia_stream_complex32_macc is
     signal a_im_b_im_sign : signed(accumulator_im'high - a_im_b_im'length downto 0);
     
     -- Kernel memory access signals
-    signal kernel_memory_pointer : std_logic_vector(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
+    signal kernel_memory_pointer_start : std_logic_vector(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
+    signal kernel_memory_pointer_end   : std_logic_vector(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
+    signal kernel_memory_pointer       : std_logic_vector(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
     signal kernel_memory_data    : std_logic_vector(31 downto 0);
     
     -- Reset signal (controlled by registers)
@@ -280,10 +289,14 @@ begin
     -- Process to manage the kernel memory pointer
     kernel_memory_pointer_proc: process(clk) begin
         if rising_edge(clk) then
-            if(registers_we = '1' and registers_en = '1' and registers_addr(1 downto 0) = "10") then
-                kernel_memory_pointer <= registers_mosi(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
+            if(registers_we = '1' and registers_en = '1' and registers_addr(1 downto 0) = "10" and registers_mosi(0) = '1') then
+                kernel_memory_pointer <= kernel_memory_pointer_start;
             elsif(data_in_tvalid = '1') then
-                kernel_memory_pointer <= std_logic_vector(unsigned(kernel_memory_pointer) + 1);
+                if(kernel_memory_pointer = kernel_memory_pointer_end) then
+                    kernel_memory_pointer <= kernel_memory_pointer_start;
+                else
+                    kernel_memory_pointer <= std_logic_vector(unsigned(kernel_memory_pointer) + 1);
+                end if;
             end if;
         end if;
     end process kernel_memory_pointer_proc;
@@ -460,6 +473,16 @@ begin
             end if;
         end if;
     end process registers_read_proc;
+
+    -- Process to manage the kernel memory pointer start and end addresses
+    kernel_memory_pointer_start_end_proc: process(clk) begin
+        if rising_edge(clk) then
+            if(registers_we = '1' and registers_en = '1' and registers_addr(1 downto 0) = "11") then
+                kernel_memory_pointer_start <= registers_mosi(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0);
+                kernel_memory_pointer_end   <= registers_mosi(LOG2_KERNEL_MEMORY_DEPTH-1 + 16 downto 16);
+            end if;
+        end if;
+    end process kernel_memory_pointer_start_end_proc;
 
     write_mode_proc: process(clk) begin
         if rising_edge(clk) then

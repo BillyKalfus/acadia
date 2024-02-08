@@ -21,16 +21,24 @@ These benefits (among others) motivate the implementation of a control system on
  RF Data Converters
 ====================
 
-The RF Data Converter subsystem of the RFSoC comprises a variety of digital signal processing hardware in addition to the actual data conversion cores themselves. The existence and performance of these modules is a critical benefit of using ther RFSoC, and we now describe a subset of these features employed in Acadia.
+The RF Data Converter subsystem of the RFSoC comprises a variety of digital signal processing hardware in addition to the actual data conversion cores themselves. The existence and performance of these modules is a critical benefit of using the RFSoC, and we now describe a subset of these features employed in Acadia.
 
  Digital-to-Analog Converters (DAC)
 ------------------------------------
 
+The DAC region of the RF Data Converter tile embedded in the RFSoC contains much more than simply a DAC core; notably, a chain of pre-processing logic preceding the DAC core and a highly-connected clock synthesis and distribution network for the sample clock, both of which are reconfigurable in software. We'll describe the various features of the components integrated in the hardware below. 
+
  Interpolation
 ^^^^^^^^^^^^^^^
 
- Numerically-Controlled Oscillator
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+To take advantage of direct digital synthesis at microwave frequencies, sample rates of the synthesizing DAC core must be comparable to the desired carrier frequency. However, many applications do not require the signal envelopes which modulate the carrier to have bandwidths of this magnitude; they can be much smaller. Therefore, it would be very wasteful to store the pulse envelope in memory at the sample rate of the DAC core when a much smaller sample rate is sufficient for losslessly storing the envelope, but the DAC core still needs to be provided with data at its full sample rate. 
+
+These requirements are reconciled by interpolating the low-bandwidth sample data stored in memory before passing it to the DAC core. Interpolation can take many forms and is commonly used in data analysis, but one should note that many common types of interpolation (e.g., linear, cubic spline, etc.) will introduce additional spectral content outside the bandwidth of the original pulse and may require significant logic resources to implement at high bandwidth. Fortunately, there is an optimal (and resource-efficient) way to interpolate between samples of band-limited data, as described in the Background section. 
+
+The RFSoC Data Converter implements interpolation at the interface to the tile, so that the logic in the FPGA can provide data at a reduced rate but allow all further processing and synthesis occur at the full bandwidth of the DAC core. The interpolator block operates by inserting zero-valued samples between its inputs, such that its output sample rate matches that of the DAC core. Before exiting the block, the signal is filtered by a reconfigurable chain of digital FIR filters. Because the total filter transfer function is reconfigurable and because the interpolator can insert a controllable number of samples, the interpolator can function effectively for multiple interpolation factors. The available total interpolation factors in the RFSoC are 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, and 40. Note that there is an additional factor-of-two interpolation if the datapath is configured in IMR mode, as described in the section about numerically-controlled oscillators.
+
+ Numerically-Controlled Oscillator (NCO)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
  Multi-band Crossbar
 ^^^^^^^^^^^^^^^^^^^^^

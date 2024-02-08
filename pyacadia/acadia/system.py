@@ -6,10 +6,11 @@ import struct
 import builtins
 from dataclasses import dataclass
 from functools import wraps
+from typing import Union, Callable
 
 import numpy as np
 
-from .arrays import Array, Waveform, DecimatedWaveform
+from .arrays import Array, Waveform
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
@@ -647,7 +648,7 @@ class Acadia:
         
         return self._sequencer_type()
     
-    def sequence(self, func) -> Sequencer:
+    def sequence(self, func: Callable) -> Sequencer:
         """
         Compiles a Python function as a sequence for the Acadia sequencer. 
         The wrapped function should accept an instance of :class:`Acadia` as
@@ -674,7 +675,7 @@ class Acadia:
         
         # Call the function to populate the sequencer object and compile it
         with s:
-            func(self)
+            retval = func(self)
             
         self._active_sequencer = None
 
@@ -688,7 +689,7 @@ class Acadia:
         # the sequence resource
         s.size = s.Instruction.usage()
         
-        return s
+        return retval
                         
     # -------------- CLOCKING AND SYNCHRONIZATION ROUTINES ----------- #
     
@@ -1126,42 +1127,213 @@ class Acadia:
                 "kwargs": params,
                 "retval": None})
             
+    def convert(self,
+                value: float,
+                value_units: str,
+                output_units: str,
+                element_size: Union[int, np.dtype] = None,
+                bytes_per_cycle: Union[int, float] = None,
+                cycles_per_second: int = None) -> Union[int, float]:
+        """
+        Convert between various units of time or memory space. When converting
+        from a unit that is expected not to be an integer (e.g. seconds) to 
+        one that is (e.g. samples), an exception is raised if the result is not
+        an integer.
+
+        The `*_units` quantities can take on the following values:
+
+        - `elements` or `samples` or `items`: The input value represents the
+            number of elements in an array 
+        - `bytes`: The input value represents the size of an array in bytes
+        - `cycles`: The input value represents a number of cycles of the sequencer
+        - `seconds`: The input value represents a length of time in seconds
+
+        :param value: Value to convert
+        :type value: float
+        :param value_units: Units of input value
+        :type value_units: str
+        :param output_units: The desired output units
+        :type output_units: str
+        :param element_size: The size in bytes of an element. A `np.dtype` may
+            also be provided, in which case its `itemsize` property will be 
+            used. This may be omitted if it is expected that the conversion will
+            not require it, in which case an exception will be raised
+        :type element_size: int or np.dtype
+        :param bytes_per_cycle: The number of bytes corresponding to a single 
+            cycle. A `np.dtype` may also be provided, in which case its 
+            `itemsize` property will be used. If omitted, the width of the
+            stream processing path is used.
+        :type bytes_per_cycle: int or np.dtype
+        :param cycles_per_second: The number of cycles corresponding to one 
+            second. If not provided, the sequencer clock rate is used.
+
+        """
+        if value is None:
+            return None
+        
+        if isinstance(element_size, np.dtype):
+            element_size = element_size.itemsize
+
+        if bytes_per_cycle is None:
+            bytes_per_cycle = self._firmware["stream_processing_path"]["width"] // 8
+        elif isinstance(bytes_per_cycle, np.dtype):
+            bytes_per_cycle = bytes_per_cycle.itemsize
+
+        if cycles_per_second is None:
+            cycles_per_second = self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+        
+        element_units = ["elements", "samples", "items"]
+        
+        if output_units == value_units or (value_units in element_units and output_units in element_units):
+            return value
+
+        if value_units in element_units:
+            if output_units == "bytes":
+                if element_size is None:
+                    raise ValueError(f"Element size required for converting"
+                                     f" {value_units} to {output_units}.")
+                return int(round(element_size * value))
+            if output_units == "cycles":
+                value_bytes = self.convert(value, "elements", "bytes", element_size, bytes_per_cycle, cycles_per_second)
+                if bytes_per_cycle is None:
+                    raise ValueError(f"Bytes per cycle required for converting"
+                                     f" {value_units} to {output_units}.")
+                if round(value_bytes / bytes_per_cycle) != round(value_bytes / bytes_per_cycle, 3):
+                    raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
+                return int(round(value_bytes / bytes_per_cycle))
+            if output_units == "seconds":
+                if cycles_per_second is None:
+                    raise ValueError(f"Cycles per second required for converting"
+                                     f" {value_units} to {output_units}.")
+                value_cycles = self.convert(value, "elements", "cycles", element_size, bytes_per_cycle, cycles_per_second)
+                return value_cycles / cycles_per_second
+            raise ValueError(f"Unrecognized output unit {output_units}")
+            
+        elif value_units == "bytes":
+            if output_units in element_units:
+                if element_size is None:
+                    raise ValueError(f"Element size required for converting"
+                                     f" {value_units} to {output_units}.")
+                if value % element_size != 0:
+                    raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
+                return int(value // element_size)
+            if output_units == "cycles":
+                if bytes_per_cycle is None:
+                    raise ValueError(f"Bytes per cycle required for converting"
+                                     f" {value_units} to {output_units}.")
+                value_cycles = value / bytes_per_cycle
+                if round(value_cycles) != round(value_cycles, 3):
+                    raise ValueError(f"Unable to convert byte value ({value})"
+                                     f" into cycles ({value_cycles}).")
+                return int(round(value_cycles))
+            if output_units == "seconds":
+                value_cycles = self.convert(value, "bytes", "cycles", element_size, bytes_per_cycle, cycles_per_second)
+                return self.convert(value_cycles, "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
+            raise ValueError(f"Unrecognized output unit {output_units}")
+        
+        elif value_units == "cycles":
+            if output_units in element_units or output_units == "bytes":
+                if bytes_per_cycle is None:
+                    raise ValueError(f"Bytes per cycle required for converting"
+                                     f" {value_units} to {output_units}.")
+                value_bytes = value * bytes_per_cycle
+                return self.convert(value_bytes, "bytes", output_units, element_size, bytes_per_cycle, cycles_per_second)
+            else:
+                if cycles_per_second is None:
+                    raise ValueError(f"Cycles per second required for converting"
+                                     f" {value_units} to {output_units}.")
+                return value / cycles_per_second
+            
+        elif value_units == "seconds":
+            if cycles_per_second is None:
+                    raise ValueError(f"Cycles per second required for converting"
+                                     f" {value_units} to {output_units}.")
+            value_cycles = value * cycles_per_second
+            if round(value_cycles) != round(value_cycles, 3):
+                raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
+            return self.convert(int(round(value_cycles)), "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
+
+        raise ValueError(f"Unrecognized value unit {value_units}")
+        
     @requires_sequencer
     def stream(self, 
-               src, 
-               dst: Array, 
-               dst_offset = None,
+               src: Union[Channel, Array], 
+               dst: Array = None, 
+               length: float = None,
+               length_units: str = "samples",
+               offset: float = 0,
+               offset_units: str = "samples",
                configuration: StreamConfiguration = None):
         """
-        Stream data from a source to a destination array.
+        Stream data from a source to a destination array. This method is able
+        to allocate and return an array to use as a destination, which will 
+        occur if either ``dst`` or ``offset`` are omitted.
         
         :param src: Data source. If a configuration is provided and this is of
             type :class:`Channel`, the channel in the configuration must match.
         :type src: :class:`Channel` or :class:`Array`
-        :param dst: Data destination
+        :param dst: Data destination. If not allocated, will be allocated based
+            on ``length``
         :type dst: :class:`Array`
+        :param offset: Offset within `dst` at which the stream will be written
+        :param offset_units: Units for `offset`. May be either "elements" (of 
+            dst), "bytes", or "seconds"
+        :param length: Length of data to stream. If `None`, the full length of 
+            `dst` is used.
+        :param length_units: Units for `length`. May be either "elements" (of 
+            dst), "bytes", "cycles", or "seconds"
         :param configuration: Stream configuration to use. If `None`, a new one
             will be requested.
         :type configuration: :class:`StreamConfiguration`
-        :return: The configuration used for streaming
+        :return: The destination array and the configuration used for streaming
         :rtype: :class:`StreamConfiguration`
         """
+        if dst is None and length is None:
+            raise ValueError("Must provide either destination or length for capture")
         
-        path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
+        path_width_bytes = self._firmware["stream_processing_path"]["width"] // 8
         
-        if (dst.byte_length() // 4) % path_width_samples != 0:
-            raise ValueError(f"Destination size {dst.byte_length()} cannot"
-                                f" be filled in an integer number of cycles"
-                                f" (path width {path_width_samples} samples)")
+        if dst is None:
+            if isinstance(src, Channel):
+                length_samples = self.convert(length, 
+                                              length_units, 
+                                              "samples", 
+                                              4, 
+                                              path_width_bytes)
+                logging.debug(f"Allocating Waveform with {length_samples} samples")
+                dst = Waveform(src, length=length_samples, region=self.PLDDR0Array)
+            elif isinstance(src, Array):
+                logging.debug(f"Allocating Array with {len(src)} elements")
+                dst = Array(src.dtype, length=len(src), region=self.PLDDR0Array)
+            else:
+                raise TypeError(f"Invalid source type {type(src)}")
+
+        if length is not None:
+            length_bytes = self.convert(length, 
+                                        length_units, 
+                                        "bytes", 
+                                        dst.dtype,
+                                        path_width_bytes)
+        else:
+            length_bytes = dst.byte_length()
+
+        offset_bytes = self.convert(offset, 
+                                    offset_units, 
+                                    "bytes", 
+                                    dst.dtype,
+                                    path_width_bytes)
+        
+        length_cycles = self.convert(length_bytes, "bytes", "cycles", 32 // 8, path_width_bytes)
+        logging.debug(f"Stream length {length_cycles}, of size {length_bytes}"
+                      f" bytes to address 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
         
         if configuration is None:
             config_src = src if isinstance(src, Channel) else "memory"
             configuration = self._request_stream_configuration(config_src, "memory")
         
-        dst_address = dst.byte_address() + (dst_offset if dst_offset is not None else 0)
         self._command_datamover(configuration.output_datamover(), 
-                                   dst_address,
-                                   dst.byte_length())
+                                   dst.byte_address() + offset_bytes,
+                                   length_bytes)
 
         if isinstance(src, Channel):
             # notify the synchronizer, which will then add the DMA command for us        
@@ -1171,42 +1343,156 @@ class Acadia:
                 "args": (), 
                 "kwargs": {
                     "channel": src,
-                    "length": dst.byte_length() // src.interface_width_bytes,
+                    "length": length_cycles,
                     "word_address": 0
                 },
                 "retval": None})
-        else:
-            self._command_datamover(f"input{configuration.input_switch_master}_s2mm_datamover", 
+        elif isinstance(src, Array):
+            self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
                                    src.byte_address(),
-                                   dst.byte_length())
-            
-        return configuration
+                                   length_bytes)
+        else:
+            raise TypeError(f"Unable to use source of type {type(src)}")
+        
+        return dst,configuration
             
     @requires_sequencer
     def stream_decimated(self, 
                          src, 
-                         dst: DecimatedWaveform, 
-                         dst_offset = None,
+                         dst: Waveform = None, 
+                         length: Union[int,float] = None,
+                         length_units: str = "samples",
+                         offset: Union[int,float] = 0,
+                         offset_units: str = "elements",
+                         decimation: int = None,
                          configuration: StreamConfiguration = None):
         """
         Stream data from a source to a destination array through a DSP module
-        configured to decimate the input stream.
+        configured to decimate the input stream. This method is able to 
+        automatically allocate an array for the capture destination, depending
+        on the following combinations of keywords:
+
+        Note that in this method, ``length`` refers to the length of the signal
+        before decimation, rather than the length of data that will be occupied
+        after decimation.
+
+        - If two or more of ``dst``, ``length``, and ``decimation`` are 
+            ``None``, an error is thrown.
         
+        - If ``dst`` is ``None`` but ``length`` and ``decimation`` are 
+            provided, a :class:`Waveform` is allocated to store the 
+            result. If ``decimation == 0``, the decimation will be set equal to
+            the length.
+
+        - If ``dst`` and ``decimation`` are provided but ``length`` is not,
+            the full length of the destination is used and the length of the
+            input is inferred from the destination length times the decimation.
+
+        - If ``dst`` and ``length`` are provided but ``decimation`` is not, the
+            decimation factor is inferred from ratio of ``length`` to the size 
+            of ``dst``.
+
+        - If ``dst``, ``length``, and ``decimation`` are all provided, 
+            ``length`` is interpreted as the length of the input, which
+            will be decimated by a factor given by ``decimation`` and stored in
+            ``dst``.
+
         :param src: Data source. If a configuration is provided and this is of
             type :class:`Channel`, the channel in the configuration must match.
         :type src: :class:`Channel` or :class:`Array`
         :param dst: Data destination
         :type dst: :class:`DecimatedWaveform`
+        :param offset: Offset within `dst` at which the stream will be written
+        :param offset_units: Units for `offset`. May be either "elements" (of 
+            dst), "bytes", or "seconds"
+        :param length: Length of data to stream
+        :param length_units: Units for `length`. May be either "elements" (of 
+            dst), "bytes", "cycles", or "seconds"
+        :param decimation: Decimation factor
+        :type decimation: int
         :param configuration: Stream configuration to use. If `None`, a new one
             will be requested.
         :type configuration: :class:`StreamConfiguration`
         :return: The configuration used for streaming
         :rtype: :class:`StreamConfiguration`
         """
-        
+        if (dst is None and length is None) or (dst is None and decimation is None) or (decimation is None and length is None):
+            raise ValueError("Must provide at least two of `dst`, `length`, and `decimation`.")
+
         if configuration is None:
             config_src = src if isinstance(src, Channel) else "memory"
             configuration = self._request_stream_configuration(config_src, "dsp")
+
+        path_width = self._firmware["stream_processing_path"]["width"]
+        input_samples_per_cycle = self.convert(1, 
+                                         "cycles", 
+                                         "samples", 
+                                         4,
+                                         path_width // 8)
+        
+        # Validate the decimation if we have one
+        if decimation is not None:
+            if decimation % input_samples_per_cycle != 0:
+                raise ValueError(f"Decimation results in a non-integer"
+                                    f" number of cycles"
+                                    f" ({input_samples_per_cycle} samples per cycle,"
+                                    f" decimation {decimation})")
+            
+        # Validate or create the destination
+        if dst is None:
+            # We must have length and decimation
+            input_length_samples = self.convert(length, 
+                                              length_units, 
+                                              "samples", 
+                                              4, 
+                                              path_width // 8)
+            if decimation == 0:
+                decimation = input_length_samples
+
+            if input_length_samples % decimation != 0:
+                raise ValueError(f"Decimation results in a non-integer"
+                                    f" number of output samples"
+                                    f" ({input_length_samples} samples,"
+                                    f" decimation {decimation})")
+            
+            logging.debug(f"Allocating Waveform with"
+                          f" {input_length_samples} / {decimation} ="
+                          f" {input_length_samples // decimation} samples")
+            dst = Waveform(channel=(src if isinstance(src, Channel) else None), 
+                            length=input_length_samples // decimation, 
+                            region=self.PLDDR0Array, 
+                            quadrature_width=32)
+        else:
+            if dst.dtype != np.dtype('V8'):
+                raise TypeError(f"Destination must have a dtype of V8 (found"
+                                f" {dst.dtype})")
+
+        # We now have a valid destination. Check whether we have a valid 
+        # length, decimation, or both 
+        if length is None:
+            # We must have decimation and will infer the input length from
+            # the size of the destination
+            # output samples * (input samples per output sample) * (1 / input samples per cycle) = number of cycles
+            length_cycles = len(dst) * decimation // input_samples_per_cycle
+            output_length_bytes = dst.byte_length()
+        else:
+            # We have length
+            length_cycles = self.convert(length, 
+                                        length_units, 
+                                        "cycles", 
+                                        4, 
+                                        path_width // 8)
+            
+            # We may or may not have the decimation
+            # If we don't, derive it based on the length of the output
+            if decimation is None:
+                if (length_cycles * input_samples_per_cycle) % len(dst) != 0:
+                    raise ValueError(f"Inferred non-integer decimation"
+                                     f" ({length_cycles} cycles,"
+                                     f" {len(dst)} output samples)")
+                decimation = length_cycles * input_samples_per_cycle // len(dst)
+
+            output_length_bytes = 8 * length_cycles * input_samples_per_cycle // decimation
             
         # Configure the DSP for decimation
         # At packet start and counter start, we'll load in the input value
@@ -1233,25 +1519,62 @@ class Acadia:
         self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
         
         # Counter period low and high
-        path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
-        counter_value = (dst._decimation // path_width_samples) - 1
+        counter_value = (decimation // input_samples_per_cycle) - 1
         self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
         self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
+ 
+        if offset_units == "seconds" or offset_units == "cycles":
+            raise TypeError(f"Use space-like input units for the offset")
         
-        self.stream(src, dst, dst_offset, configuration)
+        offset_bytes = self.convert(offset, 
+                                    offset_units, 
+                                    "bytes", 
+                                    64 // 8) # DSP module creates 64-bit elements
+        
+        logging.debug(f"Stream length {length_cycles} cycles, decimation {decimation},"
+                      f" of output size {output_length_bytes} bytes to address"
+                      f" 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
+
+        self._command_datamover(configuration.output_datamover(), 
+                                dst.byte_address() + offset_bytes,
+                                output_length_bytes)
+
+        if isinstance(src, Channel):
+            # notify the synchronizer, which will then add the DMA command for us   
+            self.channel_synchronizer.add({
+                "function": DMASynchronizer.DMA, 
+                "self": self, 
+                "args": (), 
+                "kwargs": {
+                    "channel": src,
+                    "length": length_cycles,
+                    "word_address": 0
+                },
+                "retval": None})
+        else:
+            input_length_bytes = self.convert(length, length_units, "bytes")
+            self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
+                                   src.byte_address(),
+                                   input_length_bytes)
+            
+        return dst,configuration
         
     @requires_sequencer
     def stream_accumulated(self, 
                             src, 
-                            dst: DecimatedWaveform,
-                            length_seconds: float, 
-                            dst_offset = None,
+                            dst: Waveform,
+                            accumulation_length: Union[int,float], 
+                            accumulation_length_units: str, 
+                            offset: Union[int,float] = 0,
+                            offset_units = None,
+                            kernel_length: Union[int,float] = None,
+                            kernel_length_units: float = None,
+                            kernel: Waveform = None,
                             cmacc_preload: complex = 0,
                             write_mode: str = "upper", 
                             last_only: bool = True, 
                             reset_fifo: bool = False,
-                            accumulator_done: bool = True,
-                            kernel: DecimatedWaveform = None,
+                            accumulator_done: bool = False,
                             configuration: StreamConfiguration = None):
         """
         Stream data from a source to a destination array through a CMACC 
@@ -1263,10 +1586,26 @@ class Acadia:
         :type src: :class:`Channel` or :class:`Array`
         :param dst: Data destination
         :type dst: :class:`DecimatedWaveform`
-        :param length_seconds: The length of data to accumulate.
-        :type length_seconds: float
+        :param accumulation_length: Length of data to stream. If `None`, when 
+            `src` is an :class:`Array` its full length is used, and when `src` 
+            is a :class:`Channel` an exception is thrown.
+        :param accumulation_length_units: Units for `length`. May be either 
+            "elements" (of src), "bytes", "cycles", or "seconds"
+        :param offset: Offset within `dst` at which the stream will be written
+        :param offset_units: Units for `offset`. May be either "elements" (of 
+            dst), "bytes", or "seconds"
+        :param kernel_length: Length of kernel to allocate. If `None`, the 
+            length of `dst` is used. If `0`, a single-sample kernel is allocated,
+            effectively creating a boxcar filter.
+        :param kernel_length_units: Units for `kernel_length`. May be either 
+            "elements" (of dst), "bytes", "cycles", or "seconds"
+        :param kernel: If not `None`, a Waveform may be provided as the kernel
+            to use (rather than allocating a new one).
+        :type kernel: :class:`Waveform`
         :param cmacc_preload: Value to load into the accumulator prior to 
-            beginning accumulation. If `None`, nothing is written.
+            beginning accumulation. If `None`, nothing is written, which also 
+            means that it will not be reset; any accumulated data will be added
+            to whatever is in the accumulator.
         :type cmacc_preload: complex
         :param write_mode: Controls the value streamed out of the CMACC. If
             "upper" or "lower", the upper/lower 32 bits of the accumulator are
@@ -1288,41 +1627,51 @@ class Acadia:
         :rtype: tuple of :class:`StreamConfiguration` and Waveform
         """
         
+        if write_mode is not None and dst is None:
+            raise TypeError("dst must not be `None` if write_mode is not `None`")
+
         if configuration is None:
             config_src = src if isinstance(src, Channel) else "memory"
             configuration = self._request_stream_configuration(config_src, "dsp")
             
         # Allocate kernel memory if needed
         if kernel is None:
-            if isinstance(src, Channel):
-                path_width_samples = self._firmware["stream_processing_path"]["width"] // 32
-                kernel = DecimatedWaveform(src, 
-                                length_seconds=length_seconds, 
-                                decimation=path_width_samples,
-                                integer_width=16,
-                                region=self.CMACCKernelArray[configuration.module_resource._resource_id])
-            elif isinstance(src, Array):
-                length_cycles = src.byte_length() // (self._firmware["stream_processing_path"]["width"] // 8)
-                    
-                kernel = Array(np.dtype("V4"), 
-                                length=length_cycles, 
-                                region=self.CMACCKernelArray[configuration.module_resource._resource_id]) 
+            if kernel_length == 0:
+                kernel_length_elements = 1
+            elif kernel_length is not None:
+                kernel_length_elements = self.convert(kernel_length, 
+                                                    kernel_length_units, 
+                                                    "elements", 
+                                                    32 // 8, # Kernel memory is 32 bits wide 
+                                                    32 // 8)
             else:
-                raise TypeError(f"Source must be Array or Channel; received {src}")
-        
+                kernel_length_elements = dst.word_length()
+
+            logging.debug(f"Allocating kernel Waveform with {kernel_length_elements} samples")
+            kernel = Waveform(length=kernel_length_elements, 
+                            region=self.CMACCKernelArray[configuration.module_resource._resource_id]) 
+        elif kernel_length is not None:
+            raise ValueError(f"Parameter `kernel_length` must be `None` when"
+                            f" the kernel is provided (received"
+                            f" {kernel_length}).")
+
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
         if cmacc_preload is not None:
-            self.sequencer().bus_write(address=registers, data=cmacc_preload.real)
-            self.sequencer().bus_write(address=registers+1, data=cmacc_preload.imag)
+            offset_converted = Waveform.from_complex(np.array(cmacc_preload), np.dtype("V8")).view(np.int32)
+            self.sequencer().bus_write(address=registers, data=offset_converted[0])
+            self.sequencer().bus_write(address=registers+1, data=offset_converted[1])
+
+        # Set the kernel start and end addresses
+        # The kernel uses one element per cycle
+        logging.debug(f"Using kernel at address 0x{kernel.word_address():04X} of length {len(kernel)}")
+        kernel_reg = kernel.word_address() | ((kernel.word_address() + len(kernel)) << 16)
+        kernel_reg &= 0xFFFFFFFF
+        self.sequencer().bus_write(address=registers+3, data=kernel_reg)
             
         control_reg = 0
-        control_reg |= kernel.word_address()
         
         if accumulator_done:
             control_reg |= 1 << 18
-            
-        if write_mode is not None and dst is None:
-            raise TypeError("dst must not be `None` if write_mode is not `None`")
             
         if write_mode == "upper":
             control_reg |= 1 << 21
@@ -1342,11 +1691,74 @@ class Acadia:
         if reset_fifo:
             control_reg |= 1 << 24
             
+        logging.debug(f"Setting CMACC control register to 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
+
+        if offset_units == "seconds" or offset_units == "cycles":
+            raise TypeError(f"Use space-like input units for the offset")
         
-        self.stream(src, dst, dst_offset, configuration)
+        offset_bytes = self.convert(offset, 
+                                    offset_units, 
+                                    "bytes", 
+                                    dst.dtype.itemsize,
+                                    self._firmware["stream_processing_path"]["width"] // 8)
         
-        return configuration, kernel
+        # Command the destination datamover
+        if write_mode is not None:
+            # CMACC produces 32 bits per cycle at its output
+            output_length_bytes = 64 // 8
+
+            if not last_only:
+                output_length_bytes *= self.convert(accumulation_length, 
+                                                    accumulation_length_units, 
+                                                    "cycles", 
+                                                    32 // 8) 
+
+            self._command_datamover(configuration.output_datamover(), 
+                                    dst.byte_address() + offset_bytes,
+                                    output_length_bytes)
+            
+        accumulation_length_cycles = self.convert(accumulation_length, 
+                                                    accumulation_length_units, 
+                                                    "cycles", 
+                                                    32 // 8)
+            
+        logging.debug(f"Stream length {accumulation_length_cycles} cycles,"
+                      f" of output size {output_length_bytes} bytes to address"
+                      f" 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
+        
+        # Add commands to get data from the source
+        if isinstance(src, Channel):
+            # notify the synchronizer, which will then add the DMA command for us       
+            if accumulation_length is None:
+                raise ValueError(f"Accumulation length must be provided when"
+                                 f" the source is a channel.") 
+            
+            self.channel_synchronizer.add({
+                "function": DMASynchronizer.DMA, 
+                "self": self, 
+                "args": (), 
+                "kwargs": {
+                    "channel": src,
+                    "length": accumulation_length_cycles,
+                    "word_address": 0
+                },
+                "retval": None})
+        elif isinstance(src, Array):
+            if accumulation_length is None:
+                accumulation_length = src.byte_length()
+                accumulation_length_units = "bytes"
+            accumulation_length_bytes = self.convert(accumulation_length, 
+                                                    accumulation_length_units, 
+                                                    "bytes", 
+                                                    src.dtype)
+            self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
+                                   src.byte_address(),
+                                   accumulation_length_bytes)
+        else:
+            raise TypeError(f"Unable to use source of type {type(src)}")
+        
+        return dst, configuration, kernel
     
     @requires_sequencer
     def cmacc_done(self, configuration: StreamConfiguration):
@@ -1689,7 +2101,7 @@ class Acadia:
         Compiles the programs for all internally-stored :class:`Processor` 
         objects.
         """
-        self.sequence(sequence)
+        retval = self.sequence(sequence)
         
         for s in self._sequencer_type.instances:
             s.compile_all(overwrite)
@@ -1697,6 +2109,8 @@ class Acadia:
             dma.compile_all(overwrite)
         for dma in self._adc_dmas:
             dma.compile_all(overwrite)
+
+        return retval
 
     def assemble(self) -> tuple:
         """

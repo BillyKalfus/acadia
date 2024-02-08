@@ -1,39 +1,41 @@
 from dataclasses import dataclass
 
-from acadia.runtime import Runtime
-from acadia.data import DataManager, PlotMixin, ArrayRecordGroup
+import numpy as np
 
-class LoopbackRecordGroup(ArrayRecordGroup, PlotMixin):
+from acadia.runtime import Runtime, PyPlotRuntimeComponent, CounterRuntimeComponent
+from acadia.data import DataManager, ArrayRecordGroup
+
+class LoopbackPlot(PyPlotRuntimeComponent):
     """
     A custom record group for collecting the results of the 
     :class:`LoopbackRuntime` and displaying them in a plot.
     """
+
+    def create_plot(self):
+        self.figure().set_size_inches(6,4) 
+        self.ax = self.figure().add_subplot()
+        self.line_re = self.ax.plot([], [], animated=False)
+        self.line_im = self.ax.plot([], [], animated=False)
+        self.ax.set_ylim(-0.05, 0.05)
+        self.ax.grid()
     
-    def plot(self, fig):
-        fig.set_size_inches(6,4) 
-        ax = fig.add_subplot()
-        (line_re,) = ax.plot([], [], animated=False)
-        (line_im,) = ax.plot([], [], animated=False)
-        ax.set_ylim(-0.05, 0.05)
-        ax.set_xlim(0,5)
-        ax.grid()
-          
-        def update(animation, framedata):
-            import numpy as np
-            from acadia.arrays import Waveform
+    def update_plot(self):
+        import numpy as np
+        from acadia.arrays import Waveform
 
-            if self.records() is not None:
-                # Just plot only the most recently received trace
-                axis = self.axis()
-                sample_rate = 1 / (axis[1] - axis[0])
-                trace = Waveform(sample_rate_or_channel=sample_rate, 
-                                 data=self.records()[-1,:]).unpack()
-                
-                line_re.set_data(axis*1e6, np.real(trace))
-                line_im.set_data(axis*1e6, np.imag(trace))
-        
-        return update
+        if "traces" in self.runtime.data and self.runtime.data["traces"].records() is not None:
+            records = self.runtime.data["traces"].records()
+            if not hasattr(self, "axis"):
+                num_samples = records.shape[-1]
+                capture_time = self.runtime.data["traces"].metadata()["capture_time"]
+                self.axis = np.linspace(0, capture_time, num_samples)
+                self.ax.set_xlim(self.axis[0]*1e6, self.axis[-1]*1e6)
 
+            # Just plot only the most recently received trace
+            trace = Waveform.to_complex(records[-1,:])
+            PyPlotRuntimeComponent.update_line(self.line_re, self.axis*1e6, np.real(trace))
+            PyPlotRuntimeComponent.update_line(self.line_im, self.axis*1e6, np.imag(trace))
+    
 @dataclass           
 class LoopbackRuntime(Runtime):
     """
@@ -69,13 +71,16 @@ class LoopbackRuntime(Runtime):
     capture_time: float = None
 
     # Number of times to run the sequence
-    iterations: int = 1000
+    iterations: int = 100
     
     FILENAME = __file__
+
+    def initialize(self) -> None:
+        self.add_component(LoopbackPlot)
+        self.add_component(CounterRuntimeComponent, "Iterations")
     
     def main(self, directory: str, datamanager: DataManager):
         import time
-        import numpy as np
         from acadia.system import Acadia
         from acadia.arrays import Waveform, WindowedConstantWaveform
         
@@ -88,20 +93,19 @@ class LoopbackRuntime(Runtime):
 
         capture_channel = acadia.ADC(self.DAC)
         capture_time = self.capture_time if self.capture_time is not None else self.stimulus_ramp_time + self.stimulus_constant_time
-        capture_data = Waveform(capture_channel, length_seconds=capture_time, region=acadia.PLDDR0Array)
                         
         # We'll collect the data traces in a record group
-        datamanager.add_group(LoopbackRecordGroup("traces", 
-                                                  directory, 
-                                                  axes=[capture_data.axis()]))
+        datamanager.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
         
         # Create a sequence for the sequencer
         def sequence(a: Acadia):
             with a.channel_synchronizer():
-                a.stream(capture_channel, capture_data)
+                capture_data,_ = a.stream(capture_channel, length=capture_time, length_units="seconds")
                 a.generate(pulse)
 
-        acadia.compile(sequence)
+            return capture_data
+
+        capture_data = acadia.compile(sequence)
 
         # Attach to the hardware
         acadia.attach()
@@ -112,8 +116,8 @@ class LoopbackRuntime(Runtime):
         time.sleep(1)
 
         # Load the wave memory with the pulse by calling the generator function
-        pulse[:] = np.hanning(len(pulse))
-        pulse.flush(scale=self.stimulus_amplitude)
+        pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
+        Waveform.from_complex(pulse_complex, pulse, scale=self.stimulus_amplitude)
 
         # Configure channel parameters
         pulse_channel.set_nyquist_zone(self.stimulus_NZ)
@@ -126,7 +130,6 @@ class LoopbackRuntime(Runtime):
         capture_channel.reset_nco_phase()
         acadia.pulse_sysref(1)        
                 
-        for shot in datamanager.report_iterations(range(self.iterations)):
+        for shot in datamanager.count(self.iterations, name="Iterations"):
             acadia.run(assemble=(shot==0))
-            with capture_data.unbuffer():
-                datamanager.write("traces", capture_data.memory)
+            datamanager.write("traces", capture_data)

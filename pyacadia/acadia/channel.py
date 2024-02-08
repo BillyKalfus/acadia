@@ -1,7 +1,6 @@
 __all__ = ["Channel"]
 
 from dataclasses import dataclass
-import struct
 
 import numpy as np
 
@@ -9,8 +8,8 @@ from .compiler import Processor
 
 try:
     import pyxrfdc as xrfdc
-except ImportError as e:
-    print(e)
+except:
+    pass
 
 @dataclass
 class Channel:
