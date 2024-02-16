@@ -11,4 +11,7 @@ setup (name = 'pyacadia',
        author = 'William Kalfus',
        author_email = 'william.kalfus@yale.edu',
        packages=find_packages(),
-       ext_modules=([ps_functions_module] if platform.processor() == "aarch64" else []))
+       ext_modules=([ps_functions_module] if platform.processor() == "aarch64" else []),
+       extras_require={
+          'host': ['jupyter', 'ipywidgets', 'ipython', 'ipympl', 'tqdm', 'scipy']
+      })

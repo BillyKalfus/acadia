@@ -2,7 +2,7 @@
 
 HOSTNAME=billy-zcu216
 MAC=76:54:C6:67:BC:BB
-IP=192.168.2.69
+# IP=192.168.2.69  #DHCP for Yale network
 
 # Set the hostname
 hostname $HOSTNAME
