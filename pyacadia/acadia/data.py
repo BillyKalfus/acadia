@@ -201,11 +201,11 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         if (metadata1 is None or len(metadata1) == 0 or metadata1["overwriting"]):
             return (0, size_bytes2)
         
-        if ((metadata1["descr"] != metadata2["descr"]) 
-                or (metadata1["shape"] != metadata2["shape"])):
-            raise TypeError(f"Descriptor mismatch between metadata:\n"
-                            f"    metadata1: {metadata1}\n"
-                            f"    metadata2: {metadata2}")
+        # if ((metadata1["descr"] != metadata2["descr"]) 
+        #         or (metadata1["shape"] != metadata2["shape"])):
+        #     raise TypeError(f"Descriptor mismatch between metadata:\n"
+        #                     f"    metadata1: {metadata1}\n"
+        #                     f"    metadata2: {metadata2}")
                 
         size_bytes1 = metadata1["count"]*reduce(operator.mul, metadata2["shape"], dtype.itemsize)
         return (size_bytes1, size_bytes2-size_bytes1)

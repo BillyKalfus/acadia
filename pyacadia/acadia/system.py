@@ -666,8 +666,6 @@ class Acadia:
         # Drive the sequencer done pin low
         s.bus_write(address=self._firmware.sequencer_bus_decoder["ps_gpio5"].address(), data=0)
         
-        # Reset all the stream modules
-        
         # Store this particular Sequencer instance as an instance member of the 
         # Acadia object so that helper functions of the Acadia object know to 
         # use it
@@ -675,6 +673,8 @@ class Acadia:
         
         # Call the function to populate the sequencer object and compile it
         with s:
+             # Reset all the stream modules
+            self.reset_all_streams()
             retval = func(self)
             
         self._active_sequencer = None
@@ -1562,15 +1562,16 @@ class Acadia:
     @requires_sequencer
     def stream_accumulated(self, 
                             src, 
-                            dst: Waveform,
                             accumulation_length: Union[int,float], 
-                            accumulation_length_units: str, 
+                            accumulation_length_units: str,
+                            dst: Waveform = None, 
                             offset: Union[int,float] = 0,
-                            offset_units = None,
+                            offset_units = "elements",
                             kernel_length: Union[int,float] = None,
-                            kernel_length_units: float = None,
+                            kernel_length_units: float = "elements",
                             kernel: Waveform = None,
-                            cmacc_preload: complex = 0,
+                            cmacc_preload_re: int = 0,
+                            cmacc_preload_im: int = 0,
                             write_mode: str = "upper", 
                             last_only: bool = True, 
                             reset_fifo: bool = False,
@@ -1586,9 +1587,10 @@ class Acadia:
         :type src: :class:`Channel` or :class:`Array`
         :param dst: Data destination
         :type dst: :class:`DecimatedWaveform`
-        :param accumulation_length: Length of data to stream. If `None`, when 
-            `src` is an :class:`Array` its full length is used, and when `src` 
-            is a :class:`Channel` an exception is thrown.
+        :param accumulation_length: Length of data to stream, as seen at the 
+            input to the CMACC. If `None`, when `src` is an :class:`Array` 
+            its full length is used, and when `src` is a :class:`Channel`
+            an exception is thrown.
         :param accumulation_length_units: Units for `length`. May be either 
             "elements" (of src), "bytes", "cycles", or "seconds"
         :param offset: Offset within `dst` at which the stream will be written
@@ -1623,17 +1625,32 @@ class Acadia:
         :param configuration: Stream configuration to use. If `None`, a new one
             will be requested.
         :type configuration: :class:`StreamConfiguration`
-        :return: The configuration used for streaming and the kernel memory
+        :return: A tuple containing the destination, the configuration, and the
+            kernel memory
         :rtype: tuple of :class:`StreamConfiguration` and Waveform
         """
-        
-        if write_mode is not None and dst is None:
-            raise TypeError("dst must not be `None` if write_mode is not `None`")
 
         if configuration is None:
             config_src = src if isinstance(src, Channel) else "memory"
-            configuration = self._request_stream_configuration(config_src, "dsp")
-            
+            configuration = self._request_stream_configuration(config_src, "cmacc")
+            self.stream_reset(configuration)
+
+        accumulation_length_cycles = self.convert(accumulation_length, 
+                                                    accumulation_length_units, 
+                                                    "cycles", 
+                                                    32 // 8)
+
+        if dst is None and write_mode is not None:
+            if last_only:
+                dst_length_samples = 1
+            else:
+                dst_length_samples = self.convert(accumulation_length_cycles, 
+                                                    "cycles", 
+                                                    "elements", 
+                                                    64 // 8, # Kernel memory is 32 bits wide 
+                                                    64 // 8)
+            dst = Waveform(length=dst_length_samples, region=self.PLDDR0Array, quadrature_width=32)
+
         # Allocate kernel memory if needed
         if kernel is None:
             if kernel_length == 0:
@@ -1644,8 +1661,10 @@ class Acadia:
                                                     "elements", 
                                                     32 // 8, # Kernel memory is 32 bits wide 
                                                     32 // 8)
-            else:
+            elif not last_only:
                 kernel_length_elements = dst.word_length()
+            else:
+                raise ValueError("Unable to infer kernel length.")
 
             logging.debug(f"Allocating kernel Waveform with {kernel_length_elements} samples")
             kernel = Waveform(length=kernel_length_elements, 
@@ -1656,19 +1675,23 @@ class Acadia:
                             f" {kernel_length}).")
 
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
-        if cmacc_preload is not None:
-            offset_converted = Waveform.from_complex(np.array(cmacc_preload), np.dtype("V8")).view(np.int32)
-            self.sequencer().bus_write(address=registers, data=offset_converted[0])
-            self.sequencer().bus_write(address=registers+1, data=offset_converted[1])
+
+        if cmacc_preload_re is not None:
+            self.sequencer().bus_write(address=registers, data=cmacc_preload_re)
+        if cmacc_preload_im is not None:
+            self.sequencer().bus_write(address=registers+1, data=cmacc_preload_im)
 
         # Set the kernel start and end addresses
         # The kernel uses one element per cycle
         logging.debug(f"Using kernel at address 0x{kernel.word_address():04X} of length {len(kernel)}")
-        kernel_reg = kernel.word_address() | ((kernel.word_address() + len(kernel)) << 16)
+        kernel_reg = kernel.word_address() | ((kernel.word_address() + len(kernel) - 1) << 16)
         kernel_reg &= 0xFFFFFFFF
         self.sequencer().bus_write(address=registers+3, data=kernel_reg)
             
         control_reg = 0
+
+        # Load the kernel pointer from its buffer register
+        control_reg |= 1 << 0
         
         if accumulator_done:
             control_reg |= 1 << 18
@@ -1693,15 +1716,6 @@ class Acadia:
             
         logging.debug(f"Setting CMACC control register to 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
-
-        if offset_units == "seconds" or offset_units == "cycles":
-            raise TypeError(f"Use space-like input units for the offset")
-        
-        offset_bytes = self.convert(offset, 
-                                    offset_units, 
-                                    "bytes", 
-                                    dst.dtype.itemsize,
-                                    self._firmware["stream_processing_path"]["width"] // 8)
         
         # Command the destination datamover
         if write_mode is not None:
@@ -1713,15 +1727,19 @@ class Acadia:
                                                     accumulation_length_units, 
                                                     "cycles", 
                                                     32 // 8) 
+                
+            if offset_units == "seconds" or offset_units == "cycles":
+                raise TypeError(f"Use space-like input units for the offset")
+        
+            offset_bytes = self.convert(offset, 
+                                        offset_units, 
+                                        "bytes", 
+                                        dst.dtype.itemsize,
+                                        self._firmware["stream_processing_path"]["width"] // 8)
 
             self._command_datamover(configuration.output_datamover(), 
                                     dst.byte_address() + offset_bytes,
                                     output_length_bytes)
-            
-        accumulation_length_cycles = self.convert(accumulation_length, 
-                                                    accumulation_length_units, 
-                                                    "cycles", 
-                                                    32 // 8)
             
         logging.debug(f"Stream length {accumulation_length_cycles} cycles,"
                       f" of output size {output_length_bytes} bytes to address"
@@ -1912,6 +1930,26 @@ class Acadia:
                                    src.byte_length())
 
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
+
+    @requires_sequencer
+    def reset_all_streams(self):
+        for idx,module_dict in enumerate(self._firmware["stream_processing_path"]["modules"]):
+            address = self._firmware.sequencer_bus_decoder[f"module{idx}_s2mm_datamover_controller"].address().value()
+            self.sequencer().bus_write(address=address+3, data=0)
+            
+            # Reset the module
+            if module_dict["kind"] == "adder":
+                address = self._firmware.sequencer_bus_decoder[f"module{idx}_registers"].address().value()
+                self.sequencer().bus_write(address=address, data=(1 << 2))
+            elif module_dict["kind"] == "dsp":
+                address = self._firmware.sequencer_bus_decoder[f"module{idx}_registers"].address().value()
+                self.sequencer().bus_write(address=address, data=(1 << 4))
+            elif module_dict["kind"] == "cmacc":
+                address = self._firmware.sequencer_bus_decoder[f"module{idx}_registers"].address().value() + 2
+                self.sequencer().bus_write(address=address, data=(1 << 24))
+
+        for i in range(20):
+            self.sequencer().nop()
         
     @requires_sequencer
     def stream_reset(self, configuration: StreamConfiguration = None):
@@ -1949,7 +1987,7 @@ class Acadia:
         :type configuration: :class:`StreamConfiguration`
         """
         datamover_name = configuration.output_datamover() + "_controller"
-        address = self._firmware.sequencer_bus_decoder[datamover_name] + 1
+        address = self._firmware.sequencer_bus_decoder[datamover_name].address().value() + 1
         return self._active_sequencer.bus_read(address, 
                                         comment=f"Writing bus address register to"
                                                 f" retrieve status count for {datamover_name}",
@@ -1965,14 +2003,14 @@ class Acadia:
         :type configuration: :class:`StreamConfiguration`
         """
         datamover_name = configuration.output_datamover() + "_controller"
-        address = self._firmware.sequencer_bus_decoder[datamover_name] + 2
+        address = self._firmware.sequencer_bus_decoder[datamover_name].address().value() + 2
         return self.sequencer().bus_read(address, 
                                         comment=f"Writing bus address register to"
                                                 f" retrieve status count for {datamover_name}",
                                         latency=self._bus_latency(datamover_name))  
             
     @requires_sequencer
-    def dma_trigger(self, *channels):
+    def channel_trigger(self, *channels):
         """
         Trigger the DMAs associated with the provided channels.
 
@@ -1988,7 +2026,7 @@ class Acadia:
                                  comment="DMA trigger")
         
     @requires_sequencer
-    def dma_block(self, *channels):
+    def channel_block(self, *channels):
         """
         Wait until the DMAs for the specified channels are not running.
         """
@@ -2003,7 +2041,7 @@ class Acadia:
             pass
         
     @requires_sequencer
-    def dma_reset(self, channel):
+    def channel_reset(self, channel):
         """
         Reset the DMAs associated with the provided channel
         """
@@ -2014,7 +2052,7 @@ class Acadia:
                                  comment=f"Reset DMA {dma_name}")
         
     @requires_sequencer
-    def dma_fifo_occupancy(self, channel):
+    def channel_occupancy(self, channel):
         """
         Get the number of commands queued for the DMA of the given channel.
 

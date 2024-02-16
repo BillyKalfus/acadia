@@ -129,8 +129,8 @@ DEFAULT_CONFIG = {
     "ps_axi_slaves": [
         "PS_S_AXI_HPC0", 
         "PS_S_AXI_HPC1", 
-        "PS_S_AXI_HP0",
-        "PS_S_AXI_HP1",
+        # "PS_S_AXI_HP0",
+        # "PS_S_AXI_HP1",
         "DDR4_C0_S_AXI",
         "DDR4_C1_S_AXI"
     ],

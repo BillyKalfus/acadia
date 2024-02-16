@@ -989,7 +989,7 @@ class Firmware:
                                             f"CONFIG.TDATA_NUM_BYTES {{{self.config['stream_processing_path']['width'] // 8}}} "
                                             "CONFIG.DECODER_REG {1} "
                                             "CONFIG.OUTPUT_REG {1} "
-                                            "CONFIG.HAS_TLAST {0} "
+                                            "CONFIG.HAS_TLAST {1} "
                                             "CONFIG.HAS_TREADY {0} "
                                             "CONFIG.TDEST_WIDTH {0}")
 

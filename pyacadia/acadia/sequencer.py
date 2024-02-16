@@ -1310,6 +1310,7 @@ class Sequencer(Processor):
         """
 
         dsp = self.DSP()
+        dsp_cfg = None
         if len(args) == 0:
             # Do nothing
             pass
@@ -1318,8 +1319,9 @@ class Sequencer(Processor):
             start = 0
             stop = args[0]
             step = 1
+            dsp_cfg = DSPConfiguration("P+1", rst_p=True)
             self.store(dest=dsp["CFG"], 
-                       src=DSPConfiguration("P+1", rst_p=True), 
+                       src=dsp_cfg, 
                        comment="Configure DSP for loop")
         elif len(args) == 2:
             start = args[0]
@@ -1329,17 +1331,19 @@ class Sequencer(Processor):
             # since it requires one store to load the start value into a DSP 
             # register and another to configure the DSP to load P with it
             dsp.load(start)
+            dsp_cfg = DSPConfiguration("P+1")
             self.store(dest=dsp["CFG"], 
-                       src=DSPConfiguration("P+1"),
+                       src=dsp_cfg,
                        comment="Configure DSP for loop")
         elif len(args) == 3:
             start = args[0]
             stop = args[1]
             step = args[2]
             dsp.load(start)
+            dsp_cfg = DSPConfiguration("P+AB")
             self.STP(src1=Source(Source.Major.IMM), 
                      dest1=dsp["CFG"], 
-                     imm1=DSPConfiguration("P+AB"),
+                     imm1=dsp_cfg,
                      src2=step,
                      dest2=dsp["AB"],
                      comment="Configure DSP for loop")
@@ -1347,17 +1351,32 @@ class Sequencer(Processor):
             raise ValueError(f"Unrecognized call signature for loop;"
                              f" receieved {args}.")
         
-        loop_block_start = self.Instruction.next_instance()
+        next_instruction = self.Instruction.next_instance()
             
         yield dsp
             
         # Branch back to the start of the loop block if we haven't reached the end
         jump_condition = (dsp != stop) if len(args) > 0 else None
 
-        self.store(src=loop_block_start.value(), 
-                    dest=Destination(Destination.Major.PC, 
-                                    Destination.PC_ABSOLUTE_BRANCH), 
-                    condition=jump_condition,
-                    dsp_cep=dsp.source(),
-                    comment="Branch back to loop start")
+        if not next_instruction.assigned():
+            # Nothing in the loop body, NOP for the given number of times
+            # Set the DSP running in the background so that we don't need to have 
+            # an instruction to check it, we can just hold until it's done
+            # We can use loop_block_state
+            dsp_cfg.dsp_cep = "set"
+            branch = self.store(dest=Destination(Destination.Major.PC, 
+                                        Destination.PC_ABSOLUTE_HOLD), 
+                        condition=jump_condition,
+                        comment="Hold until loop complete")
+            branch.kwargs["src"] = self.Instruction.next_instance()
+
+        else:
+            # Increment the counter and jump back to the loop start
+            dsp_cfg.dsp_cep = "pulse"
+            self.store(src=next_instruction.value(), 
+                        dest=Destination(Destination.Major.PC, 
+                                        Destination.PC_ABSOLUTE_BRANCH), 
+                        condition=jump_condition,
+                        dsp_cep=dsp.source(),
+                        comment="Branch back to loop start")
 

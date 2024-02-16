@@ -403,7 +403,8 @@ class Waveform(Array):
     @staticmethod
     def from_complex(input: Union[Array, np.ndarray], 
                      output: Union[Array, np.ndarray, np.dtype, int] = 32, 
-                     scale: float = 1):
+                     scale: float = 1,
+                     overwrite_input: bool = False):
         """
         Pack the complex floating-point data in an array into integer samples.
         """
@@ -445,9 +446,11 @@ class Waveform(Array):
         int_type = np.dtype(f"<i{output_memory.dtype.itemsize // 2}")
 
         scale *= 2**(int_type.itemsize*8 - 1) - 1 
-        scaled = (input_memory * scale).view(float_type) 
-                
-        np.rint(scaled, out=output_memory.view(int_type), casting="unsafe")
+        scaled = input_memory if overwrite_input else np.empty(input_memory.shape, input_memory.dtype)
+        np.multiply(input_memory, scale, out=scaled)
+        np.rint(scaled.view(float_type), 
+                out=output_memory.view(int_type), 
+                casting="unsafe")
         return output
     
 class ConstantWaveform(Waveform):

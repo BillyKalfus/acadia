@@ -523,6 +523,7 @@ class ManagedMemory(ManagedResource):
         type_instance.word_address = res_word_address
         type_instance.byte_address = res_byte_address
         type_instance.view = res_view
+        type_instance.__len__ = res_word_length
 
         if default_getitem:
             def res_getitem(self, key):

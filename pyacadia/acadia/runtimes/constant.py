@@ -29,26 +29,23 @@ class ConstantRuntime(Runtime):
 
     def main(self, directory: str, datamanager: DataManager):        
         from acadia.system import Acadia
-        from acadia.arrays import ConstantWaveform
+        from acadia.arrays import Waveform, ConstantWaveform
         
         acadia = Acadia()
 
         pulse_channel = acadia.DAC(self.dac_channel)
-        pulse = ConstantWaveform(pulse_channel, length_seconds=500e-9)
+        pulse = ConstantWaveform(pulse_channel, length=1024)
         
-        # Create a sequence for the sequencer
         def sequence(a: Acadia):
-            with a.channel_synchronizer(block=False):
-                a.generate(pulse)
-                
             with a.sequencer().loop():
-                with a.sequencer().test(a.dma_fifo_occupancy(pulse_channel) == 0):
+                # If there are no pulses queued for the channel, play another
+                with a.sequencer().test(a.channel_occupancy(pulse_channel) == 0):
                     with a.channel_synchronizer(block=False):
                         a.generate(pulse)
 
         acadia.compile(sequence)
         acadia.attach()
-        pulse.flush(scale=self.pulse_amplitude)
+        Waveform.from_complex(pulse, self.pulse_amplitude)
         pulse_channel.set_nyquist_zone(self.channel_nyquist_zone)
         pulse_channel.configure_nco(frequency=self.nco_frequency)
         pulse_channel.set_vop(self.channel_vop)

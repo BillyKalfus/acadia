@@ -714,7 +714,7 @@ class Channel:
         """
 
         n = xrfdc.ffi.new("unsigned int*")
-        self.RFDC_call_checked("GetNyquistZone", self.tile, self.block, n)
+        self.RFDC_call_checked("GetNyquistZone", self.converter_type(), self.tile, self.block, n)
         return n[0]
 
     def set_decoder_mode(self, mode):

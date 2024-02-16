@@ -15,6 +15,11 @@ from subprocess import Popen, TimeoutExpired, PIPE
 from itertools import count
 from abc import ABC, abstractmethod
 
+import io
+import matplotlib.pyplot as plt
+from IPython.display import Image, display
+from matplotlib.animation import Animation
+
 import numpy as np
 
 from .data import DataManager
@@ -306,13 +311,19 @@ class Runtime:
 
             self._status.value = "Status: Performing final update"
             logging.debug(self._status.value)
-            updated = RuntimeServer.update_data_manager(self.local_data_manager, server_address)
-            if updated:
-                self.update()
+            try:
+                updated = RuntimeServer.update_data_manager(self.local_data_manager, server_address)
+                if updated:
+                    self.update()
+            except:
+                logging.error(f"Exception updating DataManager: {traceback.format_exc()}")
 
             self._status.value = "Status: Finalizing event loop"
             logging.debug(self._status.value)
-            self.finalize()
+            try:
+                self.finalize()
+            except:
+                logging.error(f"Exception during finalization: {traceback.format_exc()}")
 
             self.stop()
             
@@ -824,9 +835,6 @@ class PyPlotRuntimeComponent(RuntimeComponent):
 
     def __init__(self, runtime: Runtime):
         super().__init__(runtime)
-
-        import matplotlib.pyplot as plt
-        from matplotlib.animation import Animation
         
         self.fig = plt.figure()
         self.create_plot()
@@ -855,10 +863,6 @@ class PyPlotRuntimeComponent(RuntimeComponent):
         self.anim._step()
         
     def finalize(self):
-        import io
-        import matplotlib.pyplot as plt
-        from IPython.display import Image, display
-
         self.update()
         
         buf = io.BytesIO()
