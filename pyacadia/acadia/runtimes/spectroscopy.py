@@ -67,7 +67,7 @@ class SpectroscopyRuntime(Runtime):
         import numpy as np
         
         from acadia.system import Acadia
-        from acadia.arrays import Waveform, WindowedConstantWaveform
+        from acadia.arrays import Waveform, WindowedConstantWaveform, ConstantWaveform
         
         acadia = Acadia()
         pulse_channel = acadia.DAC(self.DAC)
@@ -75,7 +75,11 @@ class SpectroscopyRuntime(Runtime):
         
         if self.stimulus_constant_time == 0:
             pulse = Waveform(pulse_channel, 
-                             length=acadia.convert(self.stimulus_ramp_time, "seconds", "samples"))
+                             length=pulse_channel.seconds_to_bytes(self.stimulus_ramp_time) // 4, 
+                             region=pulse_channel)
+        elif self.stimulus_ramp_time == 0:
+            pulse = ConstantWaveform(pulse_channel, 
+                                    length_seconds=self.stimulus_constant_time)
         else:
             pulse = WindowedConstantWaveform(pulse_channel, 
                                             constant_length_seconds=self.stimulus_constant_time,
@@ -110,8 +114,11 @@ class SpectroscopyRuntime(Runtime):
         acadia.align_tile_latencies()
         time.sleep(1)
 
-        pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
-        pulse[:] = Waveform.from_complex(pulse_complex, scale=self.stimulus_amplitude)
+        if self.stimulus_ramp_time != 0:
+            pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
+            pulse[:] = Waveform.from_complex(pulse_complex, scale=self.stimulus_amplitude)
+        else:
+            pulse[:] = np.complex64(self.stimulus_amplitude)
 
         # Configure channel parameters
         pulse_channel.set_nyquist_zone(self.stimulus_NZ)

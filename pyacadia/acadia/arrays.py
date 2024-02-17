@@ -540,4 +540,6 @@ class WindowedConstantWaveform(Waveform):
     def __setitem__(self, k, v):
         split_sample_idx = self.split_cycle * self._channel.interface_width_bytes // 4
         self._constant.memory.fill(v[split_sample_idx])
+        self.memory[k] = v # update the pulse memory for the ramp part
+
     
