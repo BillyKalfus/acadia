@@ -1171,7 +1171,12 @@ class Acadia:
         if value is None:
             return None
         
-        if isinstance(element_size, np.dtype):
+        if element_size is None:
+            if output_units.startswith("raw ") or value_units.startswith("raw "):
+                output_units.
+                element_size = 4
+            elif output_units.startswith("decimated ")
+        elif isinstance(element_size, np.dtype):
             element_size = element_size.itemsize
 
         if bytes_per_cycle is None:

@@ -15,7 +15,6 @@ from subprocess import Popen, TimeoutExpired, PIPE
 from itertools import count
 from abc import ABC, abstractmethod
 
-import io
 import matplotlib.pyplot as plt
 from IPython.display import Image, display
 from matplotlib.animation import Animation
@@ -203,7 +202,9 @@ class Runtime:
         Save all necessary arguments into a file in the given directory.
         """
         filename = os.path.join(directory, "kwargs.npz")
-        np.savez(file=filename, **kwargs)
+        with open(filename, "wb") as f:
+            pickle.dump(f, kwargs)
+        
         return filename
 
     @staticmethod
@@ -215,8 +216,9 @@ class Runtime:
         if not os.path.exists(path):
             return {}
         
-        data = np.load(path).items()
-        return {k:(v[()].item() if v.ndim == 0 else v) for k,v in data}
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        return data
     
     def _prepare_files(self, runtime_filename, log_level, kwargs):
         if runtime_filename is not None:

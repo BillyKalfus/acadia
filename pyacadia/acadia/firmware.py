@@ -1695,3 +1695,17 @@ class Firmware:
             modules[module["kind"]].append(idx)
                 
         return modules
+    
+    @staticmethod
+    def pull(server: str = "barharbor.stdusr.yale.internal",
+             filename: str = "firmware-default.zip",
+             firmware_location: str = "/run/media/mmcblk0p1"):
+        """
+        Download the latest firmware from the internal Yale server.
+        """
+        from ftplib import FTP
+        ftp = FTP(server)
+        ftp.login()
+        with open("firmware.zip", "wb") as f:
+            ftp.retrbinary("RETR firmware-default.zip", f.write)
+        
