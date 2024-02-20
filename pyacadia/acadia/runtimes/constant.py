@@ -45,7 +45,7 @@ class ConstantRuntime(Runtime):
 
         acadia.compile(sequence)
         acadia.attach()
-        Waveform.from_complex(pulse, self.pulse_amplitude)
+        Waveform.from_complex(pulse, scale=self.pulse_amplitude)
         pulse_channel.set_nyquist_zone(self.channel_nyquist_zone)
         pulse_channel.configure_nco(frequency=self.nco_frequency)
         pulse_channel.set_vop(self.channel_vop)

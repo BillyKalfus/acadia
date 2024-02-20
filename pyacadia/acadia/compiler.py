@@ -225,8 +225,8 @@ class Operation(metaclass=Operable):
         # Also remove the "i" in front of all the augmenting operator names
         
         clone = Operation(self._op, *self._args, **self._kwargs)
-        self._op = Operable.AUGMENTING_OPERATORS[op]
-        self._args = (clone, *(args[1:]))
+        self._op = Operable.NUMERIC_OPERATORS[op[1:]]
+        self._args = (clone, *args)
         self._kwargs = {}
     
 class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):

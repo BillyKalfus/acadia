@@ -1,11 +1,12 @@
 import logging
 from dataclasses import dataclass
+from typing import Sequence
 
 from acadia.runtime import Runtime, PyPlotRuntimeComponent, CounterRuntimeComponent
 from acadia.data import DataManager, ArrayRecordGroup, CounterRecordGroup
 
 @dataclass
-class CMACCSpectroscopyRuntime(Runtime):
+class ReadoutSpectroscopyRuntime(Runtime):
     """
     A :class:`Runtime` subclass for performing swept spectroscopy.
     """
@@ -24,8 +25,8 @@ class CMACCSpectroscopyRuntime(Runtime):
     # Length of the stimulus signal ramp in seconds (Total)
     stimulus_ramp_time: float
     
-    # DAC amplitude of stimulus
-    stimulus_amplitude: complex = 1.0
+    # DAC amplitudes of stimulus
+    stimulus_amplitudes: Sequence[complex] = [1.0]
     
     # DAC Nyquist zone (1 or 2)
     stimulus_NZ: int = 2
@@ -73,11 +74,7 @@ class CMACCSpectroscopyRuntime(Runtime):
         pulse_channel = acadia.DAC(self.DAC)
         capture_channel = acadia.ADC(self.ADC)
         
-        if self.stimulus_constant_time == 0:
-            pulse = Waveform(pulse_channel, 
-                             length=acadia.convert(self.stimulus_ramp_time, "seconds", "samples"))
-        else:
-            pulse = WindowedConstantWaveform(pulse_channel, 
+        pulse = WindowedConstantWaveform(pulse_channel, 
                                             constant_length_seconds=self.stimulus_constant_time,
                                             window_length_seconds=self.stimulus_ramp_time)
         
@@ -107,12 +104,11 @@ class CMACCSpectroscopyRuntime(Runtime):
         acadia.attach()
         
         acadia.configure_clocks(reference="external")
-        time.sleep(1)
+        time.sleep(0.5)
         acadia.align_tile_latencies()
-        time.sleep(1)
+        time.sleep(0.2)
 
         pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
-        Waveform.from_complex(pulse_complex, pulse, scale=self.stimulus_amplitude)
 
         # Load the kernel
         Waveform.from_complex(np.array([self.kernel_amplitude], dtype=np.complex64), kernel)
@@ -129,6 +125,7 @@ class CMACCSpectroscopyRuntime(Runtime):
 
         for i in datamanager.count(self.iterations, "Iterations"):
             for idx_frequency,frequency in enumerate(datamanager.count(self.frequencies, "Frequencies")):
+                for amplitude in 
                 # Set the modulation frequencies
                 acadia.update_nco_frequency(pulse_channel, frequency=frequency)
                 acadia.update_nco_frequency(capture_channel, frequency=-frequency)
@@ -142,6 +139,8 @@ class CMACCSpectroscopyRuntime(Runtime):
                     
                 # Wait a moment so that the sysref will have actually happened
                 time.sleep(0.001)
+
+                Waveform.from_complex(pulse_complex, pulse, scale=self.stimulus_amplitude)
                                             
                 acadia.run(assemble=(i==0))
                 sweep_data[idx_frequency,:] = capture_data

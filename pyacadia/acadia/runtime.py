@@ -203,7 +203,7 @@ class Runtime:
         """
         filename = os.path.join(directory, "kwargs.npz")
         with open(filename, "wb") as f:
-            pickle.dump(f, kwargs)
+            pickle.dump(kwargs, f)
         
         return filename
 

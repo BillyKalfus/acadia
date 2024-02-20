@@ -91,9 +91,9 @@ class DMASynchronizer(Synchronizer):
                     raise TypeError(f"Received invalid length: {length}")
                 
                 if channel in channel_lengths:
-                    channel_lengths[channel] += length
+                    channel_lengths[channel] += [length]
                 else:
-                    channel_lengths[channel] = length
+                    channel_lengths[channel] = [length]
                     
                 self.dma_mask |= acadia.get_dma(channel).mask
                 descriptor = acadia.channel_dma_stream(**kwargs)
@@ -104,7 +104,22 @@ class DMASynchronizer(Synchronizer):
             elif function == DMASynchronizer.BARRIER:
                 # We first need to figure out the time in the block at which 
                 # the barrier exists.
-                barrier_time = Operation(builtins.max, *list(channel_lengths.values()))
+                total_channel_lengths = {}
+                for channel,lengths in channel_lengths.items():
+                    logging.debug(f"Combining lengths for channel {channel}:")
+                    total_channel_lengths[channel] = 0
+                    for length in lengths:
+                        logging.debug(f"\t{length}")
+                        total_channel_lengths[channel] += length
+
+                # Reset channel lengths so that when we hit the next barrier 
+                # (if any) it only adds delays after this one
+                channel_lengths = {}
+
+                if len(total_channel_lengths) == 1:
+                    barrier_time = list(total_channel_lengths.values())[0]
+                else:
+                    barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
                 logging.debug(f"Inserting DMA barrier at time {barrier_time}")
                                                 
                 # Then, for every channel that has some action after the 
@@ -117,7 +132,7 @@ class DMASynchronizer(Synchronizer):
                         future_channels.append(call["kwargs"]["channel"])
                 
                 for channel in future_channels:
-                    channel_length = channel_lengths[channel] if channel in channel_lengths else 0
+                    channel_length = total_channel_lengths[channel] if channel in total_channel_lengths else 0
                     delay_length = barrier_time - channel_length
                     # TODO: when delay_length is fully known at compile time, we could remove the
                     # DMA stream command if it's zero length. However, we can't know if this is 
@@ -130,10 +145,7 @@ class DMASynchronizer(Synchronizer):
                     if channel not in channels_used:
                         latest_first_call = idx_call
                         channels_used.append(channel)
-                    
-                # Reset channel lengths so that when we hit the next barrier 
-                # (if any) it only adds delays after this one
-                channel_lengths = {}
+                
             else:
                 raise ValueError(f"Synchronizer called with unrecognized"
                                  f" function code: {function}")
@@ -715,16 +727,31 @@ class Acadia:
 
         return result
     
-    def align_ncos(self, **kwargs):
+    def update_ncos_synchronized(self, *args):
         """
-        Simultaneously reset the internal phase of multiple NCOs.
-        By default, all NCOs are reset; to exclude an NCO from this process,
-        provide a keyword argument ``DAC<x>=False`` or ``ADC<x>=False``, where
-        ``<x>`` is the ADC or DAC number to exclude from the update. Note that
-        all included channels must have the same interface frequency. 
+        Simultaneously update the frequency and/or phase of multiple NCOs. 
+        Each input argument is a ``dict`` that specifies how an NCO should be
+        configured, with the following keys:
+
+        - ``channel``: Channel to configure
+
+        - ``frequency``: Frequency in Hz
+
+        - ``phase``: Phase offset in radians
+
+        - ``reset``: If ``True``, the value of the phase accumulator is reset
+
         """
 
-        raise NotImplemented
+        for channel_dict in args:
+            if "channel" not in channel_dict:
+                raise ValueError(f"Missing channel in NCO configuration dict"
+                                 f" (received {channel_dict})")
+            if "frequency" in channel_dict:
+                self.update_nco_frequency(channel_dict["channel"], 
+                                          channel_dict["frequency"])
+            if "phase" in channel_dict:
+                self.update_nco_phase(channel_dict["channel"], channel_dict["phase"])
     
     @Synchronizer.synchronized(RFDCSynchronizer.NCO_FREQUENCY, "tile_synchronizer")
     def update_nco_frequency(self, channel, frequency):
@@ -759,16 +786,12 @@ class Acadia:
             raise TypeError("NCO frequency can only be set in `Sequencer` contexts.")
     
     @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE, "tile_synchronizer")
-    def update_nco_phase(self, channel: Channel, phase: float, low=True, high=True):
+    def update_nco_phase(self, channel: Channel, phase: float):
         """
-        Set the NCO phase offset to the given word.
+        Set the NCO phase offset to the given value.
 
-        :param phase: Phase tuning word
-        :type phase: int
-        :param low: If ``True``, the lower 16 bits will be set.
-        :type low: bool, optional
-        :param high: If ``True``, the upper 2 bits will be set.
-        :type high: bool, optional
+        :param phase: Phase in radians
+        :type phase: float
         """
         phase_word = int(round((2**18)*phase/(2*np.pi)))
         proc = Processor.active_processor()
@@ -1172,10 +1195,12 @@ class Acadia:
             return None
         
         if element_size is None:
-            if output_units.startswith("raw ") or value_units.startswith("raw "):
-                output_units.
+            if output_units.startswith("raw") or value_units.startswith("raw"):
+                output_units = "elements"
                 element_size = 4
-            elif output_units.startswith("decimated ")
+            elif output_units.startswith("decimated"):
+                output_units = "elements"
+                element_size = 8
         elif isinstance(element_size, np.dtype):
             element_size = element_size.itemsize
 

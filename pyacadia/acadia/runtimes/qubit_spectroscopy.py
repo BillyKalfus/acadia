@@ -5,44 +5,64 @@ from acadia.runtime import Runtime, PyPlotRuntimeComponent, CounterRuntimeCompon
 from acadia.data import DataManager, ArrayRecordGroup, CounterRecordGroup
 
 @dataclass
-class CMACCSpectroscopyRuntime(Runtime):
+class QubitSpectroscopyRuntime(Runtime):
     """
     A :class:`Runtime` subclass for performing swept spectroscopy.
     """
     # Iterable of frequencies
-    frequencies: list 
-    
-    # DAC channel used for stimulus
-    DAC: int 
-    
-    # ADC channel for capture
-    ADC: int 
-    
+    qubit_frequencies: list 
+
+    qubit_DAC: int
+
     # Length of the stimulus signal flat top in seconds
-    stimulus_constant_time: float 
+    qubit_stimulus_constant_time: float 
     
     # Length of the stimulus signal ramp in seconds (Total)
-    stimulus_ramp_time: float
+    qubit_stimulus_ramp_time: float
     
+    # DAC channel used for stimulus
+    readout_DAC: int 
+    
+    # ADC channel for capture
+    readout_ADC: int 
+    
+    # Length of the stimulus signal flat top in seconds
+    readout_stimulus_constant_time: float 
+    
+    # Length of the stimulus signal ramp in seconds (Total)
+    readout_stimulus_ramp_time: float
+
+    # Frequency of readout signal
+    readout_frequency: float
+
     # DAC amplitude of stimulus
-    stimulus_amplitude: complex = 1.0
+    qubit_stimulus_amplitude: complex = 1.0
     
     # DAC Nyquist zone (1 or 2)
-    stimulus_NZ: int = 2
+    qubit_stimulus_NZ: int = 2
     
     # VOP setting for DAC (2250 - 40000)
-    stimulus_VOP: int = 12000
+    qubit_stimulus_VOP: int = 12000
+    
+    # DAC amplitude of stimulus
+    readout_stimulus_amplitude: complex = 1.0
+    
+    # DAC Nyquist zone (1 or 2)
+    readout_stimulus_NZ: int = 2
+    
+    # VOP setting for DAC (2250 - 40000)
+    readout_stimulus_VOP: int = 12000
     
     # Total length of the capture. If ``0``, will be set to stimulus_ramp_time + stimulus_flat_time
-    capture_time: float = 0
+    readout_capture_time: float = 0
     
     # Add this much delay at the start of the capture to account for round-trip time of the stimulus
-    capture_delay: float = 0
+    readout_capture_delay: float = 0
 
     # Determine how the capture will be carried out
     # If 0, the full waveform will be integrated
     # Otherwise, this amount of decimation will be used
-    kernel_amplitude: complex = 1.0
+    readout_kernel_amplitude: complex = 1.0
     
     # If ``True``, the phases in the plot will be unwrapped
     plot_unwrap_phase: bool = True
@@ -54,6 +74,8 @@ class CMACCSpectroscopyRuntime(Runtime):
 
     # The number of full spectra to take
     iterations: int = 10
+
+    iteration_delay: float = 0.005
     
     FILENAME = __file__
 
@@ -68,31 +90,30 @@ class CMACCSpectroscopyRuntime(Runtime):
         
         from acadia.system import Acadia
         from acadia.arrays import Array, Waveform, WindowedConstantWaveform
-        
+
         acadia = Acadia()
-        pulse_channel = acadia.DAC(self.DAC)
-        capture_channel = acadia.ADC(self.ADC)
-        
-        if self.stimulus_constant_time == 0:
-            pulse = Waveform(pulse_channel, 
-                             length=acadia.convert(self.stimulus_ramp_time, "seconds", "samples"))
-        else:
-            pulse = WindowedConstantWaveform(pulse_channel, 
-                                            constant_length_seconds=self.stimulus_constant_time,
-                                            window_length_seconds=self.stimulus_ramp_time)
-        
-        
-        capture_time = self.capture_time if self.capture_time != 0 else self.stimulus_ramp_time + self.stimulus_constant_time                        
+
+        readout_pulse = WindowedConstantWaveform(acadia.DAC(self.readout_DAC), 
+                                            constant_length_seconds=self.readout_stimulus_constant_time,
+                                            window_length_seconds=self.readout_stimulus_ramp_time)
+        qubit_pulse = WindowedConstantWaveform(acadia.DAC(self.qubit_DAC), 
+                                            constant_length_seconds=self.qubit_stimulus_constant_time,
+                                            window_length_seconds=self.qubit_stimulus_ramp_time)
+
+
+        capture_time = self.readout_capture_time if self.readout_capture_time != 0 else self.readout_stimulus_ramp_time + self.readout_stimulus_constant_time                        
         datamanager.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
+        stream_count = Array(np.uint32, length=1, region=acadia.CacheArray)
                 
         # Create a sequence for the sequencer
         def sequence(a: Acadia):
             with a.channel_synchronizer():
-                a.generate(pulse)
-                if self.capture_delay > 0:
-                    a.generate_blank(capture_channel, self.capture_delay)
+                a.generate(qubit_pulse)
+                a.barrier()
+                if self.readout_capture_delay > 0:
+                    a.generate_blank(acadia.ADC(self.readout_ADC), self.readout_capture_delay)
 
-                capture_data, cfg, kernel = a.stream_accumulated(capture_channel, 
+                capture_data, cfg, kernel = a.stream_accumulated(acadia.ADC(self.readout_ADC), 
                                                                 accumulation_length=capture_time, 
                                                                 accumulation_length_units="seconds",
                                                                 write_mode="upper",
@@ -111,38 +132,32 @@ class CMACCSpectroscopyRuntime(Runtime):
         acadia.align_tile_latencies()
         time.sleep(1)
 
-        pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
-        Waveform.from_complex(pulse_complex, pulse, scale=self.stimulus_amplitude)
+        Waveform.from_complex(np.hanning(len(qubit_pulse)).astype(np.complex64), 
+                              qubit_pulse, 
+                              scale=self.qubit_stimulus_amplitude)
+        Waveform.from_complex(np.hanning(len(readout_pulse)).astype(np.complex64), 
+                              readout_pulse, 
+                              scale=self.readout_stimulus_amplitude)
 
         # Load the kernel
-        Waveform.from_complex(np.array([self.kernel_amplitude], dtype=np.complex64), kernel)
+        Waveform.from_complex(np.array([self.readout_kernel_amplitude], dtype=np.complex64), kernel)
 
-        # Configure channel parameters
-        pulse_channel.set_nyquist_zone(self.stimulus_NZ)
-        pulse_channel.set_vop(self.stimulus_VOP)
+        # Configure channel parameters for DACs
+        acadia.DAC(self.qubit_DAC).set_nyquist_zone(self.qubit_stimulus_NZ)
+        acadia.DAC(self.qubit_DAC).set_vop(self.qubit_stimulus_VOP)
+        acadia.DAC(self.readout_DAC).set_nyquist_zone(self.readout_stimulus_NZ)
+        acadia.DAC(self.readout_DAC).set_vop(self.readout_stimulus_VOP)
 
-        # Set up the channels for synchronized NCO updates
-        pulse_channel.configure_nco(update_source="sysref")
-        capture_channel.configure_nco(update_source="sysref")
+        # Set up DAC and ADC for heterodyne detection
+        acadia.DAC(self.readout_DAC).configure_nco(frequency=self.readout_frequency)
+        acadia.ADC(self.readout_ADC).configure_nco(frequency=-self.readout_frequency)
 
-        sweep_data = np.empty((len(self.frequencies), len(capture_data)), dtype=capture_data.dtype)
+        sweep_data = np.empty((len(self.qubit_frequencies), len(capture_data)), dtype=capture_data.dtype)
 
         for i in datamanager.count(self.iterations, "Iterations"):
-            for idx_frequency,frequency in enumerate(datamanager.count(self.frequencies, "Frequencies")):
-                # Set the modulation frequencies
-                acadia.update_nco_frequency(pulse_channel, frequency=frequency)
-                acadia.update_nco_frequency(capture_channel, frequency=-frequency)
-
-                # When the frequencies are updated, also reset the NCO phases
-                pulse_channel.reset_nco_phase()
-                capture_channel.reset_nco_phase()
-
-                # Carry out a synchronized NCO update
-                acadia.pulse_sysref(1)
-                    
-                # Wait a moment so that the sysref will have actually happened
-                time.sleep(0.001)
-                                            
+            for idx_frequency,frequency in enumerate(datamanager.count(self.qubit_frequencies, "Frequencies")):
+                acadia.update_nco_frequency(acadia.DAC(self.qubit_DAC), frequency)
+                time.sleep(self.iteration_delay)
                 acadia.run(assemble=(i==0))
                 sweep_data[idx_frequency,:] = capture_data
 
@@ -151,26 +166,18 @@ class CMACCSpectroscopyRuntime(Runtime):
 class SpectroscopyPlot(PyPlotRuntimeComponent):
 
     def create_plot(self):
-        self.figure().set_size_inches(12,4)
-        
-        self.ax_data = self.figure().add_subplot(131)
-        self.data_re = self.ax_data.plot([], [], ".-", label="Re", animated=False)
-        self.data_im = self.ax_data.plot([], [], ".-", label="Im", animated=False)
-        self.ax_data.set_xlabel("Time [s]")
-        self.ax_data.set_ylabel("Signal Amplitude [arb. V]")
-        self.ax_data.set_title("Raw Data")
-        self.ax_data.legend()
+        self.figure().set_size_inches(6,3)
 
-        self.ax_mag = self.figure().add_subplot(132)
+        self.ax_mag = self.figure().add_subplot(121)
         self.data_mag = self.ax_mag.plot([], [], ".-", animated=False)
-        self.ax_mag.set_xlabel("Frequency [MHz]")
+        self.ax_mag.set_xlabel("Qubit Drive Frequency [MHz]")
         self.ax_mag.set_ylabel("Magnitude [arb. V*s]")
         self.ax_mag.set_title("Spectral Magnitude")
         self.ax_mag.grid()
         
-        self.ax_phase = self.figure().add_subplot(133)
+        self.ax_phase = self.figure().add_subplot(122)
         self.data_phase = self.ax_phase.plot([], [], ".-", animated=False)
-        self.ax_phase.set_xlabel("Frequency [MHz]")
+        self.ax_phase.set_xlabel("Qubit Drive Frequency [MHz]")
         self.ax_phase.set_ylabel("Phase [rad.]")
         self.ax_phase.set_title("Spectral Phase")
         self.ax_phase.grid()
@@ -195,23 +202,12 @@ class SpectroscopyPlot(PyPlotRuntimeComponent):
                 num_samples = traces.shape[-1]
                 capture_time = self.runtime.data["traces"].metadata()["capture_time"]
                 self.time_axis = np.linspace(0, capture_time, num_samples)
-                self.frequency_axis = self.runtime.frequencies * 1e-6
-
-            # trace = trace.reshape((len(self.time_axis), -1))
-            PyPlotRuntimeComponent.update_line(self.data_re, self.time_axis, traces[1,:].real)
-            PyPlotRuntimeComponent.update_line(self.data_im, self.time_axis, traces[1,:].imag)
-            
-            ylims = np.max([abs(np.max(traces[0,:].real)), 
-                            abs(np.min(traces[0,:].real)), 
-                            abs(np.max(traces[0,:].imag)), 
-                            abs(np.min(traces[0,:].imag))])
-            self.ax_data.set_xlim(0, self.time_axis[-1])
-            self.ax_data.set_ylim(-ylims, ylims)
+                self.frequency_axis = self.runtime.qubit_frequencies * 1e-6
         
             mean = np.mean(traces, axis=1)
             logging.debug(f"Mean shape: {mean.shape}")
             if self.runtime.plot_electrical_delay != 0:        
-                mean *= np.exp(1j * 2*np.pi * self.runtime.frequencies * self.runtime.plot_electrical_delay)                
+                mean *= np.exp(1j * 2*np.pi * self.runtime.qubit_frequencies * self.runtime.plot_electrical_delay)                
             
             abs_mean = np.abs(mean)
             PyPlotRuntimeComponent.update_line(self.data_mag, self.frequency_axis, abs_mean)
@@ -230,7 +226,7 @@ class SpectroscopyPlot(PyPlotRuntimeComponent):
                 def model(freqs, delay, phi0):
                     return 2*np.pi*freqs*delay + phi0
                 
-                popt,pcov = curve_fit(model, self.runtime.frequencies, unwrapped_phase)
+                popt,pcov = curve_fit(model, self.runtime.qubit_frequencies, unwrapped_phase)
                 logging.info(f"Electrical delay fit returned popt={popt}, pcov={pcov}")
                 self.fit_label.value = f"Electrical delay: {round(popt[0]*1e9, 2)} ns +/- {round(pcov[0,0]*1e12, 2)} ps"
                             
