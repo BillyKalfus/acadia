@@ -1576,6 +1576,26 @@ class Firmware:
             # ------------------- ADCIO and DACIO -------------------- #
             connect_bd_net(f, "hedgehog/io_dataport/ADCIO", "hedgehog/ADCIO")
             connect_bd_net(f, "hedgehog/io_dataport/DACIO", "hedgehog/DACIO")
+
+            # ------------------- GTY Interfaces --------------------- #
+            # create_ip -name gtwizard_ultrascale -vendor xilinx.com -library ip -version 1.7 -module_name gtwizard_ultrascale_0
+            #     set_property -dict [list \
+            #     CONFIG.INS_LOSS_NYQ {0} \
+            #     CONFIG.LOCATE_RX_USER_CLOCKING {CORE} \
+            #     CONFIG.LOCATE_TX_USER_CLOCKING {CORE} \
+            #     CONFIG.RX_BUFFER_MODE {0} \
+            #     CONFIG.RX_DATA_DECODING {8B10B} \
+            #     CONFIG.RX_LINE_RATE {10} \
+            #     CONFIG.RX_REFCLK_FREQUENCY {500} \
+            #     CONFIG.RX_REFCLK_SOURCE {} \
+            #     CONFIG.RX_USER_DATA_WIDTH {32} \
+            #     CONFIG.TX_BUFFER_MODE {0} \
+            #     CONFIG.TX_DATA_ENCODING {8B10B} \
+            #     CONFIG.TX_LINE_RATE {10} \
+            #     CONFIG.TX_REFCLK_FREQUENCY {500} \
+            #     CONFIG.TX_REFCLK_SOURCE {} \
+            #     CONFIG.TX_USER_DATA_WIDTH {32} \
+            #     ] [get_ips gtwizard_ultrascale_0]
                 
             # ------------------- AXI Address Assignment -------------------- #
             

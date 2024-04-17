@@ -216,6 +216,20 @@ begin
         end if;
     end process control_latch_proc;
 
+    -- Make status latches and signals
+    status_latch_proc: process(clk) begin
+        if rising_edge(clk) then
+            if(rst_int = '1') then
+                status_latch <= (others => '0');
+            else
+                status_latch <= status_latch or status_latch_set;
+            end if;
+        end if;
+    end process status_latch_proc;
+
+    -- Report status
+    master_bus_miso <= status or status_latch;
+
     -- Make FIFOs for the data
 
     gty_inst : gtwizard_ultrascale_0

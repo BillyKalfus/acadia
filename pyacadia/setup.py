@@ -6,7 +6,7 @@ ps_functions_module = Extension("acadia.ps_functions",
                                 libraries=["pthread"])
                 
 setup (name = 'pyacadia',
-       version = '3.0',
+       version = '4.0',
        description = 'Assembler, hardware interface, and firmware management for the Acadia quantum control system.',
        author = 'William Kalfus',
        author_email = 'william.kalfus@yale.edu',

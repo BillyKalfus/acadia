@@ -137,7 +137,7 @@ class Array:
         else:
             raise TypeError(f"Unable to instantiate array of type {self._class}")
         
-    def allocated(self):
+    def allocated(self) -> bool:
         """
         :return: ``True`` if the underlying memory resource has been allocated
         :rtype: bool
@@ -163,8 +163,12 @@ class Array:
         return self._resource
     
     @property
-    def dtype(self):
+    def dtype(self) -> np.dtype:
         return self._dtype
+    
+    @property
+    def shape(self) -> tuple:
+        return self.memory.shape
     
     def free(self):
         """
@@ -229,7 +233,7 @@ class Array:
         
         return self.word_length() * self._dtype.itemsize
     
-    def split(self, idx):
+    def split(self, idx) -> tuple:
         """
         Create two new :class:`Array` objects wrapping the memory underlying 
         this one. The new objects create "views" into this one and, when 
@@ -292,23 +296,20 @@ class Waveform(Array):
         if data is not None:
             if not hasattr(data, "dtype"):
                 raise TypeError("Provided data resource must have a `dtype` property.")
-            
-            if data.dtype.kind != 'V':
-                raise TypeError("Initializing a Waveform with data requires"
-                                " the data to be in sample units. Please use"
-                                " `Waveform.from_complex()` to initialize a"
-                                " waveform using complex floats.")
                 
             super().__init__(data)
         else:           
-            sample_type = np.dtype(f'V{2 * quadrature_width // 8}')
+            sample_type = Waveform.sample_type(quadrature_width) 
             super().__init__(sample_type, length=length, region=region)
     
-    def dma_parameters(self):
+    def dma_parameters(self) -> list[dict]:
         """
         Generate a `dict` of parameters for the :class:`Acadia` `generate` 
         method.
         """
+        if self.byte_length() == 0:
+            return []
+        
         if not isinstance(self._channel, Channel):
             raise TypeError(f"DMA parameters may only be requested for"
                             " `Waveform` objects instantiated with `Channel`"
@@ -330,7 +331,7 @@ class Waveform(Array):
             "word_address": (self.word_address() if self._channel.is_dac else 0) // (self._channel.interface_width_bytes // 4)
         }]
         
-    def split(self, split_time):
+    def split(self, split_time) -> tuple:
         """
         Produce two new instances that wrap disparate segments of the 
         underlying memory.
@@ -339,20 +340,34 @@ class Waveform(Array):
         split_idx = self._channel.seconds_to_samples(split_time)
         arrays = super().split(split_idx)
         return tuple(Waveform(self._channel, data=arr) for arr in arrays)
-        
+    
     @staticmethod
-    def to_complex(input: Union[Array, np.ndarray], 
-                   output: Union[Array, np.ndarray, np.dtype, int] = 64, 
-                   scale: float = 1):
+    def sample_type(quadrature_width):
+        return np.dtype([('re', f'<i{quadrature_width // 8}'), 
+                         ('im', f'<i{quadrature_width // 8}')]) 
+    
+    @staticmethod
+    def sample_to_int(input: Union[Array, np.ndarray],
+                        output: Union[Array, np.ndarray, np.dtype] = None) -> np.ndarray:
         """
-        Unpack the integer sample data in memory into complex floating-point 
-        numbers.
-        
-        :param output: This can be either a numpy array with a complex dtype to
-            pack the data into, or a dtype itself (in which case an output 
-            array will be allocated).
-        :type output:
+        Convert an array of sample data into pairs of integer quadratures. 
+        Because there are two quadratures per sample, a length-2 axis will be 
+        added as the last dimension of the array. The behavior of the output 
+        will depend on the type of the ``output`` parameter:
+
+        - If an :class:`Array` or ``np.ndarray``, the array is filled with 
+        the integer data. 
+
+        - If an `int` or `np.dtype`, this is interpreted as the bit width or 
+        type of the desired output. If this fits into the space provided by
+        the input a view will be returned, otherwise a new array will be 
+        allocated.
+
+        - If ``None``, this is equal to providing an ``int`` with a size that
+        is half of the input data type width (and hence a view of the input is
+        returned).
         """
+
         if not hasattr(input, "dtype"):
             raise TypeError(f"Input must have a dtype (input is of type"
                             f" {type(input)})")
@@ -367,13 +382,44 @@ class Waveform(Array):
             raise TypeError(f"Input dtype must be void (found kind"
                             f" {input_memory.dtype.kind})")
         
-        int_type = np.dtype(f"<i{input_memory.dtype.itemsize // 2}")
+        output_shape = (*input.shape, 2)
+        input_int_type = np.dtype(f"<i{input.dtype.itemsize // 2}")
+        input_cast = input_memory.reshape(-1).view(input_int_type).reshape(output_shape)
 
-        if isinstance(output, int):
-            output = np.dtype(f"c{output // 8}")
+        if output is None:
+            return input_cast
+
+        if hasattr(output, "memory"):
+            output = output.memory
+        if isinstance(output, np.ndarray):            
+            np.copyto(output, input_cast)
+            return output
+        if isinstance(output, np.dtype):
+            return input_cast.astype(output)
+        
+        raise ValueError(f"Unable to interpret output of type {type(output)}")
+        
+    @staticmethod
+    def to_complex(input: Union[Array, np.ndarray], 
+                   output: Union[Array, np.ndarray, np.dtype] = np.dtype("c8"), 
+                   scale: float = 1) -> Union[Array,np.ndarray]:
+        """
+        Unpack sample data (or its integer quadratures) into complex 
+        floating-point numbers. Note that integer inputs will have their
+        rightmost dimension reduced in size by a factor of two due to combining
+        the quadratures.
+        """
+
+        if input.dtype.kind == "V":
+            input_cast = Waveform.sample_to_int(input)
+        elif input.dtype.kind == "i":
+            input_cast = input
+        else:
+            raise TypeError(f"Unable to accept input with dtype kind {input.dtype.kind}")
 
         if isinstance(output, np.dtype):
-            output = np.empty(input_memory.shape, dtype=output)
+            output = np.empty((*input_cast.shape[:-1], input_cast.shape[-1] // 2), dtype=output)
+            
         elif not hasattr(output, "dtype"):
             raise TypeError(f"Output must have (or be) a dtype, got type"
                             f" {type(output)}")
@@ -392,19 +438,19 @@ class Waveform(Array):
         
         float_type = np.dtype(f"<f{output_memory.dtype.itemsize // 2}")
 
-        scale *= 2**(int_type.itemsize*8 - 1) - 1 
-        np.divide(input_memory.view(int_type), 
-                    scale, 
-                    out=output_memory.view(float_type), 
+        scale *= 2**(input_cast.dtype.itemsize*8 - 1) - 1 
+        np.multiply(input_cast.reshape(-1), 
+                    1/scale, 
+                    out=output_memory.view(float_type).reshape(-1), 
                     dtype=float_type)
             
         return output
     
     @staticmethod
-    def from_complex(input: Union[Array, np.ndarray], 
-                     output: Union[Array, np.ndarray, np.dtype, int] = 32, 
+    def complex_to_sample(input: Union[Array, np.ndarray], 
+                     output: Union[Array, np.ndarray, np.dtype, int] = 16, 
                      scale: float = 1,
-                     overwrite_input: bool = False):
+                     overwrite_input: bool = False) -> np.ndarray:
         """
         Pack the complex floating-point data in an array into integer samples.
         """
@@ -412,44 +458,38 @@ class Waveform(Array):
             raise TypeError(f"Input must have a dtype (input is of type"
                             f" {type(input)})")
         if hasattr(input, "memory"):
-            input_memory = input.memory
-        elif isinstance(input, np.ndarray):
-            input_memory = input
-        else:
-            raise TypeError(f"Invalid input type for `from_complex`: {type(input)}")
+            input = input.memory
         
-        if input_memory.dtype.kind != "c":
+        if input.dtype.kind != "c":
             raise TypeError(f"Input dtype must be complex (found kind"
-                            f" {input_memory.dtype.kind})")
+                            f" {input.dtype.kind})")
         
-        float_type = np.dtype(f"<f{input_memory.dtype.itemsize // 2}")
+        float_type = np.dtype(f"<f{input.dtype.itemsize // 2}")
+
+        if hasattr(output, "memory"):
+            output = output.memory
+
+        if isinstance(output, np.dtype):
+            output = np.empty(input.shape, dtype=output)
 
         if isinstance(output, int):
-            output = Waveform(length=len(input_memory), quadrature_width=(output // 2))
-        elif isinstance(output, np.dtype):
-            output = Waveform(length=len(input_memory), quadrature_width=(8 * output.itemsize // 2))
-        elif not hasattr(output, "dtype"):
-            raise TypeError(f"Output must have (or be) a dtype, got type"
-                            f" {type(output)}")
+            output = np.empty(input.shape, dtype=Waveform.sample_type(output))
         
-        if hasattr(output, "memory"):
-            output_memory = output.memory
-        elif isinstance(output, np.ndarray):
-            output_memory = output
-        else:
-            raise TypeError(f"Invalid output type for `from_complex`: {type(output)}")
-        
-        if output_memory.dtype.kind != "V":
+        if output.dtype.kind != "V":
             raise TypeError(f"Output dtype must be void (found kind"
-                            f" {output_memory.dtype.kind})")
+                            f" {output.dtype.kind})")
         
-        int_type = np.dtype(f"<i{output_memory.dtype.itemsize // 2}")
+        if output.shape != input.shape:
+            raise ValueError(f"Received incompatible shapes for input and"
+                             f" output: {input.shape} and {output.shape}")
+        
+        int_type = np.dtype(f"<i{output.dtype.itemsize // 2}")
 
         scale *= 2**(int_type.itemsize*8 - 1) - 1 
-        scaled = input_memory if overwrite_input else np.empty(input_memory.shape, input_memory.dtype)
-        np.multiply(input_memory, scale, out=scaled)
+        scaled = input if overwrite_input else np.empty(input.shape, input.dtype)
+        np.multiply(input, scale, out=scaled)
         np.rint(scaled.view(float_type), 
-                out=output_memory.view(int_type), 
+                out=output.view(int_type), 
                 casting="unsafe")
         return output
     
@@ -473,7 +513,7 @@ class ConstantWaveform(Waveform):
                          length=(channel.interface_width_bytes // 4), 
                          region=channel)
         
-    def dma_parameters(self):
+    def dma_parameters(self) -> list[dict]:
         """
         Generate a `dict` of parameters for the :class:`Acadia` `generate` method.
         """
@@ -483,6 +523,9 @@ class ConstantWaveform(Waveform):
                                 self._channel, 
                                 self._length_seconds) // self._channel.interface_width_bytes
         
+        if length_cycles.resolveable() and length_cycles.value() == 0:
+            return []
+        
         return [{
             "channel": self._channel,
             "length": length_cycles,
@@ -491,8 +534,19 @@ class ConstantWaveform(Waveform):
         }]
     
     def __setitem__(self, k, v):
-        v_array = np.array([v]*len(self), dtype=np.complex64)
-        v_samples = Waveform.from_complex(v_array, np.dtype('V4'))
+        if self._length_seconds == 0:
+            raise ValueError("Attempted assignment of ConstantWaveform with no length.")
+        
+        if isinstance(v, (np.complex64, np.complex128)):
+            v_array = np.array([v]*len(self), dtype=np.complex64)
+            v_samples = Waveform.complex_to_sample(v_array)
+        elif isinstance(v, np.ndarray) and v.dtype.kind == "V":
+            if len(v) != 1:
+                raise ValueError("Attempt to set ConstantWaveform amplitude to an array of more than one value.")
+            v_samples = np.repeat(v, len(self))
+        else:
+            raise TypeError(f"Unable to set ConstantWaveform amplitude to object of type {type(v)}")
+        
         super().__setitem__(slice(0,len(self)), v_samples)
         
 class WindowedConstantWaveform(Waveform):
@@ -522,12 +576,19 @@ class WindowedConstantWaveform(Waveform):
         super().__init__(channel, 
                          length=channel.seconds_to_bytes(window_length_seconds) // 4, 
                          region=channel)
+        
         self._constant = ConstantWaveform(channel, constant_length_seconds)
         
         # `seconds_to_bytes` will check whether we have an integer number of cycles    
         self.split_cycle = channel.seconds_to_bytes(window_length_seconds / 2) // channel.interface_width_bytes
         
-    def dma_parameters(self):
+    def dma_parameters(self) -> list[dict]:
+        if self._constant._length_seconds == 0:
+            return super().dma_parameters()
+        
+        if self.byte_length() == 0:
+            return self._constant.dma_parameters()
+        
         ramp_first = super().dma_parameters()
         ramp_first[0]["length"] = self.split_cycle
         
@@ -538,8 +599,11 @@ class WindowedConstantWaveform(Waveform):
         return ramp_first + self._constant.dma_parameters() + ramp_second
     
     def __setitem__(self, k, v):
-        split_sample_idx = self.split_cycle * self._channel.interface_width_bytes // 4
-        self._constant.memory.fill(v[split_sample_idx])
-        self.memory[k] = v # update the pulse memory for the ramp part
-
-    
+        if self.byte_length() > 0:
+            self.memory[k] = v # update the pulse memory for the ramp part
+            if self._constant._length_seconds > 0:
+                split_sample_idx = self.split_cycle * self._channel.interface_width_bytes // 4
+                self._constant.memory.fill(v[split_sample_idx])
+        elif self._constant._length_seconds > 0:
+            self._constant[:] = v
+        

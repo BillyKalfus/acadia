@@ -2,13 +2,12 @@ import os
 import json
 import logging
 import fcntl
-import struct
 import operator
 import mmap
 
-from copy import copy
 from functools import reduce
 from typing import Tuple
+from multiprocessing import Event
 
 import numpy as np
 from numpy.lib.format import descr_to_dtype, dtype_to_descr
@@ -17,9 +16,6 @@ __all__ = ["RecordGroupMeta",
            "ArrayRecordGroup",
            "CounterRecordGroup", 
            "DataManager"]
-
-WRLCK_STRUCT = struct.pack("hhllhh", fcntl.F_WRLCK, 0, 0, 0, 0, 0)
-UNLCK_STRUCT = struct.pack("hhllhh", fcntl.F_UNLCK, 0, 0, 0, 0, 0)
 
 class RecordGroup:
     """
@@ -223,7 +219,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
                 raise TypeError(f"Received numpy array of incorrect dtype"
                                 f" (expected {self._dtype}, received array"
                                 f" of {record.dtype})")
-        elif isinstance(record, (float, int, complex, bool)):
+        elif isinstance(record, (float, int, complex, bool, np.generic)):
             if self._dtype is None:
                 self._dtype = np.dtype(type(record))
                 self._metadata["descr"] = dtype_to_descr(self._dtype)
@@ -305,6 +301,28 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
     
     def records(self):
         return self._records
+    
+    @property
+    def shape(self):
+        return self._metadata["shape"]
+    
+    @property
+    def dtype(self):
+        return self._dtype
+    
+    @property
+    def size(self):
+        return self._metadata["count"] * np.prod(self.shape)
+    
+    @property
+    def __array_interface__(self):
+        return self._records.__array_interface__
+    
+    def __array__(self):
+        return self._records.__array__()
+    
+    def __getitem__(self, k):
+        return self._records[k]
     
 class CounterRecordGroup(metaclass=RecordGroupMeta):
     """
@@ -424,11 +442,11 @@ class DataManager:
 
         # logging.debug("Saving records...")
         metadata_path = os.path.join(self._directory, "metadata.json")
-        if os.path.exists(metadata_path):
+        if os.path.exists(metadata_path) and os.path.getsize(metadata_path) > 0:
             with open(metadata_path, "r+") as file:
-                fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))            
+                fcntl.flock(file, fcntl.LOCK_EX)            
                 metadata = json.load(file)
-                fcntl.fcntl(file, fcntl.F_SETLK, copy(UNLCK_STRUCT))
+                fcntl.flock(file, fcntl.LOCK_UN)
         else:
             metadata = {}
 
@@ -436,9 +454,9 @@ class DataManager:
                                 
         logging.debug(f"Saving metadata for groups {list(metadata.keys())}")
         with open(metadata_path, "w") as file:
-            fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))            
+            fcntl.flock(file, fcntl.LOCK_EX)          
             json.dump(metadata, file)
-            fcntl.fcntl(file, fcntl.F_SETLK, copy(UNLCK_STRUCT))
+            fcntl.flock(file, fcntl.LOCK_UN)
         
         # logging.debug("Saved")
         
@@ -456,14 +474,17 @@ class DataManager:
         if not os.path.exists(metadata_path):
             raise FileNotFoundError(f"Unable to locate metadata")
         
+        if os.path.getsize(metadata_path) == 0:
+            return {}
+
         with open(metadata_path, "r+") as file:
             # We're not actually going to write to it, but we'll request a
             # write lock in order to guarantee that it's not currently being
             # written to by something else
-            fcntl.fcntl(file, fcntl.F_SETLKW, copy(WRLCK_STRUCT))
+            fcntl.flock(file, fcntl.LOCK_EX)
             file.seek(0)
             metadata = file.read() if raw else json.load(file)
-            fcntl.fcntl(file, fcntl.F_SETLK, copy(UNLCK_STRUCT))
+            fcntl.flock(file, fcntl.LOCK_UN)
             
         return metadata
         
@@ -581,12 +602,51 @@ class DataManager:
 
         return deltas
             
-    def __getitem__(self, k):
+    def __getitem__(self, k) -> RecordGroup:
         return self._groups[k]
     
-    def __contains__(self, k):
+    def __contains__(self, k) -> bool:
         return k in self._groups
     
     def group_names(self):
         return list(self._groups.keys())
+    
+    def available(self, *names) -> bool:
+        """
+        Check whether the provided record group names are contained in this 
+        :class:`DataManager` and confirm that records are present in them.
+        """
+        for name in names:
+            if name not in self._groups:
+                return False
+            if self._groups[name].records() is None:
+                return False
+            
+        return True
+    
+    
+    
+    # @staticmethod
+    # def get_sweep_point(data, sweep_axis_conditions, record_shape):
+    #     """
+    #     Given an array of swept data (iterated or not), return all records at particular
+    #     sweep points. The sweep points to extract are specified by providing a condition
+    #     for each axis of the sweep. If all points in a given axis are desired, pass 
+    #     np.ones(axis.shape) as that axis' condition.
+
+    #     :param data: Data to examine
+    #     :param sweep_axes: List of sweep axes in order of their presence in ``data``
+    #     :param sweep_point: The value on the axes to view data for. Length must
+    #         match that of ``sweep_axes``
+    #     :param record_shape: The shape of records contained in the data
+    #     """
+
+    #     # Figure out what index the desired point is at in each of the sweep axes
+    #     axis_indices = [np.argwhere(condition) for condition in sweep_axis_conditions]
+
+    #     # Find out which of the data dimensions correspond to the sweep axes
+    #     # Assume that the input array is shaped as (<other axes>, <sweep axes>, <record axes>)
+    #     first_sweep_dimension = len(data.shape) - len(record_shape) - len(sweep_axis_conditions)
+    #     sweep_dimensions = np.arange(first_sweep_dimension, first_sweep_dimension + len(sweep_axis_conditions))
+    #     return np.take()
                 

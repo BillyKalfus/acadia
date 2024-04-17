@@ -725,41 +725,38 @@ class Acadia:
         # Turn off SYSREF
         self.pulse_sysref(0)
 
+        time.sleep(0.2)
+
         return result
     
-    def update_ncos_synchronized(self, *args):
+    def update_ncos_synchronized(self):
         """
-        Simultaneously update the frequency and/or phase of multiple NCOs. 
-        Each input argument is a ``dict`` that specifies how an NCO should be
-        configured, with the following keys:
+        Synchronously update the frequency and/or phase of multiple NCOs 
+        following a series of calls to :meth:`update_nco_frequency`, 
+        :meth:`update_nco_phase`, and/or :meth:`reset_nco_phase`.
 
-        - ``channel``: Channel to configure
-
-        - ``frequency``: Frequency in Hz
-
-        - ``phase``: Phase offset in radians
-
-        - ``reset``: If ``True``, the value of the phase accumulator is reset
-
+        Note that before calling this function, the tiles must be aligned by 
+        calling ``self.align_tile_latencies`` and each channel passed in must 
+        have had its NCO configured for synchronous updates by calling
+        ``<channel>.configure_nco(update_source="sysref")``.
         """
 
-        for channel_dict in args:
-            if "channel" not in channel_dict:
-                raise ValueError(f"Missing channel in NCO configuration dict"
-                                 f" (received {channel_dict})")
-            if "frequency" in channel_dict:
-                self.update_nco_frequency(channel_dict["channel"], 
-                                          channel_dict["frequency"])
-            if "phase" in channel_dict:
-                self.update_nco_phase(channel_dict["channel"], channel_dict["phase"])
-    
+        # Carry out a synchronized NCO update
+        self.pulse_sysref(1)
+            
+        # Wait a moment so that the sysref will have actually happened
+        # TODO: find a way to check this. if it exists it's not documented
+        time.sleep(0.001)
+
     @Synchronizer.synchronized(RFDCSynchronizer.NCO_FREQUENCY, "tile_synchronizer")
-    def update_nco_frequency(self, channel, frequency):
+    def update_nco_frequency(self, channel: Channel, frequency: float):
         """
-        Configure some or all NCO settings. The three 16-bit registers for
-        the frequency tuning word may be individually updated, allowing
-        for lower latency when less precise changes are acceptable.
+        Update the NCO frequency. If called in a Sequencer context, this will
+        update the RFDC through the bus; otherwise, it will be updated via a
+        driver call.
 
+        :param channel: Channel to update
+        :type channel: :class:`Channel`
         :param frequency: Frequency in Hz
         :type frequency: float
         """     
@@ -783,7 +780,7 @@ class Acadia:
                             comment="Write NCO frequency low bits")
         
         else:
-            raise TypeError("NCO frequency can only be set in `Sequencer` contexts.")
+            raise TypeError("NCO frequency can only be set in `Sequencer` contexts or on the PS.")
     
     @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE, "tile_synchronizer")
     def update_nco_phase(self, channel: Channel, phase: float):
@@ -809,10 +806,10 @@ class Acadia:
                            comment=f"Write to NCO phase register for {channel}")
             
         else:
-            raise TypeError("NCO phase can only be set in `Sequencer` contexts.")
+            raise TypeError("NCO phase can only be set in `Sequencer` contexts or on the PS.")
 
     @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE_RESET, "tile_synchronizer")
-    def reset_nco_phase(self, channel):
+    def reset_nco_phase(self, channel: Channel):
         """
         Reset the value of the NCO phase accumulator.
         """
@@ -924,6 +921,164 @@ class Acadia:
         # Configure the SYSREF_MUX so that the SYSREF pulser drives the 
         # SYSREF/SYNC path 
         RFClk.LMK.set_sysref_mux(2) 
+
+        # Wait a bit for everything to lock
+        time.sleep(0.5)
+
+    def configure_tile_clocks(self, **kwargs):
+        """
+        Configure the clock sources and distribution for the RFDC tiles.
+        """
+        # Using their own PLLs:
+        # import pyxrfdc as xrfdc
+
+        # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
+        # Channel.RFDC_call_checked("GetClkDistribution", settings)
+
+        # settings.DAC[0].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[1].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[2].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[3].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+
+        # settings.DAC[0].PLLEnable = True
+        # settings.DAC[1].PLLEnable = True
+        # settings.DAC[2].PLLEnable = True
+        # settings.DAC[3].PLLEnable = True
+
+        # settings.DAC[0].PLLSettings.Enabled = True
+        # settings.DAC[1].PLLSettings.Enabled = True
+        # settings.DAC[2].PLLSettings.Enabled = True
+        # settings.DAC[3].PLLSettings.Enabled = True
+
+        # settings.DAC[0].PLLSettings.RefClkFreq = 250
+        # settings.DAC[1].PLLSettings.RefClkFreq = 250
+        # settings.DAC[2].PLLSettings.RefClkFreq = 250
+        # settings.DAC[3].PLLSettings.RefClkFreq = 250
+
+        # settings.DAC[0].PLLSettings.SampleRate = 6000
+        # settings.DAC[1].PLLSettings.SampleRate = 6000
+        # settings.DAC[2].PLLSettings.SampleRate = 6000
+        # settings.DAC[3].PLLSettings.SampleRate = 6000
+
+        # settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        # settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        # settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
+        # settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+
+        # settings.ADC[0].PLLSettings.SampleRate = 2000
+        # settings.ADC[1].PLLSettings.SampleRate = 2000
+        # settings.ADC[2].PLLSettings.SampleRate = 2000
+        # settings.ADC[3].PLLSettings.SampleRate = 2000
+
+        # Channel.RFDC_call_checked("SetClkDistribution", settings)
+
+        # Distributing a PLL output
+        # import pyxrfdc as xrfdc
+
+        # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
+        # Channel.RFDC_call_checked("GetClkDistribution", settings)
+
+        # settings.DAC[0].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[1].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[2].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[3].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+
+        # settings.DAC[0].PLLEnable = False
+        # settings.DAC[1].PLLEnable = False
+        # settings.DAC[2].PLLEnable = True
+        # settings.DAC[3].PLLEnable = False
+
+        # settings.DAC[0].PLLSettings.Enabled = False
+        # settings.DAC[1].PLLSettings.Enabled = False
+        # settings.DAC[2].PLLSettings.Enabled = True
+        # settings.DAC[3].PLLSettings.Enabled = False
+
+        # settings.DAC[0].PLLSettings.RefClkFreq = 6000
+        # settings.DAC[1].PLLSettings.RefClkFreq = 6000
+        # settings.DAC[2].PLLSettings.RefClkFreq = 250
+        # settings.DAC[3].PLLSettings.RefClkFreq = 6000
+
+        # settings.DAC[0].PLLSettings.SampleRate = 6000
+        # settings.DAC[1].PLLSettings.SampleRate = 6000
+        # settings.DAC[2].PLLSettings.SampleRate = 6000
+        # settings.DAC[3].PLLSettings.SampleRate = 6000
+
+        # settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        # settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        # settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_OUTDIV")
+        # settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+
+        # settings.DAC[0].DivisionFactor = 1
+        # settings.DAC[1].DivisionFactor = 1
+        # settings.DAC[3].DivisionFactor = 1
+
+
+        # settings.ADC[0].PLLSettings.SampleRate = 2000
+        # settings.ADC[1].PLLSettings.SampleRate = 2000
+        # settings.ADC[2].PLLSettings.SampleRate = 2000
+        # settings.ADC[3].PLLSettings.SampleRate = 2000
+
+        # Channel.RFDC_call_checked("SetClkDistribution", settings)
+
+        # Higher sampling rates
+        # for i in range(4):
+        #     a.DAC(i).set_interpolation(5)
+            
+        # for i in range(4,8):
+        #     a.DAC(i).set_interpolation(4)
+        #     a.DAC(i).set_datapath_mode("Half-bandwidth NCO (lowpass)")
+        #     a.DAC(i).set_imr_passband("lowpass")
+
+        # import pyxrfdc as xrfdc
+
+        # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
+        # Channel.RFDC_call_checked("GetClkDistribution", settings)
+
+        # settings.DAC[0].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[1].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[2].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+        # settings.DAC[3].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+
+        # settings.DAC[0].PLLEnable = True
+        # settings.DAC[1].PLLEnable = True
+        # settings.DAC[2].PLLEnable = True
+        # settings.DAC[3].PLLEnable = True
+
+        # settings.DAC[0].PLLSettings.Enabled = True
+        # settings.DAC[1].PLLSettings.Enabled = True
+        # settings.DAC[2].PLLSettings.Enabled = True
+        # settings.DAC[3].PLLSettings.Enabled = True
+
+        # settings.DAC[0].PLLSettings.RefClkFreq = 250
+        # settings.DAC[1].PLLSettings.RefClkFreq = 250
+        # settings.DAC[2].PLLSettings.RefClkFreq = 250
+        # settings.DAC[3].PLLSettings.RefClkFreq = 250
+
+        # settings.DAC[0].PLLSettings.SampleRate = 6000
+        # settings.DAC[1].PLLSettings.SampleRate = 8000
+        # settings.DAC[2].PLLSettings.SampleRate = 6000
+        # settings.DAC[3].PLLSettings.SampleRate = 6000
+
+        # settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        # settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        # settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
+        # settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+
+        # settings.ADC[0].PLLSettings.SampleRate = 2000
+        # settings.ADC[1].PLLSettings.SampleRate = 2000
+        # settings.ADC[2].PLLSettings.SampleRate = 2000
+        # settings.ADC[3].PLLSettings.SampleRate = 2000
+
+        # Channel.RFDC_call_checked("SetClkDistribution", settings)
+
+        pass
+
+    def configure_sampling_rates(self, **kwargs):
+        """
+        Configure the sampling rates of the RFDC tiles. Each keyword argument
+        must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
+        """
+        pass
 
     def pulse_sysref(self, count=None):
         """
@@ -1284,118 +1439,17 @@ class Acadia:
             return self.convert(int(round(value_cycles)), "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
 
         raise ValueError(f"Unrecognized value unit {value_units}")
-        
-    @requires_sequencer
-    def stream(self, 
-               src: Union[Channel, Array], 
-               dst: Array = None, 
-               length: float = None,
-               length_units: str = "samples",
-               offset: float = 0,
-               offset_units: str = "samples",
-               configuration: StreamConfiguration = None):
-        """
-        Stream data from a source to a destination array. This method is able
-        to allocate and return an array to use as a destination, which will 
-        occur if either ``dst`` or ``offset`` are omitted.
-        
-        :param src: Data source. If a configuration is provided and this is of
-            type :class:`Channel`, the channel in the configuration must match.
-        :type src: :class:`Channel` or :class:`Array`
-        :param dst: Data destination. If not allocated, will be allocated based
-            on ``length``
-        :type dst: :class:`Array`
-        :param offset: Offset within `dst` at which the stream will be written
-        :param offset_units: Units for `offset`. May be either "elements" (of 
-            dst), "bytes", or "seconds"
-        :param length: Length of data to stream. If `None`, the full length of 
-            `dst` is used.
-        :param length_units: Units for `length`. May be either "elements" (of 
-            dst), "bytes", "cycles", or "seconds"
-        :param configuration: Stream configuration to use. If `None`, a new one
-            will be requested.
-        :type configuration: :class:`StreamConfiguration`
-        :return: The destination array and the configuration used for streaming
-        :rtype: :class:`StreamConfiguration`
-        """
-        if dst is None and length is None:
-            raise ValueError("Must provide either destination or length for capture")
-        
-        path_width_bytes = self._firmware["stream_processing_path"]["width"] // 8
-        
-        if dst is None:
-            if isinstance(src, Channel):
-                length_samples = self.convert(length, 
-                                              length_units, 
-                                              "samples", 
-                                              4, 
-                                              path_width_bytes)
-                logging.debug(f"Allocating Waveform with {length_samples} samples")
-                dst = Waveform(src, length=length_samples, region=self.PLDDR0Array)
-            elif isinstance(src, Array):
-                logging.debug(f"Allocating Array with {len(src)} elements")
-                dst = Array(src.dtype, length=len(src), region=self.PLDDR0Array)
-            else:
-                raise TypeError(f"Invalid source type {type(src)}")
-
-        if length is not None:
-            length_bytes = self.convert(length, 
-                                        length_units, 
-                                        "bytes", 
-                                        dst.dtype,
-                                        path_width_bytes)
-        else:
-            length_bytes = dst.byte_length()
-
-        offset_bytes = self.convert(offset, 
-                                    offset_units, 
-                                    "bytes", 
-                                    dst.dtype,
-                                    path_width_bytes)
-        
-        length_cycles = self.convert(length_bytes, "bytes", "cycles", 32 // 8, path_width_bytes)
-        logging.debug(f"Stream length {length_cycles}, of size {length_bytes}"
-                      f" bytes to address 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
-        
-        if configuration is None:
-            config_src = src if isinstance(src, Channel) else "memory"
-            configuration = self._request_stream_configuration(config_src, "memory")
-        
-        self._command_datamover(configuration.output_datamover(), 
-                                   dst.byte_address() + offset_bytes,
-                                   length_bytes)
-
-        if isinstance(src, Channel):
-            # notify the synchronizer, which will then add the DMA command for us        
-            self.channel_synchronizer.add({
-                "function": DMASynchronizer.DMA, 
-                "self": self, 
-                "args": (), 
-                "kwargs": {
-                    "channel": src,
-                    "length": length_cycles,
-                    "word_address": 0
-                },
-                "retval": None})
-        elif isinstance(src, Array):
-            self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
-                                   src.byte_address(),
-                                   length_bytes)
-        else:
-            raise TypeError(f"Unable to use source of type {type(src)}")
-        
-        return dst,configuration
             
     @requires_sequencer
-    def stream_decimated(self, 
-                         src, 
-                         dst: Waveform = None, 
-                         length: Union[int,float] = None,
-                         length_units: str = "samples",
-                         offset: Union[int,float] = 0,
-                         offset_units: str = "elements",
-                         decimation: int = None,
-                         configuration: StreamConfiguration = None):
+    def stream(self, 
+                src: Union[Channel,Array], 
+                dst: Waveform = None, 
+                length: Union[int,float] = None,
+                length_units: str = "samples",
+                offset: Union[int,float] = 0,
+                offset_units: str = "elements",
+                decimation: int = None,
+                configuration: StreamConfiguration = None):
         """
         Stream data from a source to a destination array through a DSP module
         configured to decimate the input stream. This method is able to 
@@ -1404,19 +1458,21 @@ class Acadia:
 
         Note that in this method, ``length`` refers to the length of the signal
         before decimation, rather than the length of data that will be occupied
-        after decimation.
+        after decimation. Additionally, if ``decimation == 0``, the actual
+        decimation will be set equal to the length such that only a single 
+        value is generated.
 
-        - If two or more of ``dst``, ``length``, and ``decimation`` are 
-            ``None``, an error is thrown.
+        - If ``length`` is provided but ``dst`` and ``decimation`` are 
+            ``None``, a :class:`Waveform` is allocated to store the 
+            result with an inferred decimation of 1.
         
         - If ``dst`` is ``None`` but ``length`` and ``decimation`` are 
             provided, a :class:`Waveform` is allocated to store the 
-            result. If ``decimation == 0``, the decimation will be set equal to
-            the length.
+            decimated result. 
 
         - If ``dst`` and ``decimation`` are provided but ``length`` is not,
             the full length of the destination is used and the length of the
-            input is inferred from the destination length times the decimation.
+            input is inferred from the destination length and the decimation.
 
         - If ``dst`` and ``length`` are provided but ``decimation`` is not, the
             decimation factor is inferred from ratio of ``length`` to the size 
@@ -1446,12 +1502,11 @@ class Acadia:
         :return: The configuration used for streaming
         :rtype: :class:`StreamConfiguration`
         """
-        if (dst is None and length is None) or (dst is None and decimation is None) or (decimation is None and length is None):
-            raise ValueError("Must provide at least two of `dst`, `length`, and `decimation`.")
+        if (length is not None and dst is None and decimation is None):
+            decimation = 1
 
-        if configuration is None:
-            config_src = src if isinstance(src, Channel) else "memory"
-            configuration = self._request_stream_configuration(config_src, "dsp")
+        if (dst is None and length is None) or (dst is None and decimation is None) and (decimation is None and length is None):
+            raise ValueError("Must provide ``length`` or at least two of `dst`, `length`, and `decimation`.")
 
         path_width = self._firmware["stream_processing_path"]["width"]
         input_samples_per_cycle = self.convert(1, 
@@ -1462,7 +1517,7 @@ class Acadia:
         
         # Validate the decimation if we have one
         if decimation is not None:
-            if decimation % input_samples_per_cycle != 0:
+            if decimation != 1 and decimation % input_samples_per_cycle != 0:
                 raise ValueError(f"Decimation results in a non-integer"
                                     f" number of cycles"
                                     f" ({input_samples_per_cycle} samples per cycle,"
@@ -1491,11 +1546,13 @@ class Acadia:
             dst = Waveform(channel=(src if isinstance(src, Channel) else None), 
                             length=input_length_samples // decimation, 
                             region=self.PLDDR0Array, 
-                            quadrature_width=32)
-        else:
-            if dst.dtype != np.dtype('V8'):
-                raise TypeError(f"Destination must have a dtype of V8 (found"
-                                f" {dst.dtype})")
+                            quadrature_width=(16 if decimation == 1 else 32))
+        elif decimation != 1 and dst.dtype != np.dtype('V8'): 
+            raise TypeError(f"Destination must have a dtype of V8 (found"
+                            f" {dst.dtype})")
+        elif decimation == 1 and dst.dtype != np.dtype('V4'):
+            raise TypeError(f"Destination must have a dtype of V4 (found"
+                            f" {dst.dtype})")
 
         # We now have a valid destination. Check whether we have a valid 
         # length, decimation, or both 
@@ -1503,6 +1560,12 @@ class Acadia:
             # We must have decimation and will infer the input length from
             # the size of the destination
             # output samples * (input samples per output sample) * (1 / input samples per cycle) = number of cycles
+            if (len(dst) * decimation) % input_samples_per_cycle != 0:
+                raise ValueError(f"Stream results in non-integer number of"
+                                 f" cycles (dst {len(dst)} elements,"
+                                 f" decimation {decimation},"
+                                 f" {input_samples_per_cycle} input"
+                                 f" samples per cycle)")
             length_cycles = len(dst) * decimation // input_samples_per_cycle
             output_length_bytes = dst.byte_length()
         else:
@@ -1523,43 +1586,57 @@ class Acadia:
                 decimation = length_cycles * input_samples_per_cycle // len(dst)
 
             output_length_bytes = 8 * length_cycles * input_samples_per_cycle // decimation
+
+        if configuration is None:
+            config_src = src if isinstance(src, Channel) else "memory"
+            configuration = self._request_stream_configuration(config_src, "memory" if decimation == 1 else "dsp")
+
+        if decimation == 1:
+            if offset_units == "seconds" or offset_units == "cycles":
+                raise TypeError(f"Use space-like input units for the offset")
             
-        # Configure the DSP for decimation
-        # At packet start and counter start, we'll load in the input value
-        # Otherwise, when we receive valid data, we'll add it to P
-        dsp_address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
-        
-        # P = multiplier: CIN = 0, W = 00, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
-        self.sequencer().bus_write(address=dsp_address + 9, data=int("00000001010000", 2)) # packet start config
-        self.sequencer().bus_write(address=dsp_address + 10, data=int("00000001010000", 2)) # counter start config
-        
-        # P = multiplier + P: CIN = 0, W = 01, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
-        self.sequencer().bus_write(address=dsp_address + 11, data=int("00100001010000", 2)) # counter run config
-        
-        # The DSP module output is bits 46 to 15 of P, so we'll multiply by 
-        # 2^15 for both quadratures
-        self.sequencer().bus_write(address=dsp_address + 1, data=(1 << 15))
-        self.sequencer().bus_write(address=dsp_address + 5, data=(1 << 15))
-        
-        # No pre-add to the input stream
-        self.sequencer().bus_write(address=dsp_address + 2, data=0)
-        self.sequencer().bus_write(address=dsp_address + 6, data=0)
-        
-        # load packet start config
-        self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
-        
-        # Counter period low and high
-        counter_value = (decimation // input_samples_per_cycle) - 1
-        self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
-        self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
+            offset_bytes = self.convert(offset, 
+                                        offset_units, 
+                                        "bytes", 
+                                        32 // 8) # Channels create 32-bit elements
+
+        else:
+            # Configure the DSP for decimation
+            # At packet start and counter start, we'll load in the input value
+            # Otherwise, when we receive valid data, we'll add it to P
+            dsp_address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
+            
+            # P = multiplier: CIN = 0, W = 00, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
+            self.sequencer().bus_write(address=dsp_address + 9, data=int("00000001010000", 2)) # packet start config
+            self.sequencer().bus_write(address=dsp_address + 10, data=int("00000001010000", 2)) # counter start config
+            
+            # P = multiplier + P: CIN = 0, W = 01, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
+            self.sequencer().bus_write(address=dsp_address + 11, data=int("00100001010000", 2)) # counter run config
+            
+            # The DSP module output is bits 46 to 15 of P, so we'll multiply by 
+            # 2^15 for both quadratures
+            self.sequencer().bus_write(address=dsp_address + 1, data=(1 << 15))
+            self.sequencer().bus_write(address=dsp_address + 5, data=(1 << 15))
+            
+            # No pre-add to the input stream
+            self.sequencer().bus_write(address=dsp_address + 2, data=0)
+            self.sequencer().bus_write(address=dsp_address + 6, data=0)
+            
+            # load packet start config
+            self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
+            
+            # Counter period low and high
+            counter_value = (decimation // input_samples_per_cycle) - 1
+            self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
+            self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
  
-        if offset_units == "seconds" or offset_units == "cycles":
-            raise TypeError(f"Use space-like input units for the offset")
-        
-        offset_bytes = self.convert(offset, 
-                                    offset_units, 
-                                    "bytes", 
-                                    64 // 8) # DSP module creates 64-bit elements
+            if offset_units == "seconds" or offset_units == "cycles":
+                raise TypeError(f"Use space-like input units for the offset")
+            
+            offset_bytes = self.convert(offset, 
+                                        offset_units, 
+                                        "bytes", 
+                                        64 // 8) # DSP module creates 64-bit elements
         
         logging.debug(f"Stream length {length_cycles} cycles, decimation {decimation},"
                       f" of output size {output_length_bytes} bytes to address"

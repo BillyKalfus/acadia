@@ -107,9 +107,7 @@ class CMACCSpectroscopyRuntime(Runtime):
         acadia.attach()
         
         acadia.configure_clocks(reference="external")
-        time.sleep(1)
         acadia.align_tile_latencies()
-        time.sleep(1)
 
         pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
         Waveform.from_complex(pulse_complex, pulse, scale=self.stimulus_amplitude)
@@ -125,50 +123,37 @@ class CMACCSpectroscopyRuntime(Runtime):
         pulse_channel.configure_nco(update_source="sysref")
         capture_channel.configure_nco(update_source="sysref")
 
-        sweep_data = np.empty((len(self.frequencies), len(capture_data)), dtype=capture_data.dtype)
+        # Assemble and load the program
+        acadia.load(*acadia.assemble())
 
         for i in datamanager.count(self.iterations, "Iterations"):
-            for idx_frequency,frequency in enumerate(datamanager.count(self.frequencies, "Frequencies")):
-                # Set the modulation frequencies
+            for frequency in datamanager.count(self.frequencies, "Frequencies"):
+                # Set the modulation frequencies and reset phases
                 acadia.update_nco_frequency(pulse_channel, frequency=frequency)
                 acadia.update_nco_frequency(capture_channel, frequency=-frequency)
-
-                # When the frequencies are updated, also reset the NCO phases
-                pulse_channel.reset_nco_phase()
-                capture_channel.reset_nco_phase()
-
-                # Carry out a synchronized NCO update
-                acadia.pulse_sysref(1)
-                    
-                # Wait a moment so that the sysref will have actually happened
-                time.sleep(0.001)
+                acadia.reset_nco_phase(pulse_channel)
+                acadia.reset_nco_phase(capture_channel)
+                acadia.update_ncos_synchronized()
                                             
-                acadia.run(assemble=(i==0))
-                sweep_data[idx_frequency,:] = capture_data
+                # Run the sequencer and wait until it's done
+                acadia.run(assemble=False)
 
-            datamanager.write("traces", sweep_data)
+                # Grab the output data and save it
+                datamanager.write("traces", capture_data[0])
 
 class SpectroscopyPlot(PyPlotRuntimeComponent):
 
     def create_plot(self):
-        self.figure().set_size_inches(12,4)
-        
-        self.ax_data = self.figure().add_subplot(131)
-        self.data_re = self.ax_data.plot([], [], ".-", label="Re", animated=False)
-        self.data_im = self.ax_data.plot([], [], ".-", label="Im", animated=False)
-        self.ax_data.set_xlabel("Time [s]")
-        self.ax_data.set_ylabel("Signal Amplitude [arb. V]")
-        self.ax_data.set_title("Raw Data")
-        self.ax_data.legend()
+        self.figure().set_size_inches(8,4)
 
-        self.ax_mag = self.figure().add_subplot(132)
+        self.ax_mag = self.figure().add_subplot(121)
         self.data_mag = self.ax_mag.plot([], [], ".-", animated=False)
         self.ax_mag.set_xlabel("Frequency [MHz]")
         self.ax_mag.set_ylabel("Magnitude [arb. V*s]")
         self.ax_mag.set_title("Spectral Magnitude")
         self.ax_mag.grid()
         
-        self.ax_phase = self.figure().add_subplot(133)
+        self.ax_phase = self.figure().add_subplot(122)
         self.data_phase = self.ax_phase.plot([], [], ".-", animated=False)
         self.ax_phase.set_xlabel("Frequency [MHz]")
         self.ax_phase.set_ylabel("Phase [rad.]")

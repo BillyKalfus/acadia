@@ -1,7 +1,7 @@
 #!/bin/sh
 
-HOSTNAME=billy-zcu216
-MAC=76:54:C6:67:BC:BB
+HOSTNAME=customhostname
+MAC=custommac
 # IP=192.168.2.69  #DHCP for Yale network
 
 # Set the hostname
@@ -34,15 +34,24 @@ fi
 sleep 1;
 
 /etc/init.d/networking restart
+sleep 2;
 
 # If we supplied an IP address, set it
 if [ -n "$IP" ]; then
-	ifconfig eth0 $IP
+	ip addr add $IP dev eth0 
 fi
 
 # Change SSH settings to speed things up
 sed -i -e 's/UsePAM/#UsePAM/g' /etc/ssh/sshd_config
 /etc/init.d/sshd restart
+
+# Install acadia drivers
+cd /home/root
+python3 /run/media/mmcblk0p1/acadia/pyacadia/install_drivers.py
+
+# Install acadia library
+pip3 install -e /run/media/mmcblk0p1/acadia/pyacadia
+
 
 # Start a Jupyter lab
 # screen -dm bash -c "jupyter lab --no-browser --port=8070 --allow-root --ip=\"*\" --LabApp.token='' --LabApp.password=''"

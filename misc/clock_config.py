@@ -4,4 +4,4 @@ from acadia.system import Acadia
 acadia = Acadia()
 acadia.attach()
 
-acadia.configure_clocks(reference="internal")
+acadia.configure_clocks(reference="external")

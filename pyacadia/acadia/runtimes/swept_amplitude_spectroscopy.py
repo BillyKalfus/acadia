@@ -1,13 +1,16 @@
 from dataclasses import dataclass
+from typing import Sequence
 
 from acadia.runtime import Runtime
 from acadia.data import DataManager
 
 @dataclass
-class SpectroscopyRuntime(Runtime):
+class SweptAmplitudeSpectroscopyRuntime(Runtime):
     """
-    A :class:`Runtime` subclass for performing swept spectroscopy.
+    A :class:`Runtime` subclass for performing spectroscopy while sweeping the
+    amplitude of the stimulus.
     """
+
     # Iterable of frequencies
     frequencies: list 
     
@@ -23,8 +26,8 @@ class SpectroscopyRuntime(Runtime):
     # Length of the stimulus signal ramp in seconds (Total)
     stimulus_ramp_time: float
     
-    # DAC amplitude of stimulus
-    stimulus_amplitude: complex = 1.0
+    # DAC amplitude of stimulus or array thereof
+    stimulus_amplitudes: Sequence[complex]
     
     # DAC Nyquist zone (1 or 2)
     stimulus_NZ: int = 2
@@ -63,7 +66,16 @@ class SpectroscopyRuntime(Runtime):
         pulse_channel = acadia.DAC(self.DAC)
         capture_channel = acadia.ADC(self.ADC)
         
-        pulse = WindowedConstantWaveform(pulse_channel, 
+        # Determine what kind of pulse waveform we'll need depending on input parameters
+        if self.stimulus_constant_time == 0:
+            pulse = Waveform(pulse_channel, 
+                             length=pulse_channel.seconds_to_bytes(self.stimulus_ramp_time) // 4, 
+                             region=pulse_channel)
+        elif self.stimulus_ramp_time == 0:
+            pulse = ConstantWaveform(pulse_channel, 
+                                    length_seconds=self.stimulus_constant_time)
+        else:
+            pulse = WindowedConstantWaveform(pulse_channel, 
                                             constant_length_seconds=self.stimulus_constant_time,
                                             window_length_seconds=self.stimulus_ramp_time)
         
@@ -77,7 +89,9 @@ class SpectroscopyRuntime(Runtime):
         def sequence(a: Acadia):
             with a.channel_synchronizer():
                 a.generate(pulse)
-                a.generate_blank(capture_channel, self.capture_delay)
+                if self.capture_delay > 0:
+                    a.generate_blank(capture_channel, self.capture_delay)
+
                 capture_data, _ = a.stream(capture_channel, 
                                    length=capture_time, 
                                    length_units="seconds", 
@@ -92,12 +106,12 @@ class SpectroscopyRuntime(Runtime):
         acadia.attach()
         acadia.align_tile_latencies()
 
-        # Populate the pulse memory in hardware with samples
+        # Create the pulse shape (we'll load it later with the appropriate scale value)
         if self.stimulus_ramp_time != 0:
             pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
-            pulse[:] = Waveform.complex_to_sample(pulse_complex, scale=self.stimulus_amplitude)
         else:
-            pulse[:] = np.complex64(self.stimulus_amplitude)
+            pulse_complex = np.complex64(1)
+
 
         # Configure channel analog parameters
         pulse_channel.set_nyquist_zone(self.stimulus_NZ)
@@ -112,19 +126,21 @@ class SpectroscopyRuntime(Runtime):
 
         # Loop while reporting progress back to the host
         for i in datamanager.count(self.iterations, "Iterations"):
-            for frequency in datamanager.count(self.frequencies, "Frequencies"):
-                # Synchronously set the modulation frequencies and reset phases
-                acadia.update_nco_frequency(pulse_channel, frequency=frequency)
-                acadia.update_nco_frequency(capture_channel, frequency=-frequency)
-                acadia.reset_nco_phase(pulse_channel)
-                acadia.reset_nco_phase(capture_channel)
-                acadia.update_ncos_synchronized()
+            for amplitude in self.stimulus_amplitudes:
+                pulse[:] = Waveform.complex_to_sample(pulse_complex, scale=amplitude)
+                for frequency in datamanager.count(self.frequencies, "Frequencies"):
+                    # Synchronously set the modulation frequencies and reset phases
+                    acadia.update_nco_frequency(pulse_channel, frequency=frequency)
+                    acadia.update_nco_frequency(capture_channel, frequency=-frequency)
+                    acadia.reset_nco_phase(pulse_channel)
+                    acadia.reset_nco_phase(capture_channel)
+                    acadia.update_ncos_synchronized()
 
-                # Run the sequencer                        
-                acadia.run(assemble=False)
+                    # Run the sequencer                        
+                    acadia.run(assemble=False)
 
-                # Grab the data from memory and save it
-                datamanager.write("traces", capture_data)
+                    # Grab the data from memory and save it
+                    datamanager.write("traces", capture_data)
 
     def initialize(self):
         from IPython.core.getipython import get_ipython
@@ -142,22 +158,27 @@ class SpectroscopyRuntime(Runtime):
         self.plots = DynamicFigure(fig)
 
         # Create a plot for the spectral magnitude
-        self.line_mag = DynamicLine(ax[0], ".-")
         ax[0].set_xlabel("Frequency [MHz]")
         ax[0].set_ylabel("Magnitude [arb. V*s]")
         ax[0].set_title("Spectral Magnitude")
         ax[0].grid()
         
         # Create a plot for the spectral phase
-        self.line_phase = DynamicLine(ax[1], ".-")
         ax[1].set_xlabel("Frequency [MHz]")
         ax[1].set_ylabel("Phase [rad.]")
         ax[1].set_title("Spectral Phase")
         ax[1].grid()
 
-        # Create a label for displaying the electrical delay
-        self._delay_label = Label("Electrical delay: ")
-        display(self._delay_label)
+        self.lines_mag = []
+        self.lines_phase = []
+
+        for amp in self.stimulus_amplitudes:
+            self.lines_mag.append(DynamicLine(ax[0], ".-", label=f"{amp}"))
+            self.lines_phase.append(DynamicLine(ax[1], ".-", label=f"{amp}"))
+
+        ax[0].legend()
+
+        self.electrical_delay_vec = np.exp(2*np.pi*1j*self.frequencies*self.plot_electrical_delay)
 
     def update(self):
         import numpy as np
@@ -169,46 +190,9 @@ class SpectroscopyRuntime(Runtime):
         if not self.data.available("traces"):
             return
 
-        # Get the sample data from the record group
-        # The data in the record group will have a custom structured dtype 
-        # because each sample contains both quadratures packed together, so
-        # we need to convert it either to integers or to floating-point values
-        # if we want to do operations on it. Because integer math is often 
-        # much faster than floating point (and accrues no error), it's preferable
-        # to wait as long as possible before converting to floating point
-        # Keep in mind that this will add an extra dimension of length 2 on the
-        # right
         data = Waveform.sample_to_int(self.data["traces"].records())
 
-        # Now sum over time and datasets
-        # We can do this with `process_data` by providing an argument 
-        # with the appropriate structure. See its documentation for further details.
-        # The example here has three elements, one for each dimension of the 
-        # data. The dimensions are C-style; that is, elements are arranged in
-        # memory such that moving from one element to the next in the 
-        # flattened array corresponds to moving along the rightmost axis.
-        #
-        # Therefore, we can interpret the structure as follows (moving right to left):
-        # - The rightmost axis corresponds to the two quadratures, since they are 
-        #   packed next to each other in memory. We don't want to merge them in any 
-        #   way (yet), so we pass `None` to do nothing
-        # - The next axis corresponds to the time axis, because the records 
-        #   written to the group are time-series sample arrays. The length of this
-        #   axis (i.e., the number of samples per record) is extracted from the 
-        #   shape of the record group; since the program writes time-series traces
-        #   back-to-back, we can get the length of a trace by looking at its rightmost
-        #   axis length
-        # - Traces are collected while sweeping frequency, with one trace collected 
-        #   per frequency point. Therefore, frequency is the next axis; we extract its
-        #   length by directly giving it the array of frequencies being swept over 
-        #   (which we take directly from the runtime object).
-        # - Once we've collected a trace for every frequency point, we've completed 
-        #   a "dataset". In principle we could decide to be done and report what we have,
-        #   but oftentimes we'll collect multiple datasets and average them to reduce
-        #   the noise of the measurement. Therefore, for the outermost axis, we extract
-        #   all the datasets available by specifying `-1` as the axis length and sum them
-        #   together.
-        processing_spec = [(-1, np.sum), (self.frequencies, None), (self.data["traces"].shape[-1], np.sum), (2, None)]
+        processing_spec = [(-1, np.sum), (self.stimulus_amplitudes, None), (self.frequencies, None), (self.data["traces"].shape[-1], np.sum), (2, None)]
         data,_ = process_data(data, processing_spec)
 
         logging.info(f"After processing, data has shape {data.shape}")
@@ -223,23 +207,18 @@ class SpectroscopyRuntime(Runtime):
 
         logging.info(f"After squeezing, data has shape {data.shape}")
 
-        # Apply the electrical delay
-        data *= np.exp(2*np.pi*1j*self.frequencies*self.plot_electrical_delay)
+        for idx_amplitude,_ in enumerate(self.stimulus_amplitudes):
+            amplitude_data = data[idx_amplitude,:]
 
-        # We now have a 1D array of the amplitudes as a function of frequency,
-        # so we can do whatever processing we want
-        mags = np.abs(data)
-        phases = np.unwrap(np.angle(data))
-        self.line_mag.update(self.frequencies, mags)
-        self.line_phase.update(self.frequencies, phases)
+            # Apply the electrical delay
+            amplitude_data *= self.electrical_delay_vec
 
-        # Update the fit
-        def model(freqs, delay, phi0):
-            return 2*np.pi*freqs*delay + phi0
-    
-        popt,pcov = curve_fit(model, self.frequencies, phases)
-        logging.info(f"Electrical delay fit returned popt={popt}, pcov={pcov}")
-        self._delay_label.value = f"Electrical delay = {round(popt[0]*1e9,1)} ns +/- {round(pcov[0,0]*1e12)} ps"
+            # We now have a 1D array of the amplitudes as a function of frequency,
+            # so we can do whatever processing we want
+            mags = np.abs(amplitude_data)
+            phases = np.unwrap(np.angle(amplitude_data))
+            self.lines_mag[idx_amplitude].update(self.frequencies, mags)
+            self.lines_phase[idx_amplitude].update(self.frequencies, phases)
 
         # Update the plot itself
         self.plots.update()
@@ -250,11 +229,11 @@ if __name__ == "__main__":
     import logging
     
     # Run the program on the target
-    rt = SpectroscopyRuntime(frequencies=np.linspace(4.2e9, 4.4e9, 41),
+    rt = SweptAmplitudeSpectroscopyRuntime(frequencies=np.linspace(4.2e9, 4.4e9, 41),
                             DAC=1,
                             ADC=1, 
-                            stimulus_ramp_time=1e-6,
-                            stimulus_constant_time=0e-6,
+                            stimulus_ramp_time=16e-9,
+                            stimulus_constant_time=1e-6,
                             stimulus_amplitude=1,
                             stimulus_NZ=2,
                             capture_decimation=0,
