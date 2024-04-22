@@ -569,5 +569,5 @@ class ReadoutClusterDisplay:
     """
 
     def __init__(self, data, n_clusters=2):
-        
+        pass
         

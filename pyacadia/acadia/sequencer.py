@@ -2,19 +2,14 @@ import struct
 import os
 import operator
 from enum import Enum
-from typing import get_type_hints
+from typing import get_type_hints, Union
 from dataclasses import dataclass
 from contextlib import contextmanager
 
-from .dsp_modes import DSPMode, save_dsp_modes, load_dsp_modes
+from .dsp_modes import DSPMode, generate_dsp_modes
 from .compiler import ManagedResource, Symbol, Operation, Processor, Operable, ProcessorInstruction
 
 __all__ = ["Sequencer", "DSPConfiguration"]
-
-DSP_MODES_PATH = "/tmp/dsp_modes.bin"
-
-if not os.path.exists(DSP_MODES_PATH):
-    save_dsp_modes(DSP_MODES_PATH)
 
 def is_numeric(obj):
     """
@@ -134,10 +129,11 @@ class DSPConfiguration:
     """
     A container for a 32-bit value to be written to the DSP configuration port.
     """
+    DSP_MODES = generate_dsp_modes()
 
     # Mode in which to operate the DSP slice at the next clock cycle
     # May be a string or a DSPMode
-    mode: [DSPMode, str] = "P" 
+    mode: Union[DSPMode, str] = "P" 
 
     # If `True`, the RST pin of the P register is pulsed when
     # the configuration register is written.
@@ -157,8 +153,6 @@ class DSPConfiguration:
         destination on the sequencer, configures a given DSP slice.
 
         """
-        if not hasattr(DSPConfiguration, "DSP_MODES"):
-            DSPConfiguration.DSP_MODES = load_dsp_modes(DSP_MODES_PATH)
         
         if isinstance(self.mode, str):
             mode = DSPConfiguration.DSP_MODES[self.mode]
@@ -186,23 +180,23 @@ class DSPConfiguration:
         
     def value(self):
         return self._value
-    
+
 # Create dataclasses for abstracting machine code
 @dataclass
 class STP:
     src1: Source = Source(Source.Major.REG)
     src2: Source = Source(Source.Major.REG)
-    dest1: Destination = None
-    dest2: Destination = None
-    op: str = None
+    dest1: Union[Destination, None] = None
+    dest2: Union[Destination, None] = None
+    op: Union[str, None] = None
     premask_invert: bool = False
     condition_invert: bool = False
     conditional: bool = False
-    imm1: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
-    imm2: [int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
-    dsp_cep: [Source, Destination, int] = None
-    push_return: [bool, int] = False
-    comment: str = None
+    imm1: Union[int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
+    imm2: Union[int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
+    dsp_cep: Union[Source, Destination, int, None] = None
+    push_return: Union[bool, int] = False
+    comment: Union[str, None] = None
 
     def __post_init__(self):
         # Check types
@@ -221,19 +215,9 @@ class STP:
         # Do basic type-checking
         for field,field_type in get_type_hints(self).items(): 
             field_value = getattr(self, field)
-            if field_value is not None:
-                if isinstance(field_type, list):
-                    found = False
-                    for t in field_type:
-                        if isinstance(field_value, t):
-                            found = True
-                            break
-                    if not found:
-                        raise TypeError(f"The type of field {field} must be one of"
-                                        f" {field_type}; received {field_value}.")
-                elif not isinstance(field_value, field_type):
-                    raise TypeError(f"Field {field} must be of type {field_type};"
-                                    f" received {field_value}.")
+            if not isinstance(field_value, field_type):
+                raise TypeError(f"Field {field} must be of type {field_type};"
+                                f" received {field_value}.")
                 
     def pprint(self):
         """

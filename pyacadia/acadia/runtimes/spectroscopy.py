@@ -261,6 +261,6 @@ if __name__ == "__main__":
                             capture_delay=224e-9,
                             iterations=100,
                             plot_electrical_delay=112.2e-9)
-    rt.deploy("192.168.2.70", "spectroscopy", files = [__file__], log_level = logging.DEBUG)    
+    rt.deploy("192.168.2.69", "spectroscopy", files = [__file__], log_level = logging.DEBUG)    
     rt.display()
     
