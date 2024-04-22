@@ -250,17 +250,17 @@ if __name__ == "__main__":
     import logging
     
     # Run the program on the target
-    rt = SpectroscopyRuntime(frequencies=np.linspace(4.2e9, 4.4e9, 41),
-                            DAC=1,
-                            ADC=1, 
+    rt = SpectroscopyRuntime(frequencies=np.linspace(9.15e9, 9.25e9, 101),
+                            DAC=4,
+                            ADC=4, 
                             stimulus_ramp_time=1e-6,
-                            stimulus_constant_time=0e-6,
+                            stimulus_constant_time=100e-6,
                             stimulus_amplitude=1,
                             stimulus_NZ=2,
                             capture_decimation=0,
                             capture_delay=224e-9,
                             iterations=100,
-                            plot_electrical_delay=60.6e-9)
-    rt.deploy("192.168.2.69", "spectroscopy", files = [__file__], log_level = logging.DEBUG)    
+                            plot_electrical_delay=112.2e-9)
+    rt.deploy("192.168.2.70", "spectroscopy", files = [__file__], log_level = logging.DEBUG)    
     rt.display()
     

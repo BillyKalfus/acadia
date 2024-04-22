@@ -6,8 +6,6 @@ from acadia.data import DataManager
 class ConstantRuntime(Runtime):
     """
     A Runtime for streaming a constant pulse out of a DAC channel forever.
-    No display is rendered, and the process must be manually killed when one
-    wishes to end the synthesis.
     """
     
     # The channel to stream the constant on
@@ -25,16 +23,16 @@ class ConstantRuntime(Runtime):
     # Current reference for output channel
     channel_vop: int = 12000
 
-    FILE = __file__
-
     def main(self, directory: str, datamanager: DataManager):        
         from acadia.system import Acadia
         from acadia.arrays import Waveform, ConstantWaveform
+
+        import numpy as np
         
         acadia = Acadia()
 
         pulse_channel = acadia.DAC(self.dac_channel)
-        pulse = ConstantWaveform(pulse_channel, length=1024)
+        pulse = ConstantWaveform(pulse_channel, length_seconds=1e-6)
         
         def sequence(a: Acadia):
             with a.sequencer().loop():
@@ -45,10 +43,16 @@ class ConstantRuntime(Runtime):
 
         acadia.compile(sequence)
         acadia.attach()
-        Waveform.from_complex(pulse, scale=self.pulse_amplitude)
+        
+        pulse[:] = self.pulse_amplitude
         pulse_channel.set_nyquist_zone(self.channel_nyquist_zone)
         pulse_channel.configure_nco(frequency=self.nco_frequency)
         pulse_channel.set_vop(self.channel_vop)
         
         acadia.run()
+    
+if __name__ == "__main__":
+    rt = ConstantRuntime(dac_channel=0, nco_frequency=4.2e9)
+    rt.deploy("192.168.2.69", "constant", files=[__file__])    
+    rt.display()
     

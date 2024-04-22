@@ -537,7 +537,10 @@ class ConstantWaveform(Waveform):
         if self._length_seconds == 0:
             raise ValueError("Attempted assignment of ConstantWaveform with no length.")
         
-        if isinstance(v, (np.complex64, np.complex128)):
+        if isinstance(v, (float, np.float32, np.float64)):
+            v = np.complex64(v)
+        
+        if isinstance(v, (complex, np.complex64, np.complex128)):
             v_array = np.array([v]*len(self), dtype=np.complex64)
             v_samples = Waveform.complex_to_sample(v_array)
         elif isinstance(v, np.ndarray) and v.dtype.kind == "V":

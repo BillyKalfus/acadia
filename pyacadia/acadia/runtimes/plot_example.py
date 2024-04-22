@@ -43,10 +43,8 @@ class PlotRuntime(Runtime):
         self.line.update(self.x, y)
         self.fig.update()
 
-if __name__ == "__main__":
-    import logging
-    
+if __name__ == "__main__":    
     rt = PlotRuntime()
-    rt.deploy("192.168.2.69", "plot_runtime", update_period=0.05, files = [__file__], log_level = logging.DEBUG)    
+    rt.deploy("192.168.2.69", "plot_example", update_period=0.05, files=[__file__])    
     rt.display()
     

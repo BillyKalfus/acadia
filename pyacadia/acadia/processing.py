@@ -562,8 +562,12 @@ class Database:
         
         return d
         
+class ReadoutClusterDisplay:
+    """
+    A class for displaying complex histograms of collected readout data and
+    computing the optimal filters.
+    """
 
+    def __init__(self, data, n_clusters=2):
         
-
-
         

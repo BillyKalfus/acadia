@@ -148,8 +148,6 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
 
         from acadia.processing import DynamicLine, DynamicFigure
         import matplotlib.pyplot as plt
-        from IPython.display import display
-        from ipywidgets import Label
 
         fig,ax = plt.subplots(1,2, figsize=(7,3))
         fig.subplots_adjust(hspace=0.35)
@@ -223,23 +221,30 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
         # Update the plot itself
         self.plots.update()
 
+        self.lines_mag[0]._ax.autoscale()
+        self.lines_phase[0]._ax.autoscale()
+
 
 if __name__ == "__main__":
     import numpy as np
     import logging
     
     # Run the program on the target
-    rt = SweptAmplitudeSpectroscopyRuntime(frequencies=np.linspace(4.2e9, 4.4e9, 41),
-                            DAC=1,
-                            ADC=1, 
-                            stimulus_ramp_time=16e-9,
-                            stimulus_constant_time=1e-6,
-                            stimulus_amplitude=1,
+    rt = SweptAmplitudeSpectroscopyRuntime(frequencies=np.linspace(9.18e9, 9.24e9, 41),
+                            DAC=4,
+                            ADC=4, 
+                            stimulus_ramp_time=1e-6,
+                            stimulus_constant_time=100e-6,
+                            stimulus_amplitudes=np.round(np.linspace(0.1, 1, 10), 1),
                             stimulus_NZ=2,
+                            stimulus_VOP=4500,
                             capture_decimation=0,
                             capture_delay=224e-9,
                             iterations=100,
-                            plot_electrical_delay=60.6e-9)
-    rt.deploy("192.168.2.69", "spectroscopy", files = [__file__], log_level = logging.DEBUG)    
+                            plot_electrical_delay=112.2e-9)
+    
+    print(__file__)
+    
+    rt.deploy("192.168.2.70", "swept_amplitude_spectroscopy", files = [__file__], log_level = logging.DEBUG)    
     rt.display()
     

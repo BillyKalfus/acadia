@@ -1312,8 +1312,7 @@ class Sequencer(Processor):
         dsp = self.DSP()
         dsp_cfg = None
         if len(args) == 0:
-            # Do nothing
-            pass
+            dsp_cfg = DSPConfiguration("P+1", rst_p=True)
 
         elif len(args) == 1:
             start = 0
