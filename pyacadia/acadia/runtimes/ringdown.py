@@ -204,7 +204,7 @@ class RingdownRuntime(Runtime):
         # Fit the decay part if `pulse_stop_time` is provided
         if self.pulse_stop_time is not None: 
             stop_index = np.argmin(np.abs(self.time_axis - self.pulse_stop_time))
-            fit_time_axis = self.time_axis[stop_index:]
+            fit_time_axis = np.copy(self.time_axis[stop_index:])
             
             # Shift and scale the data to make the fit more reasonable
             fit_time_axis -= fit_time_axis[0]
@@ -219,7 +219,7 @@ class RingdownRuntime(Runtime):
             
             fit_guess = model.guess(power_avg[stop_index:], fit_time_axis)    
             pwr_fit = model.fit(power_avg[stop_index:], fit_guess, x=fit_time_axis)
-            self.data_pwr_fit.update_line(fit_time_axis, pwr_fit.best_fit/1e16)
+            self.data_pwr_fit.update(fit_time_axis, pwr_fit.best_fit/1e16)
             
             # add fitting results to legends
             t2_str = f"T2 (us): {mag_fit.params['tau'].value:.2e} ± {mag_fit.params['tau'].stderr:.2e}"
@@ -253,6 +253,7 @@ if __name__ == "__main__":
                             capture_decimation=100,
                             capture_delay=0.1e-6,
                             capture_time=2.5e-3,
-                            iterations=100)
+                            iterations=100,
+                            pulse_stop_time=100e-9)
     rt.deploy("192.168.2.69", "ringdown", files = [__file__], log_level = logging.DEBUG)    
     rt.display()
