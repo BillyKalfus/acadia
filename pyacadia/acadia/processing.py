@@ -7,8 +7,7 @@ from typing import Union
 
 import numpy as np
 
-from acadia.data import DataManager
-from acadia.arrays import Waveform
+from acadia.data import DataManager, CounterRecordGroup
 
 def process_data(source, dimensions=None):
     """
@@ -118,45 +117,6 @@ def process_data(source, dimensions=None):
 
     return return_data, shape_before_reduction
 
-# class LinePlot:
-#     """
-#     A helper class for generating dynamically updating line plots.
-     
-#     This simplifies the process of extracting data from 
-#     :class:`ArrayRecordGroup` objects stored in a :class:`DataManager`. This
-#     class builds on top of :class:`PyPlotRuntimeComponent` by allowing the user
-#     to specify update
-#     behavior by describing future array processing in terms of the arguments to 
-#     :meth:`ArrayRecordGroup.process_data`, rather than calling a fully generic 
-#     callback function in a bespoke subclass of :class:`PyPlotRuntimeComponent`. 
-#     This is primarily intended to reduce code duplication for simple cases, such
-#     as creating plots where the data are stored directly in record groups and 
-#     require only a limited amount of processing (if any), which is a common 
-#     use-case.
-#     """
-
-#     def add_line(self, xdata, ydata, **kwargs):
-#         """
-#         Add a line to the plot. Two parameters are used for describing how the
-#         xdata and ydata will be derived from the multi-dimensional data 
-#         stored in a record, and the remaining arguments are passed 
-#         directly to :meth:`Axes.plot()`. 
-        
-#         The parameters ``xdata`` and ``ydata`` describe the two axes of data 
-#         to be plotted. If these are of type ``dict``, they will be expanded 
-#         into keyword arguments for ``RuntimeComponent.retrieve_data()``; see
-#         the corresponding documentation for a description of parameters. 
-#         Otherwise, they will be passed as the ``source`` parameter.
-#         """
-#         if not hasattr(self, "_lines"):
-#             self._lines = []
-
-#         self._lines.append(
-#             {"xdata": xdata if isinstance(xdata, dict) else {"source": xdata},
-#              "ydata": ydata if isinstance(ydata, dict) else {"source": ydata}}
-#         )
-#         self._lines[-1].update(kwargs)
-
 class DynamicFigure:
     """
     A helper class for adding dynamic plots rendered by ``matplotlib``.
@@ -167,6 +127,8 @@ class DynamicFigure:
         from matplotlib.animation import Animation
         from itertools import count
 
+        # TODO: figure out why things don't work if we call this here
+        # rather than in the runtime file itself
         # from IPython.core.getipython import get_ipython
         # get_ipython().run_line_magic("matplotlib", "widget")
 
@@ -197,38 +159,6 @@ class DynamicFigure:
 
     def figure(self):
         return self.fig
-
-# class DynamicSubplots:
-#     """
-#     A helper class for adding dynamic plots rendered by ``matplotlib``.
-#     """
-
-#     def __init__(self, *args, **kwargs):
-#         """
-#         Create a new figure and subplots, along with extra infrastructure for
-#         dynamically updating the plot. All arguments are passed directly into
-#         :meth:`pyplot.subplots()`.
-#         """
-#         from IPython.display import display
-#         from IPython.core.getipython import get_ipython
-
-#         get_ipython().run_line_magic("matplotlib", "widget")
-
-#         import matplotlib.pyplot as plt
-#         from ipywidgets import Output
-        
-#         self.output = Output()
-#         with self.output:
-#             self.figure, self.ax = plt.subplots(*args, **kwargs)
-#         display(self.output)
-#         # display(self.figure)
-    
-#     def update(self): 
-#         from IPython.display import display
-#         self.figure.canvas.draw()
-#         self.output.clear_output(wait=True)
-#         with self.output:
-#             display(self.figure)
             
 
 class DynamicLine:
@@ -294,189 +224,29 @@ class DynamicErrorbar:
         bars[0].set_segments([np.array(points) for points in new_errorbars])
 
 
-# class ProgressBar:
-#     def __init__(self):        
-#         from tqdm.notebook import tqdm
-#         self.bar = tqdm(desc=self._record_name, dynamic_ncols=True)
-#         self._last_count = 0
+class ProgressBar:
+    def __init__(self, label=None):        
+        from tqdm.notebook import tqdm
+        self.bar = tqdm(desc=label, dynamic_ncols=True)
+        self._last_count = 0
 
-#     def update(self, *args, **kwargs):
-#         group = self.runtime.data[self._record_name]
-#         if "total" in group.metadata():
-#             self.bar.total = group.total
-#             self.bar.refresh()
+    def update(self, group: CounterRecordGroup):
+        """
+        Update the progress bar from the value in a :class:`CounterRecordGroup`.
+        """
+        if self.bar.desc is None:
+            self.bar.desc = group._name
+            self.bar.refresh()
 
-#         self.bar.update(group.count - self._last_count)
-#         self._last_count = group.count
+        if "total" in group.metadata():
+            self.bar.total = group.total
+            self.bar.refresh()
+
+        self.bar.update(group.count - self._last_count)
+        self._last_count = group.count
             
-#     def finalize(self):
-#         self.update()
-#         self.bar.close()
-
-    
-# class SweptWaveformInterface:
-#     """
-#     An interactive interface for viewing swept waveform data.
-
-#     Many experiments simply involve sweeping some parameter set over a grid of
-#     values and collecting a waveform at each point. This class is primarily a
-#     helper class to create a user-friendly means of viewing the captured data.
-
-#     If the record group provided by ``capture_record_name`` has a metadata entry
-#     with the name ``capture_time``, this is used to convert the x-axis into units
-#     of seconds. Otherwise, units of samples are used.
-#     """
-
-#     def __init__(self, 
-#                  data: DataManager, 
-#                  capture_record_name: str, 
-#                  sweep_record_names: list[str]):
-#         """
-#         :param: The :class:`DataManager` containing the capture data and the 
-#             values of the sweep axes.
-#         """
-#         self._data = data
-#         self._capture_record_name = capture_record_name
-#         self._sweep_record_names = sweep_record_names
-#         self._widgets_created = False
-
-#         self._plot_retval = self._create_plot()
-
-#     def update(self):
-#         # Do nothing if we have no data
-#         if not self._data.available(self._capture_record_name, *self._sweep_record_names):
-#             return
-        
-#         # Create all the widgets only once we have all the data
-#         # so that all the sliders have the correct axes
-#         if not self._widgets_created:
-#             self._widgets = self._create_widgets(self._data, self._sweep_record_names)
-#             self._widgets_created = True
-            
-#         # Either take the mean of all the iterations or select a single one,
-#         # depending on the input from the widgets
-#         data = self._process_iterations(self._widgets, self._data, self._capture_record_name, self._sweep_record_names)
-
-#         # Convert samples to complex numbers
-#         traces = Waveform.to_complex(data)
-
-#         # Create a time axis for convenience
-#         time_axis = self._get_time_axis(self._data, self._capture_record_name)
-#         sweep_axes = [self._data[r].records() for r in self._sweep_record_names]
-#         self._update_plot(self._plot_retval, traces, time_axis, sweep_axes)
-
-#     def _create_plot(self):
-#         import matplotlib.pyplot as plt        
-#         from acadia.processing import DynamicLine
-
-#         fig,ax = plt.subplots(1, 1, figsize=(10,3))
-#         fig.set_size_inches(10,3)
-        
-#         # Create a plot for the raw traces
-#         self.re = DynamicLine(ax, ".-", label="Re")
-#         self.im = DynamicLine(ax, ".-", label="Im")
-#         ax.set_xlabel("Time [s]")
-#         ax.set_ylabel("Signal Amplitude [arb. V]")
-#         ax.set_title("Raw Data")
-#         ax.legend()
-#         ax.grid()
-
-#         return fig,ax
-
-#     def _create_widgets(self, 
-#                         data: DataManager, 
-#                         sweep_record_names: list[str]) -> dict[str]:
-#         """
-#         Create many widgets for interactively viewing the data
-#         """
-#         from IPython.display import display
-#         from ipywidgets import SelectionSlider, VBox, IntSlider, RadioButtons
-
-#         # Create all the widgets that control the plot view
-#         widgets = {}
-
-#         # Create a way for the user to choose whether they want to view the mean
-#         # of all the iterations, or just a single one
-#         widgets["iteration_selector"] = RadioButtons(options=["Mean", "Single iteration"], 
-#                                                description="View data for:", 
-#                                                disabled=False)
-#         widgets["iteration_selector"].observe(self.update)
-
-#         # Make a slider that will allow the user to choose an iteration to view, 
-#         # when they want to view individual ones instead of the mean
-#         widgets["iteration_slider"] = IntSlider(min=0, max=0, 
-#                                                 disabled=True, 
-#                                                 description="Iteration")
-#         widgets["iteration_slider"].observe(self.update)
-
-#         # Create sliders that allow the user to pick which sweep point they want to view
-#         for record_name in sweep_record_names:
-#             k = f"{record_name}_slider"
-#             widgets[k] = SelectionSlider(options=list(data[record_name].records()), 
-#                                 disabled=False, 
-#                                 description=record_name)
-#             widgets[k].observe(self.update)
-
-#         display(VBox(list(widgets.values())))
-
-#         return widgets
-
-#     @classmethod
-#     def _process_iterations(cls,
-#                             widgets: dict[str],
-#                             data: DataManager, 
-#                             capture_record_name: str, 
-#                             sweep_record_names: list[str]):
-#         """
-#         Reduce the data along the iteration axis according to how the user
-#         wants it (as determined by their entries into the slider widgets)
-#         """
-#         # Create a list that we can pass to `process_data` so that the data gets reduced properly
-#         from acadia.processing import process_data
-#         capture_length = data[capture_record_name].shape[0]
-#         dimensions = [(data[r].records(), None) for r in sweep_record_names] + [(capture_length, None)]
-
-#         # Update widgets and process data according to whether we want the mean or a single iteration
-#         if widgets["iteration_selector"].value == "Mean":
-#             widgets["iteration_slider"].disabled = True
-
-#             # Extract data from the records but compute the mean of all the iterations when doing so
-#             data,_ = process_data(data[capture_record_name], [(-1, np.mean)] + dimensions)
-#         else:
-#             widgets["iteration_slider"].disabled = False
-
-#             # Extract data from only a particular iteration
-#             data,_ = process_data(data[capture_record_name], [(-1, widgets["iteration_slider"].value)] + dimensions)
-#             widgets["iteration_slider"].max = data.shape[0]-1
-
-#         return data
-    
-#     def _get_time_axis(self, 
-#                        data: DataManager, 
-#                        capture_record_name: str) -> np.ndarray:
-#         """
-#         Get an array of time points for the samples in the traces
-#         """
-#         capture_length = data[capture_record_name].shape[0]
-#         if "capture_time" in data[capture_record_name].metadata():
-#             capture_length_time = data[capture_record_name].metadata()["capture_time"]
-#             return np.arange(0, capture_length_time, capture_length_time / capture_length)
-#         return np.arange(0, capture_length)
-
-
-#     def _update_plot(self, 
-#                      plot_retval, 
-#                      traces: np.ndarray, 
-#                      time_axis: np.ndarray, 
-#                      sweep_axes: list[np.ndarray]):
-#         """
-#         Update the view of the data, given the trace data and the corresponding
-#         time axis.
-#         """
-#         fig,ax = plot_retval
-        
-#         # Determine the sweep point that the user has chosen to show
-#         sweep_point = tuple(a.index(s.value) for a,s in zip(sweep_axes, self._slid))
+    def finalize(self):
+        self.bar.close()
 
 class Database:
     """
@@ -562,12 +332,34 @@ class Database:
         
         return d
         
-class ReadoutClusterDisplay:
+class ClusterDisplay:
     """
-    A class for displaying complex histograms of collected readout data and
-    computing the optimal filters.
+    A class for displaying complex histograms of collected spectroscopy data, 
+    identifying clusters by fitting to a Gaussian mixture model, and computing 
+    the optimal linear filters for separating two of the clusters. 
     """
 
-    def __init__(self, data, n_clusters=2):
-        pass
+    def __init__(self, clusters: int = 2, iterations: int = 100):
+        """
+        :param clusters: Number of clusters to identify
+        :type clusters: int
+        :param iterations: Number of optimization iterations
+        :type iterations: int
+        """
+
+        self._clusters = clusters
+
+        from hmmlearn.hmm import GaussianHMM
+        self._model = GaussianHMM(n_components=clusters, covariance_type="full", n_iter=iterations)
+
+    def update(self, data: np.ndarray):
+        """
+        :param data: Data to fit
+        :type data: numpy.ndarray with complex datatype
+        """            
+        data_stacked = data.astype(f"<f{data.itemsize // 2}").reshape(-1,2)
+        self._model.fit(data_stacked)
+
+
+
         

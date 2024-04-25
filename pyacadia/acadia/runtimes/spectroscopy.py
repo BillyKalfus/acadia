@@ -56,7 +56,7 @@ class SpectroscopyRuntime(Runtime):
         
         from acadia.system import Acadia
         from acadia.data import ArrayRecordGroup
-        from acadia.arrays import Waveform, WindowedConstantWaveform, ConstantWaveform
+        from acadia.arrays import Waveform, WindowedConstantWaveform
         
         # Create an acadia object and grab a couple of its channels
         acadia = Acadia()
@@ -127,6 +127,7 @@ class SpectroscopyRuntime(Runtime):
                 datamanager.write("traces", capture_data)
 
     def initialize(self):
+        # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
