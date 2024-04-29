@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 from acadia.runtime import Runtime
-from acadia.data import DataManager
 
 @dataclass
 class SpectroscopyRuntime(Runtime):
@@ -51,7 +50,7 @@ class SpectroscopyRuntime(Runtime):
     # The number of full spectra to take
     iterations: int = 10
         
-    def main(self, directory: str, datamanager: DataManager):
+    def main(self):
         import numpy as np
         
         from acadia.system import Acadia
@@ -71,7 +70,7 @@ class SpectroscopyRuntime(Runtime):
         capture_time = self.capture_time if self.capture_time != 0 else self.stimulus_ramp_time + self.stimulus_constant_time                        
         
         # Create a record group for saving captured data, storing the chosen capture time along with it
-        datamanager.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
+        self.data.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
@@ -111,8 +110,8 @@ class SpectroscopyRuntime(Runtime):
         acadia.load(*acadia.assemble())
 
         # Loop while reporting progress back to the host
-        for i in datamanager.count(self.iterations, "Iterations"):
-            for frequency in datamanager.count(self.frequencies, "Frequencies"):
+        for i in self.data.count(self.iterations, "Iterations"):
+            for frequency in self.data.count(self.frequencies, "Frequencies"):
                 # Synchronously set the modulation frequencies and reset phases
                 acadia.update_nco_frequency(pulse_channel, frequency=frequency)
                 acadia.update_nco_frequency(capture_channel, frequency=-frequency)
@@ -124,23 +123,21 @@ class SpectroscopyRuntime(Runtime):
                 acadia.run(assemble=False)
 
                 # Grab the data from memory and save it
-                datamanager.write("traces", capture_data)
+                self.data.write("traces", capture_data)
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-        from acadia.processing import DynamicLine, DynamicFigure
+        from acadia.processing import DynamicLine, ProgressBar
         import matplotlib.pyplot as plt
         from IPython.display import display
         from ipywidgets import Label
 
-        fig,ax = plt.subplots(1,2, figsize=(7,3))
-        fig.subplots_adjust(hspace=0.35)
-        fig.tight_layout()
-
-        self.plots = DynamicFigure(fig)
+        self.fig,ax = plt.subplots(1,2, figsize=(7,3))
+        self.fig.subplots_adjust(hspace=0.35)
+        self.fig.tight_layout()
 
         # Create a plot for the spectral magnitude
         self.line_mag = DynamicLine(ax[0], ".-")
@@ -160,6 +157,8 @@ class SpectroscopyRuntime(Runtime):
         self._delay_label = Label("Electrical delay: ")
         display(self._delay_label)
 
+        self.progress_bar = ProgressBar("Iterations")
+
     def update(self):
         import numpy as np
         from scipy.optimize import curve_fit
@@ -169,6 +168,9 @@ class SpectroscopyRuntime(Runtime):
         # First make sure that we actually have new data to process
         if not self.data.available("traces"):
             return
+        
+        if "Iterations" in self.data:
+            self.progress_bar.update(self.data["Iterations"])
 
         # Get the sample data from the record group
         # The data in the record group will have a custom structured dtype 
@@ -212,8 +214,6 @@ class SpectroscopyRuntime(Runtime):
         processing_spec = [(-1, np.sum), (self.frequencies, None), (self.data["traces"].shape[-1], np.sum), (2, None)]
         data,_ = process_data(data, processing_spec)
 
-        logging.info(f"After processing, data has shape {data.shape}")
-
         # Convert the data to complex
         data = Waveform.to_complex(data)
 
@@ -221,8 +221,6 @@ class SpectroscopyRuntime(Runtime):
         # length-1 axes that result from reduction. 
         # In this case, we don't need them, so get rid of them
         data = np.squeeze(data)
-
-        logging.info(f"After squeezing, data has shape {data.shape}")
 
         # Apply the electrical delay
         data *= np.exp(2*np.pi*1j*self.frequencies*self.plot_electrical_delay)
@@ -239,29 +237,31 @@ class SpectroscopyRuntime(Runtime):
             return 2*np.pi*freqs*delay + phi0
     
         popt,pcov = curve_fit(model, self.frequencies, phases)
-        logging.info(f"Electrical delay fit returned popt={popt}, pcov={pcov}")
         self._delay_label.value = f"Electrical delay = {round(popt[0]*1e9,1)} ns +/- {round(pcov[0,0]*1e12)} ps"
 
         # Update the plot itself
-        self.plots.update()
+        self.fig.canvas.draw_idle()
+
+    def finalize(self):
+        super().finalize()
+        self.progress_bar.finalize()
 
 
 if __name__ == "__main__":
     import numpy as np
-    import logging
     
     # Run the program on the target
     rt = SpectroscopyRuntime(frequencies=np.linspace(9.15e9, 9.25e9, 101),
                             DAC=4,
                             ADC=4, 
                             stimulus_ramp_time=1e-6,
-                            stimulus_constant_time=100e-6,
+                            stimulus_constant_time=10e-6,
                             stimulus_amplitude=1,
                             stimulus_NZ=2,
                             capture_decimation=0,
                             capture_delay=224e-9,
                             iterations=100,
                             plot_electrical_delay=112.2e-9)
-    rt.deploy("192.168.2.69", "spectroscopy", files = [__file__], log_level = logging.DEBUG)    
+    rt.deploy("192.168.2.70", "acadia.runtimes.spectroscopy", log_debug=True)    
     rt.display()
     

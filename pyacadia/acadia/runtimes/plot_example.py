@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from acadia.runtime import Runtime
-from acadia.data import DataManager
 
 @dataclass
 class PlotRuntime(Runtime):
@@ -15,24 +14,25 @@ class PlotRuntime(Runtime):
     delay: float = 0.01
     plot_points: int = 101
 
-    def main(self, directory: str, datamanager: DataManager):
+    def main(self):
         import time
-        for _ in datamanager.count(self.iterations, "counter"):
+        for _ in self.data.count(self.iterations, "counter"):
             time.sleep(self.delay)
 
     def initialize(self):
-        from acadia.processing import DynamicLine, DynamicFigure
+        from acadia.processing import DynamicLine, ProgressBar
         import matplotlib.pyplot as plt
 
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
         
-        fig,ax = plt.subplots()
+        self.fig,ax = plt.subplots()
         ax.set_xlim(0, self.plot_points)
         ax.set_ylim(-self.iterations, self.iterations)
         self.line = DynamicLine(ax, ".-")
-        self.fig = DynamicFigure(fig)
         self.x = np.arange(self.plot_points)        
+
+        self.progress_bar = ProgressBar("Counter")
 
     def update(self, *args):
         if "counter" not in self.data:
@@ -41,10 +41,15 @@ class PlotRuntime(Runtime):
         iteration = self.data["counter"].count
         y = np.linspace(-iteration, iteration, self.plot_points)
         self.line.update(self.x, y)
-        self.fig.update()
+        self.fig.canvas.draw_idle()
+        self.progress_bar.update(self.data["counter"])
+
+    def finalize(self):
+        super().finalize()
+        self.progress_bar.finalize()
 
 if __name__ == "__main__":    
     rt = PlotRuntime()
-    rt.deploy("192.168.2.69", "plot_example", update_period=0.05, files=[__file__])    
+    rt.deploy("192.168.2.69", "acadia.runtimes.plot_example", event_loop_period=0.05)    
     rt.display()
     

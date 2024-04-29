@@ -6,12 +6,12 @@ ps_functions_module = Extension("acadia.ps_functions",
                                 libraries=["pthread"])
                 
 setup (name = 'pyacadia',
-       version = '4.0',
+       version = '4.1',
        description = 'Assembler, hardware interface, and firmware management for the Acadia quantum control system.',
        author = 'William Kalfus',
        author_email = 'william.kalfus@yale.edu',
        packages=find_packages(),
        ext_modules=([ps_functions_module] if platform.processor() == "aarch64" else []),
        extras_require={
-          'host': ['jupyter', 'ipywidgets', 'ipython', 'ipympl', 'tqdm', 'scipy']
+          'host': ['jupyter', 'ipywidgets', 'ipython', 'ipympl', 'tqdm', 'scipy', 'numpy', 'lmfit']
       })

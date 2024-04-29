@@ -1,8 +1,9 @@
+import os
 from typing import Union
 from dataclasses import dataclass
 
 from acadia.runtime import Runtime
-from acadia.data import DataManager, ArrayRecordGroup
+from acadia.data import ArrayRecordGroup
 from acadia.arrays import Waveform
 import numpy as np
 
@@ -52,9 +53,8 @@ class RingdownRuntime(Runtime):
 
     # time (in seconds) when the pulse is stop, used in fitting the tail of decay trace
     pulse_stop_time: Union[float, None] = None
-
     
-    def main(self, directory: str, datamanager: DataManager):
+    def main(self):
         import time
         import numpy as np
         
@@ -70,7 +70,7 @@ class RingdownRuntime(Runtime):
                                             window_length_seconds=self.stimulus_ramp_time)
         
         capture_time = self.capture_time if self.capture_time != 0 else self.stimulus_ramp_time + self.stimulus_constant_time                        
-        datamanager.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
+        self.data.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
                 
         # Create a sequence for the sequencer
         def sequence(a: Acadia):
@@ -120,26 +120,24 @@ class RingdownRuntime(Runtime):
         # Wait a moment so that the sysref will have actually happened
         time.sleep(0.001)
         
-        for i in datamanager.count(self.iterations, "Iterations"):                                    
+        for i in self.data.count(self.iterations, "Iterations"):                                    
             acadia.run(assemble=(i==0))
-            datamanager.write("traces", capture_data)
+            self.data.write("traces", capture_data)
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
         import matplotlib.pyplot as plt
-        from acadia.processing import DynamicLine, DynamicFigure, ProgressBar
+        from acadia.processing import DynamicLine, ProgressBar
         
         # Create a progress bar for viewing things
         self.progress_bar = ProgressBar("Iterations")
 
         # Make a figure with our plots
-        fig = plt.figure(figsize=(12,4))
-
-        self.plots = DynamicFigure(fig)
+        self.fig, (ax_data, ax_mag, ax_pwr) = plt.subplots(3,1,figsize=(4,12))        
+        self.fig.subplots_adjust(hspace=0.3)
         
-        ax_data = fig.add_subplot(131)
         self.data_re = DynamicLine(ax_data, ".-", label="I")
         self.data_im = DynamicLine(ax_data, ".-", label="Q")
         ax_data.set_xlabel("Time [s]")
@@ -147,7 +145,6 @@ class RingdownRuntime(Runtime):
         ax_data.set_title("Average Signal Amplitude")
         ax_data.legend()
 
-        ax_mag = fig.add_subplot(132)
         self.data_mag = DynamicLine(ax_mag, ".", label="Magnitude")
         if self.pulse_stop_time is not None:
             self.data_mag_fit = DynamicLine(ax_mag, "-", label="Magnitude (fit)")
@@ -156,7 +153,6 @@ class RingdownRuntime(Runtime):
         ax_mag.set_title("$\left|\overline{I + i Q}\\right|$")
         ax_mag.legend()
 
-        ax_pwr = fig.add_subplot(133)
         self.data_pwr = DynamicLine(ax_pwr, ".-", label="Power")
         if self.pulse_stop_time is not None:
             self.data_pwr_fit = DynamicLine(ax_pwr, "-", label="Power (fit)")
@@ -164,8 +160,6 @@ class RingdownRuntime(Runtime):
         ax_pwr.set_ylabel("Power [arb. V**2]")
         ax_pwr.set_title("$\overline{I^2 + Q^2}$")
         ax_pwr.legend()
-
-        fig.subplots_adjust(hspace=0.35)
 
     def update(self):
         # Do nothing if we don't have the data that we want
@@ -228,19 +222,23 @@ class RingdownRuntime(Runtime):
             self.data_pwr._ax.legend().get_texts()[1].set_text(t1_str)
 
             # update all axis scales
-            for ax in self.plots.figure().get_axes():
+            for ax in self.get_axes():
                 ax.relim()
                 ax.autoscale(axis='y')
                 ax.set_xlim(0, self.time_axis[-1])
 
+        self.fig.canvas.draw_idle()
+
     def finalize(self):
         super().finalize()
         self.progress_bar.finalize()
+        self.fig.savefig(os.path.join(self.local_directory, "plots.png"), 
+                                    dpi=500, 
+                                    transparent=True)
         
     
 if __name__ == "__main__":
     import numpy as np
-    import logging
     
     # Run the program on the target
     rt = RingdownRuntime(frequency=6.2e9,
@@ -250,10 +248,10 @@ if __name__ == "__main__":
                             stimulus_constant_time=1e-3,
                             stimulus_amplitude=1,
                             stimulus_NZ=2,
-                            capture_decimation=100,
+                            capture_decimation=1000,
                             capture_delay=0.1e-6,
                             capture_time=2.5e-3,
-                            iterations=100,
-                            pulse_stop_time=100e-9)
-    rt.deploy("192.168.2.69", "ringdown", files = [__file__], log_level = logging.DEBUG)    
+                            iterations=1000,
+                            pulse_stop_time=None)
+    rt.deploy("192.168.2.69", "acadia.runtimes.ringdown", log_debug=True)    
     rt.display()

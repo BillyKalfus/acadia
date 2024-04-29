@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from acadia.runtime import Runtime
-from acadia.data import DataManager
 
 @dataclass
 class SweptAmplitudeSpectroscopyRuntime(Runtime):
@@ -54,7 +53,7 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
     # The number of full spectra to take
     iterations: int = 10
         
-    def main(self, directory: str, datamanager: DataManager):
+    def main(self):
         import numpy as np
         
         from acadia.system import Acadia
@@ -83,7 +82,7 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
         capture_time = self.capture_time if self.capture_time != 0 else self.stimulus_ramp_time + self.stimulus_constant_time                        
         
         # Create a record group for saving captured data, storing the chosen capture time along with it
-        datamanager.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
+        self.data.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
@@ -125,10 +124,10 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
         acadia.load(*acadia.assemble())
 
         # Loop while reporting progress back to the host
-        for i in datamanager.count(self.iterations, "Iterations"):
+        for i in self.data.count(self.iterations, "Iterations"):
             for amplitude in self.stimulus_amplitudes:
                 pulse[:] = Waveform.complex_to_sample(pulse_complex, scale=amplitude)
-                for frequency in datamanager.count(self.frequencies, "Frequencies"):
+                for frequency in self.data.count(self.frequencies, "Frequencies"):
                     # Synchronously set the modulation frequencies and reset phases
                     acadia.update_nco_frequency(pulse_channel, frequency=frequency)
                     acadia.update_nco_frequency(capture_channel, frequency=-frequency)
@@ -140,20 +139,18 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
                     acadia.run(assemble=False)
 
                     # Grab the data from memory and save it
-                    datamanager.write("traces", capture_data)
+                    self.data.write("traces", capture_data)
 
     def initialize(self):
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-        from acadia.processing import DynamicLine, DynamicFigure
+        from acadia.processing import DynamicLine
         import matplotlib.pyplot as plt
 
-        fig,ax = plt.subplots(1,2, figsize=(7,3))
-        fig.subplots_adjust(hspace=0.35)
-        fig.tight_layout()
-
-        self.plots = DynamicFigure(fig)
+        self.fig,ax = plt.subplots(1,2, figsize=(7,3))
+        self.fig.subplots_adjust(hspace=0.35)
+        self.fig.tight_layout()
 
         # Create a plot for the spectral magnitude
         ax[0].set_xlabel("Frequency [MHz]")
@@ -180,7 +177,6 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
 
     def update(self):
         import numpy as np
-        from scipy.optimize import curve_fit
         from acadia.processing import process_data
         from acadia.arrays import Waveform
 
@@ -193,8 +189,6 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
         processing_spec = [(-1, np.sum), (self.stimulus_amplitudes, None), (self.frequencies, None), (self.data["traces"].shape[-1], np.sum), (2, None)]
         data,_ = process_data(data, processing_spec)
 
-        logging.info(f"After processing, data has shape {data.shape}")
-
         # Convert the data to complex
         data = Waveform.to_complex(data)
 
@@ -202,8 +196,6 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
         # length-1 axes that result from reduction. 
         # In this case, we don't need them, so get rid of them
         data = np.squeeze(data)
-
-        logging.info(f"After squeezing, data has shape {data.shape}")
 
         for idx_amplitude,_ in enumerate(self.stimulus_amplitudes):
             amplitude_data = data[idx_amplitude,:]
@@ -219,7 +211,7 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
             self.lines_phase[idx_amplitude].update(self.frequencies, phases)
 
         # Update the plot itself
-        self.plots.update()
+        self.fig.canvas.draw_idle()
 
         self.lines_mag[0]._ax.autoscale()
         self.lines_phase[0]._ax.autoscale()
@@ -227,7 +219,6 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
 
 if __name__ == "__main__":
     import numpy as np
-    import logging
     
     # Run the program on the target
     rt = SweptAmplitudeSpectroscopyRuntime(frequencies=np.linspace(9.18e9, 9.24e9, 41),
@@ -245,6 +236,6 @@ if __name__ == "__main__":
     
     print(__file__)
     
-    rt.deploy("192.168.2.70", "swept_amplitude_spectroscopy", files = [__file__], log_level = logging.DEBUG)    
+    rt.deploy("192.168.2.70", "acadia.runtimes.swept_amplitude_spectroscopy", log_debug=True)    
     rt.display()
     

@@ -8,8 +8,55 @@ Yale University, 2023
 
 The Acadia platform is intended to provide a modern, simple, and unified framework for integrating real-time signal synthesis and processing with hardware compute resources. The framework was developed to target the ZCU216 RFSoC evaluation board but straightforwardly extends to other hardware. 
 
+## Host Computers
 
-## Installation
+Host computers are responsible for deploying procedures onto remote targets, receiving and archiving any data from them, and potentially rendering any live outputs during the procedure.
+
+### OS and Software Requirements
+
+Acadia only supports host computers using an Ubuntu or Debian-based distribution of Linux, either natively or through the Windows Subsystem for Linux (WSL). See [this link](https://learn.microsoft.com/en-us/windows/wsl/install) for information about how to install WSL on Windows machines. This software was developed using Ubuntu 22.04.3 LTS, though any reasonably modern distribution should function properly. Acadia has also been known to function on recent versions of Mac OS, though compatibility is not guaranteed.
+
+The host computer must have `python>=3.8` along with the packages `python3-pip` and (optionally) `python3-venv`. These can be installed from the Linux command line as
+
+```
+sudo apt update
+sudo apt install python3-pip python3-venv
+```
+
+Though it is not required, we encourage the use of Python virtual environments for managing dependencies. A new Python virtual environment can be created by running 
+
+```
+python3 -m venv ~/acadia_env
+```
+
+This will create a new environment called `acadia_env` in your home directory (this name and location are arbitrary and no part of Acadia requires the environment to be named this) which you can then enter by calling
+
+```
+source ~/acadia_env/bin/activate
+```
+
+Your terminal should now indicate that you have entered the `acadia_env` Python environment. You can return to the default Python environment by calling `deactivate`. 
+
+Machines that will be used for deploying procedures onto remote targets 
+
+### Installing/Updating Acadia
+
+Once you have entered your preferred Python environment, download and install the `acadia` package along with all of its requirements by running
+
+```
+git clone https://git.yale.edu/RSL/acadia.git
+pip3 install -e acadia/pyacadia[host]
+```
+
+### Development Environment
+
+This software supports deployment and runtime management from any Python terminal. However, many users would like to visualize data in real-time, even if just to confirm that deployment is progressing satisfactorily. This is implemented in Acadia through `IPython` and `ipywidgets`, and visualization is supported in any front-end capable of rendering their outputs, such as Jupyter notebooks. 
+
+We primarily encourage the use of this software through VS Code, which may be installed [here](https://code.visualstudio.com/download).
+
+## ZCU216 Configuration
+
+### First-time Setup
 
 ### ZCU216 firmware
 
@@ -39,18 +86,18 @@ python3 acadia/pyacadia/install_drivers.py
 pip3 install -e acadia/pyacadia
 ```
 
-## Building a Linux image with integrated FPGA bitstream
+## Building a Linux image with integrated FPGA bitstream (Advanced)
 
 ### Requirements
-1. Vivado 2020.2 with a valid license for the RFSoC Gen 3 devices (included with ZCU216 purchase).
+1. Vivado 2023.2 with a valid license for the RFSoC Gen 3 devices (included with ZCU216 purchase).
 1. Xilinx PetaLinux Tools
 1. The PetaLinux Tools directory is available at the environment variable `PETALINUX`
-1. The Xilinx DTG source repository is downloaded locally and checked out to the 2020.2 branch
+1. The Xilinx DTG source repository is downloaded locally and checked out to the 2023.2 branch
 
 ```
 git clone https://github.com/Xilinx/device-tree-xlnx
 cd device-tree-xlnx
-git checkout xilinx-v2020.2
+git checkout xilinx-v2023.2
 cd ..
 ```
 

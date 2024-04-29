@@ -117,45 +117,56 @@ def process_data(source, dimensions=None):
 
     return return_data, shape_before_reduction
 
+# class DynamicFigure:
+#     """
+#     A helper class for adding dynamic plots rendered by ``matplotlib``.
+#     """
+
+#     def __init__(self, figure = None):
+#         import matplotlib.pyplot as plt
+#         from matplotlib.animation import Animation
+#         from itertools import count
+
+#         # TODO: figure out why things don't work if we call this here
+#         # rather than in the runtime file itself
+#         # from IPython.core.getipython import get_ipython
+#         # get_ipython().run_line_magic("matplotlib", "widget")
+
+#         self.fig = plt.figure() if figure is None else figure
+
+#         def _init(anim_self: Animation, *args, **kwargs):
+#             anim_self._framedata = count()
+#             super(anim_self.__class__, anim_self).__init__(*args, **kwargs)
+
+#         def _dummy(*args, **kwargs):
+#             pass
+
+#         test_animation_type = type(f"RuntimePyPlotAnimation", 
+#                                 (Animation,), 
+#                                 {"__init__": _init, 
+#                                  "_draw_frame": _dummy})
+        
+#         DummyEvent = type("DummyEvent", (), {"add_callback": _dummy, "start": _dummy, "stop": _dummy})
+
+#         self.anim = test_animation_type(self.fig, event_source=DummyEvent)
+#         self.anim._step()
+    
+#     def update(self): 
+#         self.anim._step()
+
+#     def figure(self):
+#         return self.fig
+
 class DynamicFigure:
     """
     A helper class for adding dynamic plots rendered by ``matplotlib``.
     """
 
-    def __init__(self, figure = None):
-        import matplotlib.pyplot as plt
-        from matplotlib.animation import Animation
-        from itertools import count
-
-        # TODO: figure out why things don't work if we call this here
-        # rather than in the runtime file itself
-        # from IPython.core.getipython import get_ipython
-        # get_ipython().run_line_magic("matplotlib", "widget")
-
-        if figure is None:
-            figure = plt.figure()
-
-        self.callbacks = []
-
-        def _init(anim_self: Animation, *args, **kwargs):
-            anim_self._framedata = count()
-            super(anim_self.__class__, anim_self).__init__(*args, **kwargs)
-
-        def _dummy(*args, **kwargs):
-            pass
-
-        test_animation_type = type(f"RuntimePyPlotAnimation", 
-                                (Animation,), 
-                                {"__init__": _init, 
-                                 "_draw_frame": _dummy})
-        
-        DummyEvent = type("DummyEvent", (), {"add_callback": _dummy, "start": _dummy, "stop": _dummy})
-
-        self.anim = test_animation_type(figure, event_source=DummyEvent)
-        self.anim._step()
+    def __init__(self, figure):
+        self.fig = figure
     
     def update(self): 
-        self.anim._step()
+        self.fig.canvas.draw_idle()
 
     def figure(self):
         return self.fig
@@ -223,7 +234,19 @@ class DynamicErrorbar:
         
         bars[0].set_segments([np.array(points) for points in new_errorbars])
 
+class DynamicPcolormesh:
 
+    def __init__(self, ax, **kwargs):
+        self.retval = ax.pcolormesh([], **kwargs)
+
+    def update(self, x, y, data):
+        """
+        Update the values of the colormesh. Note that moving in the x-direction
+        corresponds to moving from one row to the next; that is, a single 
+        data point is given by data[x_idx, y_idx]. See the documentation for
+        ``matplotlib.pyplot.pcolormesh`` for additional information.
+        """
+        
 class ProgressBar:
     def __init__(self, label=None):        
         from tqdm.notebook import tqdm

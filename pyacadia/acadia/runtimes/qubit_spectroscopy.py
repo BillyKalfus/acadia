@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 from acadia.runtime import Runtime
-from acadia.data import DataManager
 
 @dataclass
 class QubitSpectroscopyRuntime(Runtime):
@@ -65,12 +64,12 @@ class QubitSpectroscopyRuntime(Runtime):
     # The number of full spectra to take
     iterations: int = 10
         
-    def main(self, directory: str, datamanager: DataManager):
+    def main(self):
         import numpy as np
         
         from acadia.system import Acadia
         from acadia.data import ArrayRecordGroup
-        from acadia.arrays import Waveform, WindowedConstantWaveform, ConstantWaveform
+        from acadia.arrays import Waveform, WindowedConstantWaveform
         
         # Create an acadia object and grab a couple of its channels
         acadia = Acadia()
@@ -91,7 +90,7 @@ class QubitSpectroscopyRuntime(Runtime):
         capture_time = self.readout_capture_time if self.readout_capture_time != 0 else self.readout_stimulus_ramp_time + self.readout_stimulus_constant_time                        
         
         # Create a record group for saving captured data, storing the chosen capture time along with it
-        datamanager.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
+        self.data.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
@@ -146,26 +145,22 @@ class QubitSpectroscopyRuntime(Runtime):
         acadia.load(*acadia.assemble())
 
         # Loop while reporting progress back to the host
-        for i in datamanager.count(self.iterations, "Iterations"):
-            for frequency in datamanager.count(self.qubit_frequencies, "Frequencies"):
+        for i in self.data.count(self.iterations, "Iterations"):
+            for frequency in self.data.count(self.qubit_frequencies, "Frequencies"):
                 qubit_channel.configure_nco(frequency=frequency)
                 acadia.run(assemble=False)
-                datamanager.write("traces", capture_data)
+                self.data.write("traces", capture_data)
 
     def initialize(self):
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-        from acadia.processing import DynamicLine, DynamicFigure
+        from acadia.processing import DynamicLine, ProgressBar
         import matplotlib.pyplot as plt
-        from IPython.display import display
-        from ipywidgets import Label
 
-        fig,ax = plt.subplots(1,2, figsize=(7,3))
-        fig.subplots_adjust(hspace=0.35)
-        fig.tight_layout()
-
-        self.plots = DynamicFigure(fig)
+        self.fig,ax = plt.subplots(1,2, figsize=(7,3))
+        self.fig.subplots_adjust(hspace=0.35)
+        self.fig.tight_layout()
 
         # Create a plot for the spectral magnitude
         self.line_mag = DynamicLine(ax[0], ".-")
@@ -181,6 +176,8 @@ class QubitSpectroscopyRuntime(Runtime):
         ax[1].set_title("Spectral Phase")
         ax[1].grid()
 
+        self.progress_bar = ProgressBar("Iterations")
+
     def update(self):
         import numpy as np
         from acadia.processing import process_data
@@ -188,6 +185,9 @@ class QubitSpectroscopyRuntime(Runtime):
 
         if not self.data.available("traces"):
             return
+        
+        if "Iterations" in self.data:
+            self.progress_bar.update(self.data["Iterations"])
 
         data = Waveform.sample_to_int(self.data["traces"].records())
 
@@ -203,15 +203,18 @@ class QubitSpectroscopyRuntime(Runtime):
         self.line_phase.update(self.qubit_frequencies, phases)
 
         # Update the plot itself
-        self.plots.update()
+        self.fig.canvas.draw_idle()
+
+    def finalize(self):
+        super().finalize()
+        self.progress_bar.finalize()
 
 
 if __name__ == "__main__":
     import numpy as np
-    import logging
     
     # Run the program on the target
-    rt = QubitSpectroscopyRuntime(qubit_frequencies=np.linspace(4.0e9, 4.1e9, 101),
+    rt = QubitSpectroscopyRuntime(qubit_frequencies=np.linspace(4.0e9, 4.05e9, 101),
                             qubit_DAC=2,
                             readout_DAC=4,
                             readout_ADC=4, 
@@ -227,7 +230,7 @@ if __name__ == "__main__":
                             readout_stimulus_VOP=4500,
                             readout_capture_decimation=0,
                             readout_capture_delay=224e-9,
-                            iterations=100)
-    rt.deploy("192.168.2.70", "qubit_spectroscopy", files = [__file__], log_level = logging.DEBUG)    
+                            iterations=1000)
+    rt.deploy("192.168.2.70", "acadia.runtimes.qubit_spectroscopy", log_debug=True)    
     rt.display()
     

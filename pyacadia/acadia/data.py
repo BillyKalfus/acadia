@@ -1,5 +1,6 @@
 import os
 import json
+import pickle
 import logging
 import fcntl
 import operator
@@ -37,7 +38,8 @@ class RecordGroup:
         """
         self._name = name
         self._directory = directory
-        self._metadata = {"instantiator": self.__class__.__name__, "count": 0}
+        self._metadata = {"instantiator": self.__class__.__name__, 
+                          "count": 0}
         self._metadata.update(metadata)
     
     def load(self, metadata=None):
@@ -175,7 +177,6 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
             complete record; otherwise, they will overwrite it.
         """
         super().__init__(name, directory, **metadata)
-        self._overwrite = overwrite
         self._dtype = np.dtype(dtype) if dtype is not None else dtype
         self._records = None
         self._loaded_elements = None
@@ -183,7 +184,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         self._metadata.update({"descr": None, 
                                "shape": None, 
                                "count": 0, 
-                               "overwriting": overwrite,
+                               "overwrite": overwrite,
                                "map": map})
     
     @staticmethod
@@ -194,7 +195,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         dtype = descr_to_dtype(metadata2["descr"])
         size_bytes2 = metadata2["count"]*reduce(operator.mul, metadata2["shape"], dtype.itemsize)
         
-        if (metadata1 is None or len(metadata1) == 0 or metadata1["overwriting"]):
+        if (metadata1 is None or len(metadata1) == 0 or metadata1["overwrite"]):
             return (0, size_bytes2)
         
         # if ((metadata1["descr"] != metadata2["descr"]) 
@@ -240,7 +241,7 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
 
         full_path = os.path.join(self._directory, self.filename())
             
-        with open(full_path, ("wb" if self._overwrite else "ab")) as f:
+        with open(full_path, ("wb" if self._metadata["overwrite"] else "ab")) as f:
             record.tofile(f)
         
         self._metadata["count"] += 1
@@ -394,6 +395,71 @@ class CounterRecordGroup(metaclass=RecordGroupMeta):
             
         self._metadata["total"] = v
 
+class PickleRecordGroup(metaclass=RecordGroupMeta):
+    """
+    A :class:`RecordGroup` for storing arrays of pickled objects.
+    """
+
+    def __init__(self, name, directory, overwrite=False, **metadata):
+        super().__init__(name, directory, **metadata)
+        self._metadata["offsets"] = []
+        self._metadata["size"] = 0
+        self._metadata["overwrite"] = overwrite
+
+    @staticmethod
+    def filedeltas(metadata1: dict, metadata2: dict) -> Tuple[int, int]:
+        if metadata2 is None:
+            return (0, 0)
+        
+        if (metadata1 is None or len(metadata1) == 0 or metadata1["overwrite"]):
+            return (0, metadata2["size"])
+        
+        return (metadata1["size"], metadata2["size"]-metadata2["size"])
+
+    def write(self, record):
+        data = pickle.dumps(record)
+
+        full_path = os.path.join(self._directory, self.filename()) 
+        with open(full_path, ("wb" if self._metadata["overwrite"] else "ab")) as f:
+            f.seek(self._metadata["size"])
+            bytes_written = f.write(data)
+        
+        self._metadata["count"] += 1
+        self._metadata["offsets"].append(self._metadata["size"])
+        self._metadata["size"] += bytes_written
+
+    def load(self, metadata: dict):
+        """
+        Load records from a file. 
+        
+        :param metadata: Metadata for stored files, as would be returned by 
+            calling :meth:`metadata`
+        :type metadata: dict
+        :param map: If `True`, data is memory-mapped instead of loaded into 
+            memory.
+        """
+        self._metadata = metadata
+        
+    def __getitem__(self, key):
+        full_path = os.path.join(self._directory, self.filename())
+        
+        if not os.path.isfile(full_path):
+            logging.error(f"Unable to find array data for {self.filename()} in"
+                          f" directory {self._directory}")
+            return None
+        
+        if not isinstance(key, int):
+            raise TypeError(f"Key must be an integer; received {key}")
+        
+        offset = self._metadata["offsets"][key]
+        size = self._metadata["offsets"][key+1]-offset if key < self._metadata["count"]-1 else None
+        with open(full_path, "rb") as f:
+            f.seek(offset)
+            data = f.read(size)
+
+        return pickle.loads(data)
+        
+
 class DataManager:
     """
     An abstraction for collecting and storing groups of data records.
@@ -458,8 +524,6 @@ class DataManager:
             json.dump(metadata, file)
             fcntl.flock(file, fcntl.LOCK_UN)
         
-        # logging.debug("Saved")
-        
     @staticmethod
     def read_metadata(directory, raw=False):
         """
@@ -523,7 +587,7 @@ class DataManager:
             
     def add_group(self, group: RecordGroup):
         """
-        Add a group to be managed with an optional remote preprocessor.
+        Add a group to be managed.
         
         :param name: Name of group
         :type name: str

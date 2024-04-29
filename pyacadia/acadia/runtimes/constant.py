@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from acadia.runtime import Runtime
-from acadia.data import DataManager
 
 @dataclass
 class ConstantRuntime(Runtime):
@@ -23,11 +22,9 @@ class ConstantRuntime(Runtime):
     # Current reference for output channel
     channel_vop: int = 12000
 
-    def main(self, directory: str, datamanager: DataManager):        
+    def main(self):        
         from acadia.system import Acadia
-        from acadia.arrays import Waveform, ConstantWaveform
-
-        import numpy as np
+        from acadia.arrays import ConstantWaveform
         
         acadia = Acadia()
 
@@ -53,6 +50,6 @@ class ConstantRuntime(Runtime):
     
 if __name__ == "__main__":
     rt = ConstantRuntime(dac_channel=0, nco_frequency=4.2e9)
-    rt.deploy("192.168.2.69", "constant", files=[__file__])    
+    rt.deploy("192.168.2.69", "acadia.runtimes.constant")    
     rt.display()
     

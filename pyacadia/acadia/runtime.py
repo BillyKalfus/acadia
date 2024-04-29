@@ -6,11 +6,11 @@ import shutil
 
 from datetime import datetime, timezone
 from threading import Thread, Event
-from typing import Tuple, Any, Union
+from typing import Any
 from dataclasses import asdict, is_dataclass
-from subprocess import Popen, PIPE, run, CompletedProcess, CalledProcessError
+from subprocess import Popen, PIPE, run
 
-from .data import DataManager
+from .data import DataManager, PickleRecordGroup
 
 __all__ = ["Runtime"]
 
@@ -26,11 +26,18 @@ class Runtime:
     instrumentation) to remotely deploy a procedure on a remote machine, as 
     specified by the subclass' implementation of :meth:`main`. Meanwhile, on the
     host, a custom event loop runs in a background thread for monitoring the
-    remote process' status and retrieving data files. The user may add callbacks
+    remote process' status and retrieving data files.
+
+    Three callback functions may be used to implement dynamic behavior while the
+    remote process is still running: :meth:`initialize`, :meth:`update`, and 
+    :meth:`finalize`; see their documentation for descriptions of when they are
+    triggered. These functions, along with :meth:`main`, form a complete set of
+    functions that the user may be expected to override to fully describe a
+    workflow.
     """
     
     # ---------------- Functions to be implemented or overridden by the user ------------- #
-    def main(self, directory: str, datamanager: DataManager) -> Any:
+    def main(self) -> Any:
         """
         A function that will be run on the target upon deployment. 
         """
@@ -60,6 +67,31 @@ class Runtime:
         pass
     
     # ---------------- Core functions for interaction from the host ---------------- #
+    
+    @classmethod
+    def load(cls, directory):
+        """
+        Load a runtime from a directory on either the host or the target.
+         
+        If the directory contains ``metadata.json``, a new :class:`DataManager` 
+        is created that wraps the
+        data in the directory without overwriting anything. This allows the 
+        user to "reload" data from a previous deployment (along with any 
+        hierarchical structure to it) and interact with it as if it had just 
+        been collected. 
+
+        Together, these behaviors mean that if a user implements all of their 
+        data processing as functions that operate on :class:`DataManager` 
+        objects and their :class:`RecordGroup` objects, any analysis can be 
+        seamlessly performed both in real-time and retroactively.
+        """
+        inst = cls(**Runtime._load_args(directory))
+        inst.data_manager = DataManager(directory)
+        if "metadata.json" in os.listdir(directory):
+            inst.data_manager.load()
+
+        return inst
+
     def deploy(self, 
             target_address: str, 
             runtime_module: str,
@@ -69,10 +101,14 @@ class Runtime:
             subdirectory_name: str = None,
             time_format: str = "%m%d%y-%H%M%S",
             username: str = "root", 
-            log_level=logging.INFO,
-            update_period: float = 0.2,
+            log_debug: bool = False,
+            event_loop_period: float = 0.2,
             remove_remote_directory: bool = True,
             multiplex_control_path: str = None,
+            store_time: bool = True,
+            do_initialize: bool = True,
+            do_update: bool = True,
+            do_finalize: bool = True,
             **kwargs):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
@@ -86,7 +122,6 @@ class Runtime:
         deployment is expected to collect a large amount of data, care should
         be taken to ensure that the remote base directory has sufficient free
         space for storing the results.
-
         Throughout the lifetime of the execution, various files are transferred
         to the host from the target and stored in a local execution directory.
         When execution completes successfully, the local execution directory
@@ -104,7 +139,6 @@ class Runtime:
         already contain a copy of the host's key, such as when the target
         is used for the first time or when the target's key storage is reset
         (for Acadia hardware, this occurs when the system is power cycled). 
-
         :param target_address: IP address of the target
         :type target_address: str
         :param runtime_module: Module containing the class definition of the
@@ -129,28 +163,67 @@ class Runtime:
         :param local_base_directory: Base directory on the host within which 
             the execution directory is stored.
         :type local_base_directory: str
-
-  
+        :param subdirectory_name: Name of the subdirectory to use for this
+            particular deployment. When not provided, a string is created from
+            the current time.
+        :type subdirectory_name: str
+        :param time_format: When a subdirectory name is created automatically,
+            the current time will be formatted according to this string
+        :type time_format: str
+        :param username: Name of remote user used for login
+        :type username: str
+        :param log_debug: If ``True``, logging is set to include debug 
+            messages.
+        :type log_debug: bool
+        :param event_loop_period: The event loop will ensure that at least this 
+            much time has passed in between requests from the target. 
+        :type event_loop_period: float
+        :param remove_remote_directory: If ``True``, the directory will be
+            deleted from the target once execution is complete.
+        :type remove_remote_directory: bool
+        :param multiplex_control_path: The path for storing control master
+            sockets for multiplexed SSH connections
+        :type multiplex_control_path: str
+        :param store_time: If ``True``, a :class:`PickleRecordGroup` is created
+            automatically for storing a :class:`datetime`` object representing 
+            when the deployment occurred.
+        :type store_time: bool
+        :param do_initialize: If ``True``, this class' :meth:`initialize` 
+            method is called just before entering the event loop
+        :type do_initialize: bool
+        :param do_update: If ``True``, this class' :meth:`update` 
+            method is called when new data is available
+        :type do_update: bool
+        :param do_finalize: If ``True``, this class' :meth:`finalize` 
+            method is called after the event loop completes
+        :type do_finalize: bool
         """      
         # Prepare some variables that we'll use later
-        time_str = datetime.now(timezone.utc).strftime(time_format)
-        subdirectory = subdirectory_name if subdirectory_name is not None else time_str
+        current_time = datetime.now(timezone.utc)
+        subdirectory = subdirectory_name if subdirectory_name is not None else current_time.strftime(time_format)
         self.remote_directory = os.path.join(remote_base_directory, subdirectory)
         self.local_directory = os.path.join(local_base_directory, subdirectory)
         self._username = username
         self._target_address = target_address
         self._remove_remote_directory = remove_remote_directory
         self._local_log_name = os.path.join(self.local_directory, "runtime.log")
-        self._log_level = log_level
+        self._log_debug = log_debug
         self.login = f"{username}@{target_address}"
 
         # Create a local directory to save everything in before deployment
         os.mkdir(self.local_directory)
-        
+
+        log_level = logging.DEBUG if log_debug else logging.INFO
         logging.basicConfig(level=log_level, 
                     filename=self._local_log_name, 
                     filemode="w",
                     format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
+        
+        # Create a DataManager
+        self.data_manager = DataManager(self.local_directory)
+        if store_time:
+            self.data_manager.create_group(PickleRecordGroup, "time", time_str=current_time.strftime(time_format))
+            self.data_manager.write("time", current_time)
                 
         self._set_status("Configuring SSH multiplexing")
         self._configure_ssh(multiplex_control_path)
@@ -166,10 +239,9 @@ class Runtime:
         run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE)
         
         self._stop_flag = Event()
-        self.local_data_manager = DataManager(self.local_directory)
         
         self._set_status("Starting event loop")
-        self._event_loop = self._create_event_loop(update_period)
+        self._event_loop = self._create_event_loop(event_loop_period, do_initialize, do_update, do_finalize)
         self._event_loop.start()
 
         self._set_status("Running")
@@ -243,7 +315,7 @@ class Runtime:
 
     @property
     def data(self):
-        return self.local_data_manager
+        return self.data_manager
     
     # ----------------------- Internal utility functions --------------------- #
 
@@ -319,9 +391,9 @@ class Runtime:
             runfile.write(f"    os.chdir(\"{self.remote_directory}\")\n")
             runfile.write(f"    from acadia.runtime import Runtime\n")
             runfile.write(f"    from {runtime_module} import {self.__class__.__name__}\n")
-            runfile.write(f"    kwargs = Runtime._load_args(\"{self.remote_directory}\")\n")
-            runfile.write(f"    runtime = {self.__class__.__name__}(**kwargs)\n")
-            runfile.write(f"    runtime.run(\"{self.remote_directory}\", {log_level})\n")
+            runfile.write(f"    runtime = {self.__class__.__name__}.load(\"{self.remote_directory}\")\n")
+            runfile.write(f"    runtime.main()\n")
+            runfile.write(f"    logging.info(\"Runtime complete.\")\n")
             runfile.write(f"except:\n")
             runfile.write(f"    logging.error(f'Runtime exception:\\n{{traceback.format_exc()}}')\n\n")
             runfile.write(f"sys.stdout.flush()\n")
@@ -386,7 +458,7 @@ class Runtime:
         logger.debug(f"Executing command {cmd}")
         run(cmd.split(" "), stdout=PIPE)
 
-    def _update_files(self, last_update: str = None):
+    def _sync_files(self, last_sync: str = None):
         """
         Sync local files with those on the target
         """
@@ -396,15 +468,15 @@ class Runtime:
         if proc.returncode != 0:
             raise ValueError(f"Process returned non-zero exit code:\n{proc}")
 
-        # Check to see whether any data has updated
+        # Check to see whether any data has changed
         cmd = f"ssh {self._multiplex_options} {self.login} stat --format \"%Y\" {self.remote_directory}/metadata.json"
         modification_time = run(cmd.split(" "), stdout=PIPE, stderr=PIPE)
 
-        if modification_time == last_update:
-            logging.debug("No update since last check")
+        if modification_time == last_sync:
+            logging.debug("No changes to metadata since last sync")
             return modification_time
         
-        logging.debug("Update available")
+        logging.debug("New data available")
 
         # Lock the metadata, only to be unlocked once we've grabbed it
         # Do this by creating a process that locks metadata and runs a loop that blocks until a file exists
@@ -433,32 +505,35 @@ class Runtime:
         # TODO: we're not checking errors in this command because it'll error when there
         # are no bin files in the remote directory, but we'd still like to catch unexpected
         # problems
+        # TODO: record groups don't necessartily need to store files with "bin" extension, how do we handle this?
         cmd = f"rsync -e \"ssh {self._multiplex_options}\" --append {self.login}:{self.remote_directory}/*.bin {self.local_directory}"
         proc = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
         # if proc.returncode != 0:
         #     raise ValueError(f"Process returned non-zero exit code:\n{proc}")
 
         # Reload the data manager and call any subclass update routines
-        self.local_data_manager.load(reload=True)
-        logging.debug("Data retrieval complete, calling `update`")
-
-        self.update()
-        logging.debug("Update complete")
+        self.data_manager.load(reload=True)
+        logging.debug("Data retrieval complete")
 
         return modification_time
     
-    def _create_event_loop(self, update_period: float) -> Thread:
+    def _create_event_loop(self, 
+                           event_loop_period: float, 
+                           do_initialize: bool, 
+                           do_update: bool, 
+                           do_finalize: bool) -> Thread:
                 
         def _func():
             import time
 
-            self._set_status("Initializing event loop")
-            self.initialize()
+            if do_initialize:
+                self._set_status("Initializing event loop")
+                self.initialize()
 
             self._set_status("Event loop running")
 
             t_loop = time.time()
-            last_update_time = None
+            last_sync_time = None
             while True:
                 if self._stop_flag.is_set():
                     logger.debug("Stop requested")
@@ -481,29 +556,36 @@ class Runtime:
                 except:
                     logger.error(f"Exception checking for screens: {traceback.format_exc()}")
                 
-                # Update any processing
+                # Synchronize with the target and perform any updates
                 try:
-                    last_update_time = self._update_files(last_update_time)
+                    new_sync_time = self._sync_files(last_sync_time)
+                    if new_sync_time != last_sync_time:
+                        last_sync_time = new_sync_time
+                        if do_update:
+                            logging.debug("Updating...")
+                            self.update()
+                            logging.debug("Update complete")
                 except:
-                    logger.error(f"Exception updating: {traceback.format_exc()}")
+                    logger.error(f"Exception synchronizing: {traceback.format_exc()}")
 
-                # Ensure that at least update_period seconds have 
-                while time.time() < t_loop + update_period:
+                # Ensure that at least event_loop_period seconds have 
+                while time.time() < t_loop + event_loop_period:
                     pass
 
                 t_loop = time.time()
 
-            self._set_status("Performing final update")
+            self._set_status("Performing final synchronization")
             try:
-                self._update_files(last_update_time)
+                self._sync_files(last_sync_time)
             except:
-                logger.error(f"Exception updating: {traceback.format_exc()}")
+                logger.error(f"Exception synchronizing: {traceback.format_exc()}")
 
-            self._set_status("Finalizing event loop")
-            try:
-                self.finalize()
-            except:
-                logger.error(f"Exception during finalization: {traceback.format_exc()}")
+            if do_finalize:
+                self._set_status("Finalizing event loop")
+                try:
+                    self.finalize()
+                except:
+                    logger.error(f"Exception during finalization: {traceback.format_exc()}")
 
             self._set_status("Completed")
             
@@ -518,39 +600,4 @@ class Runtime:
             self._status.value = s
         logger.debug(s)
         
-    # ----------------- Function that is run on the target ----------------- #
-
-    def run(self, directory, log_level=logging.INFO):
-        """
-        This is the main entry point of the remote process. This should not 
-        be called manually unless executed on the target itself.
-        """
-        import os
-        from acadia.data import DataManager
-        import logging
-
-        logger = logging.getLogger()
-
-        if not os.path.exists(directory):
-            logger.info(f"Creating output directory {directory}")
-            try:
-                os.mkdir(directory)
-            except:
-                logger.error(f"Exception creating output directory {directory}:"
-                            f" {traceback.format_exc()}")
-            
-        os.chdir(directory)
-
-        logger.debug(f"Creating DataManager")
-        mgr = DataManager(directory=directory)
-
-        logger.info("Running main method")
-        try:
-            self.main(directory, mgr)
-        except:
-            logger.error(f"Exception in `main`: {traceback.format_exc()}")
-
-        logger.info("Main complete, saving")
-        mgr.save()
-        logger.info("Saved")
         
