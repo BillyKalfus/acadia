@@ -135,13 +135,19 @@ class RingdownRuntime(Runtime):
         self.progress_bar = ProgressBar("Iterations")
 
         # Make a figure with our plots
-        self.fig, (ax_data, ax_mag, ax_pwr) = plt.subplots(3,1,figsize=(4,12))        
+        # self.fig, axes = plt.subplots(3,1,figsize=(4,12))   
+        self.fig, axes = plt.subplots(1,3,figsize=(8,3)) 
+        (ax_data, ax_mag, ax_pwr) = axes     
         self.fig.subplots_adjust(hspace=0.3)
+        
+        figure_title = 'Test figure title'
+        self.fig.suptitle(figure_title, x = 0.5, y = 0.5)
         
         self.data_re = DynamicLine(ax_data, ".-", label="I")
         self.data_im = DynamicLine(ax_data, ".-", label="Q")
         ax_data.set_xlabel("Time [s]")
         ax_data.set_ylabel("Amplitude [arb. V]")
+        # ax_data.set_ticklabel_format(axis='y', style='sci')
         ax_data.set_title("Average Signal Amplitude")
         ax_data.legend()
 
@@ -149,8 +155,9 @@ class RingdownRuntime(Runtime):
         if self.pulse_stop_time is not None:
             self.data_mag_fit = DynamicLine(ax_mag, "-", label="Magnitude (fit)")
         ax_mag.set_xlabel("Time [s]")
-        ax_mag.set_ylabel("Magnitude [arb. V]")
-        ax_mag.set_title("$\left|\overline{I + i Q}\\right|$")
+        ax_mag.set_ylabel("Magnitude [arb. V**2]")
+        # ax_mag.set_ticklabel_format(axis='y', style='sci')
+        ax_mag.set_title("$\left|\overline{I + i Q}\\right|^2$")
         ax_mag.legend()
 
         self.data_pwr = DynamicLine(ax_pwr, ".-", label="Power")
@@ -158,8 +165,11 @@ class RingdownRuntime(Runtime):
             self.data_pwr_fit = DynamicLine(ax_pwr, "-", label="Power (fit)")
         ax_pwr.set_xlabel("Time [s]")
         ax_pwr.set_ylabel("Power [arb. V**2]")
+        # ax_pwr.set_ticklabel_format(axis='y', style='sci')
         ax_pwr.set_title("$\overline{I^2 + Q^2}$")
         ax_pwr.legend()
+        
+        
 
     def update(self):
         # Do nothing if we don't have the data that we want
@@ -173,7 +183,7 @@ class RingdownRuntime(Runtime):
         if not hasattr(self, "time_axis"):
             num_samples = traces_packed.shape[-1]
             capture_time = self.data["traces"].metadata()["capture_time"]
-            self.time_axis = np.linspace(0, capture_time, num_samples)
+            self.time_axis = np.linspace(0, capture_time, num_samples, endpoint = False)
 
         # Convert the packed sample data into an array of integers (adding another axis)
         # so that we can do all of our operations on integers rather than floats
@@ -185,9 +195,10 @@ class RingdownRuntime(Runtime):
         self.data_re.update(self.time_axis, traces_avg_normalized.real)
         self.data_im.update(self.time_axis, traces_avg_normalized.imag)
         
-        # Plot the magnitude, |<I + iQ>|
+        # Plot the magnitude, |<I + iQ>|^2
         mag_mean = np.abs(traces_avg_normalized)
-        self.data_mag.update(self.time_axis, mag_mean)
+        mag_meansq = mag_mean**2
+        self.data_mag.update(self.time_axis, mag_meansq)
         
         # Plot the power, <|I + iQ|^2> = <I**2 + Q**2>
         traces_squared = np.multiply(traces_int, traces_int, dtype=np.int64)
@@ -232,9 +243,13 @@ class RingdownRuntime(Runtime):
     def finalize(self):
         super().finalize()
         self.progress_bar.finalize()
+        
+        self.fig.tight_layout()
+        
         self.fig.savefig(os.path.join(self.local_directory, "plots.png"), 
                                     dpi=500, 
                                     transparent=True)
+        
         
     
 if __name__ == "__main__":
