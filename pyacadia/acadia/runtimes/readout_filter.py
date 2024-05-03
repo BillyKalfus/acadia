@@ -156,10 +156,9 @@ class ReadoutFilterRuntime(Runtime):
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-        from acadia.processing import DynamicLine, DynamicFigure
+        from acadia.processing import DynamicLine
         import matplotlib.pyplot as plt
         from matplotlib.colors import LogNorm
-
 
         self.fig,ax = plt.subplots(1,2, figsize=(7,3))
         self.fig.subplots_adjust(hspace=0.35)

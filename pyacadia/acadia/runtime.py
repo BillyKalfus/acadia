@@ -1,14 +1,20 @@
 import os
 import traceback
 import logging
-import pickle
+import json
 import shutil
+import time
 
 from datetime import datetime, timezone
 from threading import Thread, Event
 from typing import Any
 from dataclasses import asdict, is_dataclass
 from subprocess import Popen, PIPE, run
+from binascii import hexlify, unhexlify
+from io import BytesIO
+
+import numpy as np
+from numpy.lib.format import write_array, read_array
 
 from .data import DataManager, PickleRecordGroup
 
@@ -96,16 +102,13 @@ class Runtime:
             target_address: str, 
             runtime_module: str,
             files: list[str] = None,
-            remote_base_directory: str = "/run/media/mmcblk0p1", 
-            local_base_directory: str = "/tmp",
-            subdirectory_name: str = None,
-            time_format: str = "%m%d%y-%H%M%S",
+            remote_directory: str = "/run/media/mmcblk0p1/%y%m%d_%H%M%S", 
+            local_directory: str = "/tmp/%y%m%d_%H%M%S",
             username: str = "root", 
             log_debug: bool = False,
             event_loop_period: float = 0.2,
             remove_remote_directory: bool = True,
             multiplex_control_path: str = None,
-            store_time: bool = True,
             do_initialize: bool = True,
             do_update: bool = True,
             do_finalize: bool = True,
@@ -157,19 +160,12 @@ class Runtime:
             host, and the second element should be a new basename that the 
             file will be renamed to when placed into the execution directory.
         :type files: list of str and/or tuple
-        :param remote_base_directory: Base directory on the target within which
-            the execution directory is stored.
-        :type remote_base_directory: str
-        :param local_base_directory: Base directory on the host within which 
-            the execution directory is stored.
-        :type local_base_directory: str
-        :param subdirectory_name: Name of the subdirectory to use for this
-            particular deployment. When not provided, a string is created from
-            the current time.
-        :type subdirectory_name: str
-        :param time_format: When a subdirectory name is created automatically,
-            the current time will be formatted according to this string
-        :type time_format: str
+        :param remote_directory: Execution directory on the target. This will
+            be passed as an argument to :meth:`datetime.strftime`
+        :type remote_directory: str
+        :param local_directory: Execution directory on the host. This will
+            be passed as an argument to :meth:`datetime.strftime`
+        :type local_directory: str
         :param username: Name of remote user used for login
         :type username: str
         :param log_debug: If ``True``, logging is set to include debug 
@@ -184,10 +180,6 @@ class Runtime:
         :param multiplex_control_path: The path for storing control master
             sockets for multiplexed SSH connections
         :type multiplex_control_path: str
-        :param store_time: If ``True``, a :class:`PickleRecordGroup` is created
-            automatically for storing a :class:`datetime`` object representing 
-            when the deployment occurred.
-        :type store_time: bool
         :param do_initialize: If ``True``, this class' :meth:`initialize` 
             method is called just before entering the event loop
         :type do_initialize: bool
@@ -199,10 +191,9 @@ class Runtime:
         :type do_finalize: bool
         """      
         # Prepare some variables that we'll use later
-        current_time = datetime.now(timezone.utc)
-        subdirectory = subdirectory_name if subdirectory_name is not None else current_time.strftime(time_format)
-        self.remote_directory = os.path.join(remote_base_directory, subdirectory)
-        self.local_directory = os.path.join(local_base_directory, subdirectory)
+        current_time = datetime.now()
+        self.remote_directory = current_time.strftime(remote_directory)
+        self.local_directory = current_time.strftime(local_directory)
         self._username = username
         self._target_address = target_address
         self._remove_remote_directory = remove_remote_directory
@@ -211,7 +202,7 @@ class Runtime:
         self.login = f"{username}@{target_address}"
 
         # Create a local directory to save everything in before deployment
-        os.mkdir(self.local_directory)
+        os.makedirs(self.local_directory)
 
         log_level = logging.DEBUG if log_debug else logging.INFO
         logging.basicConfig(level=log_level, 
@@ -221,15 +212,14 @@ class Runtime:
         
         # Create a DataManager
         self.data_manager = DataManager(self.local_directory)
-        if store_time:
-            self.data_manager.create_group(PickleRecordGroup, "time", time_str=current_time.strftime(time_format))
-            self.data_manager.write("time", current_time)
+        self.data_manager.create_group(PickleRecordGroup, "properties", time_str=str(current_time))
+        self.data_manager.write("properties", key="time", record=current_time)
                 
         self._set_status("Configuring SSH multiplexing")
         self._configure_ssh(multiplex_control_path)
 
         self._set_status("Preparing and deploying files")
-        self._prepare_files(files, runtime_module, remote_base_directory, log_level, kwargs)
+        self._prepare_files(files, runtime_module, log_level, kwargs)
 
         self._set_status("Preparing remote runtime screen")
         Runtime._prepare_screen(self.login, self._multiplex_options)
@@ -317,15 +307,32 @@ class Runtime:
     def data(self):
         return self.data_manager
     
+    def is_done(self):
+        return self._event_loop is not None and not self._event_loop.is_alive()
+    
     # ----------------------- Internal utility functions --------------------- #
 
     def _save_args(self, directory: str, **kwargs) -> str:
         """
         Save all necessary arguments into a file in the given directory.
         """
-        filename = os.path.join(directory, "kwargs.pkl")
-        with open(filename, "wb") as f:
-            pickle.dump(kwargs, f)
+        filename = os.path.join(directory, "kwargs.json")
+
+        kwargs_transformed = {}
+        for k,v in kwargs.items():
+            if v is None or isinstance(v, (int, float, complex, bool, str)):
+                kwargs_transformed[k] = v
+            elif isinstance(v, (bytes, bytearray)):
+                kwargs_transformed[k] = f"bytes;{hexlify(v)}"
+            elif isinstance(v, np.ndarray):
+                buf = BytesIO()
+                write_array(buf, v)
+                kwargs_transformed[k] = f"ndarray;{hexlify(buf.getbuffer())}"
+            else:
+                raise TypeError(f"Unable to save argument of type {type(v)}")
+
+        with open(filename, "w") as f:
+            json.dump(kwargs_transformed, f, indent=4)
         
         return filename
 
@@ -334,14 +341,22 @@ class Runtime:
         """
         Load saved arguments. 
         """
-        path = os.path.join(directory, "kwargs.pkl")
+        path = os.path.join(directory, "kwargs.json")
         if not os.path.exists(path):
             return {}
         
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-            
-        return data
+        kwargs_untransformed = {}
+        with open(path, "r") as f:
+            for k,v in json.load(f).items():
+                if isinstance(v, str) and v.startswith("bytes;"):
+                    kwargs_untransformed[k] = unhexlify(v[len("bytes;"):])
+                elif isinstance(v, str) and v.startswith("ndarray;"):
+                    buf = BytesIO(unhexlify(v[len("ndarray;"):]))
+                    kwargs_untransformed[k]  = read_array(buf)
+                else:
+                    kwargs_untransformed[k] = v
+        
+        return kwargs_untransformed
     
     def _configure_ssh(self, multiplex_control_path):
         # Configure SSH multiplexing
@@ -357,7 +372,7 @@ class Runtime:
         # run(f"ssh -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
         self._multiplex_options = (f"-o ControlMaster=auto -o ControlPath={self._multiplex_control_path}/%r@%h:%p -o ControlPersist=20")
     
-    def _prepare_files(self, files, runtime_module, remote_base_directory, log_level, kwargs):
+    def _prepare_files(self, files, runtime_module, log_level, kwargs):
         # Copy all of the files that we need into the local execution directory
         if files is not None:
             for file in files:
@@ -417,7 +432,7 @@ class Runtime:
             logger.warning("No arguments found!")
 
         # Deploy everything
-        cmd = f"rsync -r -e \"ssh {self._multiplex_options}\" {self.local_directory} {self.login}:{remote_base_directory}"
+        cmd = f"rsync -r --mkpath -e \"ssh {self._multiplex_options}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
         logger.debug(f"Executing command {cmd}")
         run(cmd, shell=True, check=True)
     
@@ -482,8 +497,15 @@ class Runtime:
         # Do this by creating a process that locks metadata and runs a loop that blocks until a file exists
         # then we'll create that file once we're done and the loop will exit
         unlock_file = f"{self.remote_directory}/metadata.unlock"
-        lock_cmd = f"ssh {self._multiplex_options} {self.login} flock {self.remote_directory}/metadata.json -c \"while [ ! -f {unlock_file} ]; do sleep 0.000001; done; rm {unlock_file}\""
-        lock_proc = Popen(lock_cmd.split(" "), stdout=PIPE, stderr=PIPE)    
+        remotelock_file = f"{self.remote_directory}/metadata.remotelock"
+        lock_cmd = f"ssh {self._multiplex_options} {self.login} flock {self.remote_directory}/metadata.json -c \"touch {remotelock_file}; while [ ! -f {unlock_file} ]; do sleep 0.000001; done; rm {unlock_file}\""
+        lock_proc = Popen(lock_cmd.split(" "), stdout=PIPE, stderr=PIPE)
+
+        # Wait until the remote lock file has been created, indicating that we acquired the lock
+        while run(f"ssh {self._multiplex_options} {self.login} [ -f {remotelock_file} ]", shell=True).returncode != 0:
+            time.sleep(0.001)
+
+        run(f"ssh {self._multiplex_options} {self.login} rm {remotelock_file}", shell=True)
 
         # Now actually pull the file itself
         cmd = f"rsync -e \"ssh {self._multiplex_options}\" --inplace {self.login}:{self.remote_directory}/metadata.json {self.local_directory}/metadata.json"

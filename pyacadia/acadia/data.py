@@ -402,7 +402,7 @@ class PickleRecordGroup(metaclass=RecordGroupMeta):
 
     def __init__(self, name, directory, overwrite=False, **metadata):
         super().__init__(name, directory, **metadata)
-        self._metadata["offsets"] = []
+        self._metadata["offsets"] = {}
         self._metadata["size"] = 0
         self._metadata["overwrite"] = overwrite
 
@@ -416,7 +416,7 @@ class PickleRecordGroup(metaclass=RecordGroupMeta):
         
         return (metadata1["size"], metadata2["size"]-metadata2["size"])
 
-    def write(self, record):
+    def write(self, record, key=None):
         data = pickle.dumps(record)
 
         full_path = os.path.join(self._directory, self.filename()) 
@@ -424,8 +424,11 @@ class PickleRecordGroup(metaclass=RecordGroupMeta):
             f.seek(self._metadata["size"])
             bytes_written = f.write(data)
         
+        if key is None:
+            key = f"obj" + str(self._metadata["count"])
+
         self._metadata["count"] += 1
-        self._metadata["offsets"].append(self._metadata["size"])
+        self._metadata["offsets"][key] = (self._metadata["size"], bytes_written)
         self._metadata["size"] += bytes_written
 
     def load(self, metadata: dict):
@@ -448,16 +451,15 @@ class PickleRecordGroup(metaclass=RecordGroupMeta):
                           f" directory {self._directory}")
             return None
         
-        if not isinstance(key, int):
-            raise TypeError(f"Key must be an integer; received {key}")
-        
-        offset = self._metadata["offsets"][key]
-        size = self._metadata["offsets"][key+1]-offset if key < self._metadata["count"]-1 else None
+        offset, size = self._metadata["offsets"][key]        
         with open(full_path, "rb") as f:
             f.seek(offset)
             data = f.read(size)
 
         return pickle.loads(data)
+    
+    def __setitem__(self, k, v):
+        self.write(v, k)
         
 
 class DataManager:
@@ -486,8 +488,8 @@ class DataManager:
         self._groups = {}
         self._record_count = 0
         
-    def write(self, group_name, record):
-        self._groups[group_name].write(record)
+    def write(self, group_name, record, **kwargs):
+        self._groups[group_name].write(record, **kwargs)
         self._record_count += 1        
         if self._record_count == self._save_count:
             self.save()
@@ -614,7 +616,7 @@ class DataManager:
         self.add_group(group)
         return group
         
-    def count(self, iter, name="Counter"):
+    def count(self, iter, name="counter"):
         """
         Report iterations through an iterable by creating a CounterRecordGroup
         and automatically increasing it for each item yielded by the iterable.
@@ -688,29 +690,3 @@ class DataManager:
             
         return True
     
-    
-    
-    # @staticmethod
-    # def get_sweep_point(data, sweep_axis_conditions, record_shape):
-    #     """
-    #     Given an array of swept data (iterated or not), return all records at particular
-    #     sweep points. The sweep points to extract are specified by providing a condition
-    #     for each axis of the sweep. If all points in a given axis are desired, pass 
-    #     np.ones(axis.shape) as that axis' condition.
-
-    #     :param data: Data to examine
-    #     :param sweep_axes: List of sweep axes in order of their presence in ``data``
-    #     :param sweep_point: The value on the axes to view data for. Length must
-    #         match that of ``sweep_axes``
-    #     :param record_shape: The shape of records contained in the data
-    #     """
-
-    #     # Figure out what index the desired point is at in each of the sweep axes
-    #     axis_indices = [np.argwhere(condition) for condition in sweep_axis_conditions]
-
-    #     # Find out which of the data dimensions correspond to the sweep axes
-    #     # Assume that the input array is shaped as (<other axes>, <sweep axes>, <record axes>)
-    #     first_sweep_dimension = len(data.shape) - len(record_shape) - len(sweep_axis_conditions)
-    #     sweep_dimensions = np.arange(first_sweep_dimension, first_sweep_dimension + len(sweep_axis_conditions))
-    #     return np.take()
-                
