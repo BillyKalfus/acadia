@@ -53,6 +53,15 @@ class RingdownRuntime(Runtime):
 
     # time (in seconds) when the pulse is stop, used in fitting the tail of decay trace
     pulse_stop_time: Union[float, None] = None
+    
+    # Place to write generic string which will be saved to metadata
+    comments_field: str = 'No Comment'
+    
+    # control whether square-mean and mean-square plots keep y = 0 in the field of view
+    pwr_plot_has_zero: bool = False
+    
+    # not intended to be an input argument; gets modified in the runtime sequence below
+    # completed_iterations: int = 0
 
     plot_backend: str = "widget"
     
@@ -72,13 +81,25 @@ class RingdownRuntime(Runtime):
                                             window_length_seconds=self.stimulus_ramp_time)
         
         capture_time = self.capture_time if self.capture_time != 0 else self.stimulus_ramp_time + self.stimulus_constant_time                        
-        self.data.create_group(ArrayRecordGroup, "traces", capture_time=capture_time)
+        
+        # self.data.write("time", thing)
+        
+        traces_metadata_dict = {}
+        
+        traces_metadata_dict['capture_time'] = capture_time
+        traces_metadata_dict['comments_field'] = self.comments_field
+        
+        self.data.create_group(ArrayRecordGroup, "traces", 
+                            #    capture_time=capture_time,
+                               **traces_metadata_dict
+                               )
                 
         # Create a sequence for the sequencer
         def sequence(a: Acadia):
             with a.channel_synchronizer():
                 a.generate(pulse)
-                a.generate_blank(capture_channel, self.capture_delay)
+                if self.capture_delay != 0:
+                    a.generate_blank(capture_channel, self.capture_delay)
                 capture_data, _ = a.stream(capture_channel, 
                                    length=capture_time, 
                                    length_units="seconds", 
@@ -125,6 +146,29 @@ class RingdownRuntime(Runtime):
         for i in self.data.count(self.iterations, "Iterations"):                                    
             acadia.run(assemble=(i==0))
             self.data.write("traces", capture_data)
+            
+            # self.completed_iterations = i
+
+        
+    
+    def create_formatter_scientific(self):
+        '''
+        Importing and defining a means of enforcing scientific notation 
+        of tick labels.
+        
+        Example use context:
+        
+        formatter = create_formatter_scientific()
+        ax.yaxis.set_major_formatter(formatter) 
+        
+        '''
+        from matplotlib import ticker
+        formatter = ticker.ScalarFormatter(useMathText=True)
+        formatter.set_scientific(True) 
+        formatter.set_powerlimits((-1,1)) # exponents beyond which scientific format is enforced
+        
+        return formatter
+
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
@@ -132,6 +176,8 @@ class RingdownRuntime(Runtime):
         get_ipython().run_line_magic("matplotlib", self.plot_backend)
         import matplotlib.pyplot as plt
         from acadia.processing import DynamicLine, ProgressBar
+        
+
         
         # Create a progress bar for viewing things
         self.progress_bar = ProgressBar("Iterations")
@@ -142,36 +188,79 @@ class RingdownRuntime(Runtime):
         (ax_data, ax_mag, ax_pwr) = axes     
         self.fig.subplots_adjust(hspace=0.3)
         
-        figure_title = 'Test figure title'
-        self.fig.suptitle(figure_title, x = 0.5, y = 0.5)
+        # figure_title = 'Test figure title'
         
-        self.data_re = DynamicLine(ax_data, ".-", label="I")
-        self.data_im = DynamicLine(ax_data, ".-", label="Q")
+        timestamp_str = self.data['time'][0].strftime('%Y%m%d_%H%M%S')
+        pulse_freq_str = str(self.frequency*1e-9)+' GHz'
+        pulse_amp_str = str(self.stimulus_amplitude)+' DAC'
+        pulse_len_str = str(self.stimulus_constant_time)+' seconds'
+        pulse_ramp = self.stimulus_ramp_time
+        if pulse_ramp != 0:
+            pulse_ramp_str = '(with '+str(pulse_ramp)+' s ramp)'
+            pulse_len_str = pulse_len_str + ' '+pulse_ramp_str
+            
+        pulse_str = pulse_freq_str+' drive at '+pulse_amp_str+' for '+pulse_len_str
+        
+        if self.comments_field != 'No Comment':
+            fig_title_top = self.comments_field
+        else:
+            fig_title_top = ''
+        fig_title_bottom = timestamp_str+': '+pulse_str
+        
+        figure_title = fig_title_top + '\n' + fig_title_bottom
+        self.fig.suptitle(figure_title, # https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.suptitle.html
+                          x = 0.5, y = 0.95,
+                        #   fontsize = 10
+                          )
+    
+        # Configuring the appearance of each subplot...
+
+        # Plot for I and Q
+        self.data_re = DynamicLine(ax_data, ".", label="I")
+        self.data_im = DynamicLine(ax_data, ".", label="Q")
         ax_data.set_xlabel("Time [s]")
         ax_data.set_ylabel("Amplitude [arb. V]")
         # ax_data.set_ticklabel_format(axis='y', style='sci')
-        ax_data.set_title("Average Signal Amplitude")
+        formatter_xdata = self.create_formatter_scientific()
+        ax_data.xaxis.set_major_formatter(formatter_xdata) 
+        formatter_ydata = self.create_formatter_scientific()
+        ax_data.yaxis.set_major_formatter(formatter_ydata) 
+        # ax_data.set_title("Average Signal Amplitude")
         ax_data.legend()
 
+        # Plot for average-square-sum of I and Q
         self.data_mag = DynamicLine(ax_mag, ".", label="Magnitude")
         if self.pulse_stop_time is not None:
             self.data_mag_fit = DynamicLine(ax_mag, "-", label="Magnitude (fit)")
         ax_mag.set_xlabel("Time [s]")
-        ax_mag.set_ylabel("Magnitude [arb. V**2]")
+        # ax_mag.set_ylabel("Magnitude [arb. V**2]")
+        # ax_mag.set_ylabel("$\left<\left|{I + jQ}\\right|\\right>^2$ [arb. V**2]")
+        ax_mag.set_ylabel(r"$\left<I\right>^2 + \left<Q\right>^2$ [arb. $\rm{V}^2$]")
         # ax_mag.set_ticklabel_format(axis='y', style='sci')
-        ax_mag.set_title("$\left|\overline{I + i Q}\\right|^2$")
-        ax_mag.legend()
+        formatter_x_mag = self.create_formatter_scientific()
+        ax_mag.xaxis.set_major_formatter(formatter_x_mag) 
+        formatter_y_mag = self.create_formatter_scientific()
+        ax_mag.yaxis.set_major_formatter(formatter_y_mag) 
+        # ax_mag.set_title("$\left|\overline{I + i Q}\\right|^2$")
+        # ax_mag.legend()
 
-        self.data_pwr = DynamicLine(ax_pwr, ".-", label="Power")
+        # Plot for square-average-sum of I and Q
+        self.data_pwr = DynamicLine(ax_pwr, ".", label="Power")
         if self.pulse_stop_time is not None:
             self.data_pwr_fit = DynamicLine(ax_pwr, "-", label="Power (fit)")
         ax_pwr.set_xlabel("Time [s]")
-        ax_pwr.set_ylabel("Power [arb. V**2]")
+        # ax_pwr.set_ylabel("Power [arb. V**2]")
+        ax_pwr.set_ylabel(r"$\left<{I^2 + Q^2}\right>$ [arb. $\rm{V}^2$]")
         # ax_pwr.set_ticklabel_format(axis='y', style='sci')
-        ax_pwr.set_title("$\overline{I^2 + Q^2}$")
-        ax_pwr.legend()
+        formatter_x_pwr = self.create_formatter_scientific()
+        ax_pwr.xaxis.set_major_formatter(formatter_x_pwr) 
+        formatter_y_pwr = self.create_formatter_scientific()
+        ax_pwr.yaxis.set_major_formatter(formatter_y_pwr) 
+        # ax_pwr.set_title("$\overline{I^2 + Q^2}$")
+        # ax_pwr.legend()
         
-    
+        self.did_tight_layout = False # Enables a tight_layout operation only after the first data is plotted
+
     def update(self):
         # Do nothing if we don't have the data that we want
         if not self.data.available("traces"):
@@ -192,20 +281,30 @@ class RingdownRuntime(Runtime):
 
         # First, plot the average data <I> and <Q>
         traces_summed = np.sum(traces_int, axis=0, dtype=np.int32)
-        traces_avg_normalized = Waveform.to_complex(traces_summed, scale=traces_int.shape[0])
+        number_of_shots = traces_int.shape[0]
+        capture_decimation = self.capture_decimation
+        compensate_v8_vs_v4 = 2**-16
+        scale_factor = number_of_shots*capture_decimation*compensate_v8_vs_v4
+        traces_avg_normalized = Waveform.to_complex(traces_summed, scale=scale_factor)
+        # traces_avg_normalized = Waveform.to_complex(traces_summed, scale=traces_int.shape[0])
         self.data_re.update(self.time_axis, traces_avg_normalized.real)
         self.data_im.update(self.time_axis, traces_avg_normalized.imag)
         
-        # Plot the magnitude, |<I + iQ>|^2
+        # Plot the phase-sensitive mean-square-summed trace, |<I + iQ>|^2
         mag_mean = np.abs(traces_avg_normalized)
         mag_meansq = mag_mean**2
-        self.data_mag.update(self.time_axis, mag_meansq)
+        ylim_bottom = 0 if self.pwr_plot_has_zero else 'auto'
+        self.data_mag.update(self.time_axis, mag_meansq, ylim_bottom = ylim_bottom)
         
-        # Plot the power, <|I + iQ|^2> = <I**2 + Q**2>
+        # Plot the phase-insensitive power (square-mean-summed trace), <|I + iQ|^2> = <I**2 + Q**2>
         traces_squared = np.multiply(traces_int, traces_int, dtype=np.int64)
         power_sum = np.sum(traces_squared, axis=(0,-1))  # Sum over traces and over quadratures
-        power_avg = np.divide(power_sum, traces_squared.shape[0])
-        self.data_pwr.update(self.time_axis, power_avg)
+        int_to_fraction_of_ADC = 2**15
+        scale_factor_pwr = number_of_shots*(capture_decimation**2)*(int_to_fraction_of_ADC**2)
+        power_avg = np.divide(power_sum, scale_factor_pwr)
+        # power_avg = np.divide(power_sum, traces_squared.shape[0])
+        ylim_bottom = 0 if self.pwr_plot_has_zero else 'auto'
+        self.data_pwr.update(self.time_axis, power_avg, ylim_bottom = ylim_bottom)
         
         # Fit the decay part if `pulse_stop_time` is provided
         if self.pulse_stop_time is not None: 
@@ -234,10 +333,17 @@ class RingdownRuntime(Runtime):
             self.data_pwr._ax.legend().get_texts()[1].set_text(t1_str)
 
             # update all axis scales
-            for ax in self.get_axes():
+            for ax in self.fig.get_axes():
                 ax.relim()
                 ax.autoscale(axis='y')
                 ax.set_xlim(0, self.time_axis[-1])
+                
+            
+                
+                
+        if self.did_tight_layout == False: 
+            self.fig.tight_layout()
+            self.did_tight_layout = True # No more tight layout operations after the first, until it is applied again finalize().
 
         self.fig.canvas.draw_idle()
 
