@@ -189,12 +189,22 @@ class DynamicLine:
         self._ax = ax
         self.retval = ax.plot([], [], fmt, **kwargs)
 
-    def update(self, xdata, ydata, rescale_axis=True):
+    def update(self, xdata, ydata, 
+               rescale_axis=True,
+               ylim_top:Union[str, float]='auto', 
+               ylim_bottom:Union[str, float]='auto' 
+               ):
         """
         Update the data contained in a line created by calling `Axis.plot`. 
         
-        :param plot_retval: Value returned by `plot`
+        :param plot_retval: Value returned by `plot` #Billy is this supposed to be here
         :type plot_retval: tuple
+        
+        :param ylim_top: 
+    
+        :param ylim_bottom: 
+        
+        
         """
         self.retval[0].set_data(xdata, ydata)
         if rescale_axis:
@@ -205,8 +215,16 @@ class DynamicLine:
                 self._ax.set_xlim(xmin, xmax)
 
             ylim = self._ax.get_ylim()
-            ymin = np.min(ydata)
-            ymax = np.max(ydata)
+            if ylim_bottom == 'auto':
+                ymin = np.min(ydata)
+            else:
+                ymin = ylim_bottom
+            
+            if ylim_top == 'auto':
+                ymax = np.max(ydata)
+            else:
+                ymax = ylim_top
+                
             if (ymin != ylim[0] or ymax != ylim[1]) and ymin != ymax:
                 self._ax.set_ylim(ymin, ymax)
 

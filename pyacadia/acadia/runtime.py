@@ -211,7 +211,8 @@ class Runtime:
         self.login = f"{username}@{target_address}"
 
         # Create a local directory to save everything in before deployment
-        os.mkdir(self.local_directory)
+        if not os.path.isdir(self.local_directory):
+            os.mkdir(self.local_directory)
 
         log_level = logging.DEBUG if log_debug else logging.INFO
         logging.basicConfig(level=log_level, 
