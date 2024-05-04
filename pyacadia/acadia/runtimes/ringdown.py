@@ -62,6 +62,8 @@ class RingdownRuntime(Runtime):
     
     # not intended to be an input argument; gets modified in the runtime sequence below
     # completed_iterations: int = 0
+
+    plot_backend: str = "widget"
     
     def main(self):
         import time
@@ -171,7 +173,7 @@ class RingdownRuntime(Runtime):
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
-        get_ipython().run_line_magic("matplotlib", "widget")
+        get_ipython().run_line_magic("matplotlib", self.plot_backend)
         import matplotlib.pyplot as plt
         from acadia.processing import DynamicLine, ProgressBar
         
@@ -346,17 +348,12 @@ class RingdownRuntime(Runtime):
         self.fig.canvas.draw_idle()
 
     def finalize(self):
-        super().finalize()
         self.progress_bar.finalize()
-        
         self.fig.tight_layout()
-        
-        fig_save_location = os.path.join(self.local_directory, "plots.png")
-        self.fig.savefig(fig_save_location, 
-                         dpi=500, 
-                         # transparent=True,
-                         transparent=False,
-                         )
+        self.data.write("properties", key="figure", record=self.fig)
+        self.fig.savefig(os.path.join(self.local_directory, "plots.png"), 
+                                    dpi=500, 
+                                    transparent=True)
         
         
     
@@ -376,5 +373,5 @@ if __name__ == "__main__":
                             capture_time=2.5e-3,
                             iterations=1000,
                             pulse_stop_time=None)
-    rt.deploy("192.168.2.69", "acadia.runtimes.ringdown", log_debug=True)    
+    rt.deploy("192.168.2.69", "acadia.runtimes.ringdown", log_debug=True, remote_directory="/tmp/%y%m%d/%H%M%S", local_directory="/tmp/%y%m%d/%H%M%S")    
     rt.display()

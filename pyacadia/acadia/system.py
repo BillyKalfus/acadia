@@ -1242,6 +1242,9 @@ class Acadia:
         if not isinstance(channel, Channel):
             raise TypeError(f"Channel must be of type `Channel`;"
                             f" received {channel}.")
+        
+        if isinstance(length, (int, float)) and length == 0:
+            return None
             
         # When we request the descriptor, we need to get the address aligned to
         # 128 bits. We need the word address
@@ -1502,11 +1505,15 @@ class Acadia:
         :return: The configuration used for streaming
         :rtype: :class:`StreamConfiguration`
         """
+
         if (length is not None and dst is None and decimation is None):
             decimation = 1
 
-        if (dst is None and length is None) or (dst is None and decimation is None) and (decimation is None and length is None):
-            raise ValueError("Must provide ``length`` or at least two of `dst`, `length`, and `decimation`.")
+        if ((dst is None and length is None) 
+                or (dst is None and decimation is None) 
+                or (decimation is None and length is None)):
+            raise ValueError("Must provide ``length`` or at least two of"
+                             " `dst`, `length`, and `decimation`.")
 
         path_width = self._firmware["stream_processing_path"]["width"]
         input_samples_per_cycle = self.convert(1, 
@@ -1517,11 +1524,18 @@ class Acadia:
         
         # Validate the decimation if we have one
         if decimation is not None:
+            if isinstance(decimation, float):
+                if round(decimation) == round(decimation, 1):
+                    decimation = round(decimation)
+                else:
+                    raise ValueError(f"Decimation must be an integer;"
+                                     f" received {decimation}")
+                
             if decimation != 1 and decimation % input_samples_per_cycle != 0:
                 raise ValueError(f"Decimation results in a non-integer"
                                     f" number of cycles"
-                                    f" ({input_samples_per_cycle} samples per cycle,"
-                                    f" decimation {decimation})")
+                                    f" ({input_samples_per_cycle} samples per"
+                                    f" cycle, decimation {decimation})")
             
         # Validate or create the destination
         if dst is None:
@@ -1971,7 +1985,7 @@ class Acadia:
         self.sequencer().bus_write(address=registers+1, data=value.imag)
     
     @requires_sequencer
-    def generate_blank(self, channel, length):
+    def generate_blank(self, channel, length) -> None:
         """
         Generate a blank signal on a channel for a given length of time. This
         can be used to insert delays between DMA commands without sequencer 
@@ -1982,6 +1996,9 @@ class Acadia:
         :param length: Delay length in seconds
         :type length: float
         """
+        if isinstance(length, (float, int)) == 0:
+            return
+        
         length_cycles = self._firmware["clocks"]["generated_clocks"]["seq_clk"]*length
         
         if round(length_cycles,5) != round(length_cycles):
