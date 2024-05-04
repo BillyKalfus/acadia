@@ -62,8 +62,10 @@ class RingdownRuntime(Runtime):
     
     # not intended to be an input argument; gets modified in the runtime sequence below
     # completed_iterations: int = 0
-
+    
     plot_backend: str = "widget"
+    
+    plot_save_transparent: bool = False
     
     def main(self):
         import time
@@ -184,13 +186,13 @@ class RingdownRuntime(Runtime):
 
         # Make a figure with our plots
         # self.fig, axes = plt.subplots(3,1,figsize=(4,12))   
-        self.fig, axes = plt.subplots(1,3,figsize=(8,3)) 
-        (ax_data, ax_mag, ax_pwr) = axes     
+        self.fig, self.axes = plt.subplots(1,3,figsize=(8,3)) 
+        (ax_data, ax_mag, ax_pwr) = self.axes     
         self.fig.subplots_adjust(hspace=0.3)
         
         # figure_title = 'Test figure title'
         
-        timestamp_str = self.data['time'][0].strftime('%Y%m%d_%H%M%S')
+        timestamp_str = self.data['properties']['time'].strftime('%Y%m%d_%H%M%S')
         pulse_freq_str = str(self.frequency*1e-9)+' GHz'
         pulse_amp_str = str(self.stimulus_amplitude)+' DAC'
         pulse_len_str = str(self.stimulus_constant_time)+' seconds'
@@ -342,18 +344,23 @@ class RingdownRuntime(Runtime):
                 
                 
         if self.did_tight_layout == False: 
+            self.axes[0].relim()
+            self.axes[0].autoscale(axis='y') # ensure both I and Q fit in the axes limits
             self.fig.tight_layout()
             self.did_tight_layout = True # No more tight layout operations after the first, until it is applied again finalize().
 
         self.fig.canvas.draw_idle()
 
     def finalize(self):
+        self.progress_bar.update(self.data["Iterations"])
         self.progress_bar.finalize()
+        self.axes[0].relim()
+        self.axes[0].autoscale(axis='y') # ensure both I and Q fit in the axes limits
         self.fig.tight_layout()
         self.data.write("properties", key="figure", record=self.fig)
         self.fig.savefig(os.path.join(self.local_directory, "plots.png"), 
                                     dpi=500, 
-                                    transparent=True)
+                                    transparent=self.plot_save_transparent)
         
         
     
