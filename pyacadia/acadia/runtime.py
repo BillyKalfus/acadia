@@ -323,11 +323,11 @@ class Runtime:
             if v is None or isinstance(v, (int, float, complex, bool, str)):
                 kwargs_transformed[k] = v
             elif isinstance(v, (bytes, bytearray)):
-                kwargs_transformed[k] = f"bytes;{hexlify(v)}"
+                kwargs_transformed[k] = f"bytes;{hexlify(v).decode('ascii')}"
             elif isinstance(v, np.ndarray):
                 buf = BytesIO()
                 write_array(buf, v)
-                kwargs_transformed[k] = f"ndarray;{hexlify(buf.getbuffer())}"
+                kwargs_transformed[k] = f"ndarray;{hexlify(buf.getbuffer()).decode('ascii')}"
             else:
                 raise TypeError(f"Unable to save argument of type {type(v)}")
 

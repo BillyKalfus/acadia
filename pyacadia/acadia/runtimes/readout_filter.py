@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Union
 
 from acadia.runtime import Runtime
 from acadia.data import DataManager
@@ -64,6 +65,8 @@ class ReadoutFilterRuntime(Runtime):
 
     # The number of full spectra to take
     iterations: int = 10
+
+    plot_bins: Union[int,tuple] = 50
         
     def main(self):
         import numpy as np
@@ -156,52 +159,37 @@ class ReadoutFilterRuntime(Runtime):
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-        from acadia.processing import DynamicLine
         import matplotlib.pyplot as plt
         from matplotlib.colors import LogNorm
 
-        self.fig,ax = plt.subplots(1,2, figsize=(7,3))
+        self.fig,self.ax = plt.subplots(1,1, figsize=(4,4))
         self.fig.subplots_adjust(hspace=0.35)
         self.fig.tight_layout()
-
-        # Create a plot for the quadratures
-        self.line_re = DynamicLine(ax[0], ".-", label="Re")
-        self.line_im = DynamicLine(ax[0], ".-", Label="Im")
-        ax[0].set_xlabel("Qubit Drive Frequency [MHz]")
-        ax[0].set_ylabel("Quadrature Amplitude [arb. V*s]")
-        ax[0].set_title("Signal Amplitude")
-        ax[0].grid()
         
+        self.colormesh = None
 
     def update(self):
         import numpy as np
-        from acadia.arrays import Waveform
-        
 
         if not self.data.available("traces"):
             return
+        
+        traces = np.squeeze(self.data["traces"].records())
 
-        data = np.squeeze(Waveform.sample_to_complex(self.data["traces"].records()))
+        # Make histograms of the data that we get
+        histogram, xedges, yedges = np.histogram2d(traces["re"], traces["im"], bins=self.plot_bins)
+        histogram = histogram.T
 
-        mags = np.abs(data)
-        phases = np.unwrap(np.angle(data))
-        self.line_mag.update(self.qubit_frequencies, mags)
-        self.line_phase.update(self.qubit_frequencies, phases)
+        if self.colormesh is not None:
+            self.colormesh.remove()
 
-        # Update the plot itself
-        self.plots.update()
+        self.colormesh = self.ax.pcolormesh(xedges, yedges, histogram)
 
-        data = np.squeeze(Waveform.to_complex(rt.data["traces"].records()))
-        hist = np.histogram2d(np.real(data), np.imag(data), bins=25)
-
-        plt.figure()
-        plt.pcolormesh(hist[1], hist[2], hist[0])
-        plt.show()
+        self.fig.canvas.draw_idle()
 
 
 if __name__ == "__main__":
     import numpy as np
-    import logging
     
     # Run the program on the target
     rt = ReadoutFilterRuntime(qubit_frequencies=np.linspace(4.0e9, 4.1e9, 101),
@@ -221,6 +209,6 @@ if __name__ == "__main__":
                             readout_capture_decimation=0,
                             readout_capture_delay=224e-9,
                             iterations=100)
-    rt.deploy("192.168.2.70", "qubit_spectroscopy", files=[__file__], log_debug=True)    
+    rt.deploy("192.168.2.70", "acadia.runtimes.readout_filter", log_debug=True)    
     rt.display()
     

@@ -204,9 +204,11 @@ class DynamicErrorbar:
 class DynamicComplexHistogram:
 
     def __init__(self, ax, bins=50, **kwargs):
+        from matplotlib.pyplot import Axes
+
         self.retval = None
         self._kwargs = kwargs
-        self._ax = ax
+        self._ax: Axes = ax
         self._bins = bins
 
     def update(self, data):
@@ -223,12 +225,12 @@ class DynamicComplexHistogram:
             raise TypeError(f"Expecting complex numpy array; received {type(data)}")
 
         histogram, xedges, yedges = np.histogram2d(data.real, data.imag, bins=self._bins)
-        if self.retval is None:
-            self.retval = self._ax.pcolormesh(xedges, yedges, histogram, **self._kwargs)
-        else:
-            self.retval.set_array(histogram)
-            self._ax.set_xlim(xedges[0], xedges[-1])
-            self._ax.set_ylim(yedges[0], yedges[-1])
+        histogram = histogram.T
+
+        if self.retval is not None:
+            self.retval.remove()
+            
+        self.retval = self._ax.pcolormesh(xedges, yedges, histogram, **self._kwargs)
 
     def get_data(self):
         return self.retval.get_array()
