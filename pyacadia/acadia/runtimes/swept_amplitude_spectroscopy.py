@@ -177,28 +177,19 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
 
     def update(self):
         import numpy as np
-        from acadia.processing import process_data
         from acadia.arrays import Waveform
 
         # First make sure that we actually have new data to process
         if not self.data.available("traces"):
             return
 
-        data = Waveform.sample_to_int(self.data["traces"].records())
-
-        processing_spec = [(-1, np.sum), (self.stimulus_amplitudes, None), (self.frequencies, None), (self.data["traces"].shape[-1], np.sum), (2, None)]
-        data,_ = process_data(data, processing_spec)
-
-        # Convert the data to complex
-        data = Waveform.to_complex(data)
-
-        # By default, process_data and Waveform.to_complex will not remove the 
-        # length-1 axes that result from reduction. 
-        # In this case, we don't need them, so get rid of them
-        data = np.squeeze(data)
+        data_int = Waveform.sample_to_int(self.data["traces"].records())
+        data_reshaped = data_int.reshape(-1, len(self.stimulus_amplitudes), len(self.frequencies), self.data["traces"].shape[-1], 2)
+        data_summed = np.sum(data_reshaped, axis=(0,3))
+        data_complex = np.squeeze(Waveform.to_complex(data_summed))
 
         for idx_amplitude,_ in enumerate(self.stimulus_amplitudes):
-            amplitude_data = data[idx_amplitude,:]
+            amplitude_data = data_complex[idx_amplitude,:]
 
             # Apply the electrical delay
             amplitude_data *= self.electrical_delay_vec
@@ -210,11 +201,13 @@ class SweptAmplitudeSpectroscopyRuntime(Runtime):
             self.lines_mag[idx_amplitude].update(self.frequencies, mags)
             self.lines_phase[idx_amplitude].update(self.frequencies, phases)
 
+        self.lines_mag[0]._ax.relim()
+        self.lines_mag[0]._ax.autoscale()
+        self.lines_phase[0]._ax.relim()
+        self.lines_phase[0]._ax.autoscale()
+
         # Update the plot itself
         self.fig.canvas.draw_idle()
-
-        self.lines_mag[0]._ax.autoscale()
-        self.lines_phase[0]._ax.autoscale()
 
 
 if __name__ == "__main__":
@@ -233,9 +226,7 @@ if __name__ == "__main__":
                             capture_delay=224e-9,
                             iterations=100,
                             plot_electrical_delay=112.2e-9)
-    
-    print(__file__)
-    
-    rt.deploy("192.168.2.70", "acadia.runtimes.swept_amplitude_spectroscopy", log_debug=True)    
+        
+    rt.deploy("192.168.2.70", "acadia.runtimes.swept_amplitude_spectroscopy")    
     rt.display()
     

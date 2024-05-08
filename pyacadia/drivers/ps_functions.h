@@ -55,3 +55,10 @@ void to_samples_simd_batched(
 // https://github.com/Xilinx/u-boot-xlnx/blob/master/arch/arm/cpu/armv8/generic_timer.c
 unsigned long get_tbclk(void);
 unsigned long timer_read_counter(void);
+
+void sequencer_halt_and_reset(uint32_t*);
+void sequencer_run(uint32_t*);
+uint8_t sequencer_done(uint32_t*);
+void sequencer_block(uint32_t*);
+void sequencer_complete(uint32_t*);
+void sequencer_mem_barrier(uint32_t*);

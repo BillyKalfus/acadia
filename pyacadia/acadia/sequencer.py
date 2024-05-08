@@ -319,7 +319,7 @@ class STP:
             tmp |= self.dest2.value() << (72-64)
         tmp |= self.condition_invert << (71-64)
         if self.op == "and":
-            tmp |= 1 << (69-64)
+            tmp |= 1 << (70-64)
         elif self.op == "xor":
             tmp |= 1 << (69-64)
         tmp |= self.premask_invert << (68-64)

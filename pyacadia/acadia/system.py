@@ -23,6 +23,8 @@ __all__ = ["DMASynchronizer",
            "StreamConfiguration"
            "Acadia"]
 
+logger = logging.getLogger()
+
 class DMASynchronizer(Synchronizer):
     """
     Synchronizes DMA triggers.
@@ -106,10 +108,10 @@ class DMASynchronizer(Synchronizer):
                 # the barrier exists.
                 total_channel_lengths = {}
                 for channel,lengths in channel_lengths.items():
-                    logging.debug(f"Combining lengths for channel {channel}:")
+                    logger.debug(f"Combining lengths for channel {channel}:")
                     total_channel_lengths[channel] = 0
                     for length in lengths:
-                        logging.debug(f"\t{length}")
+                        logger.debug(f"\t{length}")
                         total_channel_lengths[channel] += length
 
                 # Reset channel lengths so that when we hit the next barrier 
@@ -120,7 +122,7 @@ class DMASynchronizer(Synchronizer):
                     barrier_time = list(total_channel_lengths.values())[0]
                 else:
                     barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
-                logging.debug(f"Inserting DMA barrier at time {barrier_time}")
+                logger.debug(f"Inserting DMA barrier at time {barrier_time}")
                                                 
                 # Then, for every channel that has some action after the 
                 # barrier, we need to add a blank so that the next action 
@@ -636,6 +638,9 @@ class Acadia:
         self._sequencer_done = self._firmware["ps_gpio"]["sysfs_offset"] + 64           
         PSGPIO.sysfs_export(self._sequencer_done)
         PSGPIO.sysfs_set_direction(self._sequencer_done, "in")
+
+        from acadia.ps_functions import attach
+        attach()
         
     def detach(self):
         """
@@ -1554,7 +1559,7 @@ class Acadia:
                                     f" ({input_length_samples} samples,"
                                     f" decimation {decimation})")
             
-            logging.debug(f"Allocating Waveform with"
+            logger.debug(f"Allocating Waveform with"
                           f" {input_length_samples} / {decimation} ="
                           f" {input_length_samples // decimation} samples")
             dst = Waveform(channel=(src if isinstance(src, Channel) else None), 
@@ -1652,7 +1657,7 @@ class Acadia:
                                         "bytes", 
                                         64 // 8) # DSP module creates 64-bit elements
         
-        logging.debug(f"Stream length {length_cycles} cycles, decimation {decimation},"
+        logger.debug(f"Stream length {length_cycles} cycles, decimation {decimation},"
                       f" of output size {output_length_bytes} bytes to address"
                       f" 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
 
@@ -1787,7 +1792,7 @@ class Acadia:
             else:
                 raise ValueError("Unable to infer kernel length.")
 
-            logging.debug(f"Allocating kernel Waveform with {kernel_length_elements} samples")
+            logger.debug(f"Allocating kernel Waveform with {kernel_length_elements} samples")
             kernel = Waveform(length=kernel_length_elements, 
                             region=self.CMACCKernelArray[configuration.module_resource._resource_id]) 
         elif kernel_length is not None:
@@ -1804,7 +1809,7 @@ class Acadia:
 
         # Set the kernel start and end addresses
         # The kernel uses one element per cycle
-        logging.debug(f"Using kernel at address 0x{kernel.word_address():04X} of length {len(kernel)}")
+        logger.debug(f"Using kernel at address 0x{kernel.word_address():04X} of length {len(kernel)}")
         kernel_reg = kernel.word_address() | ((kernel.word_address() + len(kernel) - 1) << 16)
         kernel_reg &= 0xFFFFFFFF
         self.sequencer().bus_write(address=registers+3, data=kernel_reg)
@@ -1835,7 +1840,7 @@ class Acadia:
         if reset_fifo:
             control_reg |= 1 << 24
             
-        logging.debug(f"Setting CMACC control register to 0x{control_reg:08X}")
+        logger.debug(f"Setting CMACC control register to 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
         
         # Command the destination datamover
@@ -1862,7 +1867,7 @@ class Acadia:
                                     dst.byte_address() + offset_bytes,
                                     output_length_bytes)
             
-        logging.debug(f"Stream length {accumulation_length_cycles} cycles,"
+        logger.debug(f"Stream length {accumulation_length_cycles} cycles,"
                       f" of output size {output_length_bytes} bytes to address"
                       f" 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
         
@@ -2223,20 +2228,25 @@ class Acadia:
             signals completion.
         """
         if assemble:
-            logging.debug("Assembling")
+            # logger.debug("Assembling")
             self.load(*self.assemble())
         if configure_streams:
             for cfg in self._stream_configurations:
-                logging.debug(f"Applying stream configuration {cfg}")
+                # logger.debug(f"Applying stream configuration {cfg}")
                 self.configure_stream(cfg)
                 
-        logging.debug("Running sequencer")
-        self.sequencer_reset()
-        self.sequencer_run()
+        # logger.debug("Running sequencer")
+        from acadia.ps_functions import sequencer_halt_and_reset, sequencer_run, sequencer_complete
+        # self.sequencer_reset()
+        # self.sequencer_run()
+        sequencer_halt_and_reset()
+        sequencer_run()
         
         if block:
-            while not self.sequencer_done():
-                pass
+            # while not self.sequencer_done():
+            #     pass
+            sequencer_complete()
+            # logger.debug("Sequencer completed")
         
     def sequencer_done(self) -> bool:
         """
@@ -2281,7 +2291,7 @@ class Acadia:
 
         dac_dma_programs = []
         for i,dma in enumerate(self._dac_dmas):
-            logging.debug(f"Assembling DAC{i} DMA program with length {len(dma._compiled_program)}")
+            logger.debug(f"Assembling DAC{i} DMA program with length {len(dma._compiled_program)}")
             dma_program = bytearray(len(dma._compiled_program)*8)
             for idx,instr in enumerate(dma._compiled_program):
                 struct.pack_into("<Q", dma_program, idx*8, instr.assemble())
@@ -2289,7 +2299,7 @@ class Acadia:
             
         adc_dma_programs = []
         for i,dma in enumerate(self._adc_dmas):
-            logging.debug(f"Assembling ADC{i} DMA program with length {len(dma._compiled_program)}")
+            logger.debug(f"Assembling ADC{i} DMA program with length {len(dma._compiled_program)}")
             dma_program = bytearray(len(dma._compiled_program)*8)
             for idx,instr in enumerate(dma._compiled_program):
                 struct.pack_into("<Q", dma_program, idx*8, instr.assemble())  
@@ -2298,7 +2308,7 @@ class Acadia:
         # Assemble the sequencer last so that if any DMA descriptors are resolved to have zero length,
         # the instruction driving them is removed
         num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
-        logging.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
+        logger.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
         
         sequencer_program = bytearray(num_sequencer_instructions*16)
         
@@ -2315,19 +2325,19 @@ class Acadia:
         Loads assembled data into memory.
         """
         if sequencer_program is not None:
-            logging.debug(f"Loading sequencer instruction memory ({len(sequencer_program)} bytes)")
+            logger.debug(f"Loading sequencer instruction memory ({len(sequencer_program)} bytes)")
             self._sequencer_instruction_memory[:len(sequencer_program)] = sequencer_program
             
         if dac_dma_programs is not None:
             for idx,program in enumerate(dac_dma_programs):
                 if len(program) > 0:
-                    logging.debug(f"Loading DAC{idx} descriptor memory ({len(program)} bytes)")
+                    logger.debug(f"Loading DAC{idx} descriptor memory ({len(program)} bytes)")
                     self._dac_dma_descriptor_memory[idx][:len(program)] = program
                 
         if adc_dma_programs is not None:
             for idx,program in enumerate(adc_dma_programs):
                 if len(program) > 0:
-                    logging.debug(f"Loading ADC{idx} descriptor memory ({len(program)} bytes)")
+                    logger.debug(f"Loading ADC{idx} descriptor memory ({len(program)} bytes)")
                     self._adc_dma_descriptor_memory[idx][:len(program)] = program
                         
     def assemble_simulation(self) -> str:
@@ -2412,7 +2422,7 @@ class Acadia:
         Resets the PL logic.
         """
 
-        gpio = 338 + 3*26 + 95
+        gpio = self._firmware["ps_gpio"]["sysfs_offset"] + 95
         PSGPIO.sysfs_export(gpio)
         PSGPIO.sysfs_set_direction(gpio, "out")
         PSGPIO.sysfs_write(gpio, 0)
@@ -2824,7 +2834,7 @@ class Acadia:
         :type port: str
         """
         # One cycle to load the bus registers in the sequencer
-        latency = 1 
+        latency = 2
 
         if self._firmware["sequencer_bus"]["decoder_pipeline_miso"]:
             latency += 1

@@ -180,7 +180,6 @@ class QubitSpectroscopyRuntime(Runtime):
 
     def update(self):
         import numpy as np
-        from acadia.processing import process_data
         from acadia.arrays import Waveform
 
         if not self.data.available("traces"):
@@ -189,20 +188,16 @@ class QubitSpectroscopyRuntime(Runtime):
         if "Iterations" in self.data:
             self.progress_bar.update(self.data["Iterations"])
 
-        data = Waveform.sample_to_int(self.data["traces"].records())
+        data_int = Waveform.sample_to_int(self.data["traces"].records())
+        data_reshaped = data_int.reshape(-1, len(self.qubit_frequencies), self.data["traces"].shape[-1], 2)
+        data_summed = np.sum(data_reshaped, axis=(0,2))
+        data_complex = np.squeeze(Waveform.to_complex(data_summed))
 
-        processing_spec = [(-1, np.sum), (self.qubit_frequencies, None), (self.data["traces"].shape[-1], np.sum), (2, None)]
-        data,_ = process_data(data, processing_spec)
-
-        # Convert the data to complex
-        data = np.squeeze(Waveform.to_complex(data))
-
-        mags = np.abs(data)
-        phases = np.unwrap(np.angle(data))
+        mags = np.abs(data_complex)
+        phases = np.unwrap(np.angle(data_complex))
         self.line_mag.update(self.qubit_frequencies, mags)
         self.line_phase.update(self.qubit_frequencies, phases)
 
-        # Update the plot itself
         self.fig.canvas.draw_idle()
 
     def finalize(self):
@@ -231,6 +226,6 @@ if __name__ == "__main__":
                             readout_capture_decimation=0,
                             readout_capture_delay=224e-9,
                             iterations=1000)
-    rt.deploy("192.168.2.70", "acadia.runtimes.qubit_spectroscopy", log_debug=True)    
+    rt.deploy("192.168.2.70", "acadia.runtimes.qubit_spectroscopy")    
     rt.display()
     

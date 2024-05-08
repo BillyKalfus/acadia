@@ -14,7 +14,7 @@ class ConstantRuntime(Runtime):
     nco_frequency: float
 
     # Amplitude of the constant loaded into memory
-    pulse_amplitude: float = 1.0
+    pulse_amplitude: float = 0.9
 
     # Nyquist zone of the DAC to use
     channel_nyquist_zone: int = 2
@@ -22,9 +22,13 @@ class ConstantRuntime(Runtime):
     # Current reference for output channel
     channel_vop: int = 12000
 
+    # Amount of time in seconds to run for
+    length: float = 5
+
     def main(self):        
         from acadia.system import Acadia
         from acadia.arrays import ConstantWaveform
+        import time
         
         acadia = Acadia()
 
@@ -46,10 +50,12 @@ class ConstantRuntime(Runtime):
         pulse_channel.configure_nco(frequency=self.nco_frequency)
         pulse_channel.set_vop(self.channel_vop)
         
-        acadia.run()
+        acadia.run(block=False)
+        time.sleep(self.length)
+        acadia.sequencer_halt()
     
 if __name__ == "__main__":
-    rt = ConstantRuntime(dac_channel=0, nco_frequency=4.2e9)
-    rt.deploy("192.168.2.69", "acadia.runtimes.constant")    
+    rt = ConstantRuntime(dac_channel=0, nco_frequency=3.5e9)
+    rt.deploy("10.66.3.214", "acadia.runtimes.constant", log_debug=True)    
     rt.display()
     

@@ -50,6 +50,6 @@ class PlotRuntime(Runtime):
 
 if __name__ == "__main__":    
     rt = PlotRuntime()
-    rt.deploy("192.168.2.69", "acadia.runtimes.plot_example", event_loop_period=0.05)    
+    rt.deploy("192.168.2.69", "acadia.runtimes.plot_example")    
     rt.display()
     

@@ -20,8 +20,6 @@ from .data import DataManager, PickleRecordGroup
 
 __all__ = ["Runtime"]
 
-logger = logging.getLogger()
-
 class Runtime:
     """
     An orchestrated deployment of a program on a remote target.
@@ -106,12 +104,13 @@ class Runtime:
             local_directory: str = "/tmp/%y%m%d_%H%M%S",
             username: str = "root", 
             log_debug: bool = False,
-            event_loop_period: float = 0.2,
+            event_loop_period: float = 0.25,
             remove_remote_directory: bool = True,
             multiplex_control_path: str = None,
             do_initialize: bool = True,
             do_update: bool = True,
             do_finalize: bool = True,
+            save_count: int = 100,
             **kwargs):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
@@ -189,7 +188,13 @@ class Runtime:
         :param do_finalize: If ``True``, this class' :meth:`finalize` 
             method is called after the event loop completes
         :type do_finalize: bool
+        :param save_count: The number of records that the target will store
+            before updating the metadata. If loops are running slower than 
+            expected, try increasing this number.
+        :type save_count: int
         """      
+        logger = logging.getLogger("acadia")
+
         # Prepare some variables that we'll use later
         current_time = datetime.now()
         self.remote_directory = current_time.strftime(remote_directory)
@@ -200,15 +205,30 @@ class Runtime:
         self._local_log_name = os.path.join(self.local_directory, "runtime.log")
         self._log_debug = log_debug
         self.login = f"{username}@{target_address}"
+        self._displayed = False
 
         # Create a local directory to save everything in before deployment
         os.makedirs(self.local_directory)
 
         log_level = logging.DEBUG if log_debug else logging.INFO
-        logging.basicConfig(level=log_level, 
-                    filename=self._local_log_name, 
-                    filemode="w",
-                    format='[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s')
+        
+        while len(logger.handlers) > 0:
+            h = logger.handlers[0]
+            logger.removeHandler(h)
+            h.close()
+
+        handler = logging.FileHandler(self._local_log_name, mode="w")
+        handler.setLevel(log_level)
+        handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s'))
+        logger.addHandler(handler)
+        
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.WARNING)
+        handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s at %(funcName)s (%(filename)s, %(lineno)d): %(message)s'))
+        logger.addHandler(handler)
+        
+        logger.setLevel(log_level)
+        logger.propagate = False
         
         # Create a DataManager
         self.data_manager = DataManager(self.local_directory)
@@ -219,7 +239,7 @@ class Runtime:
         self._configure_ssh(multiplex_control_path)
 
         self._set_status("Preparing and deploying files")
-        self._prepare_files(files, runtime_module, log_level, kwargs)
+        self._prepare_files(files, runtime_module, log_level, save_count, kwargs)
 
         self._set_status("Preparing remote runtime screen")
         Runtime._prepare_screen(self.login, self._multiplex_options)
@@ -249,11 +269,17 @@ class Runtime:
 
         try: 
             self._event_loop.join(timeout=timeout)
+            self._set_status("Stopped")
         except:
             logging.error("Event loop thread did not join, manually stopping")
             self.kill()
 
-        self._set_status("Stopped")
+        if self._displayed:
+            self._stop_button.disabled = True
+
+        if self._remove_remote_directory:
+            self._set_status("Removing remote directory")
+            run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
 
     def kill(self):
         """
@@ -262,13 +288,6 @@ class Runtime:
 
         # Send a ctrl-C to the remote screen, if it exists
         run(f"ssh {self._multiplex_options} {self.login} screen -S acadia -X stuff ^C".split(" "))
-        
-        self._stop_button.disabled = True
-
-        if self._remove_remote_directory:
-            self._set_status("Removing remote directory")
-            run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
-
         self._set_status("Killed")
 
     def display(self):
@@ -300,8 +319,8 @@ class Runtime:
             self._remote_log_link = HTML(value=f"<a href=\"{os.path.join(self.local_directory, 'remote_main.log')}\">Remote Log</a>")
             box = HBox([directory_label, self._stop_button, self._status, self._metadata_link, self._local_log_link, self._remote_log_link])
         
-        
         display(box, self.output)
+        self._displayed = True
 
     @property
     def data(self):
@@ -372,7 +391,9 @@ class Runtime:
         # run(f"ssh -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
         self._multiplex_options = (f"-o ControlMaster=auto -o ControlPath={self._multiplex_control_path}/%r@%h:%p -o ControlPersist=20")
     
-    def _prepare_files(self, files, runtime_module, log_level, kwargs):
+    def _prepare_files(self, files, runtime_module, log_level, save_count, kwargs):
+        logger = logging.getLogger("acadia")
+
         # Copy all of the files that we need into the local execution directory
         if files is not None:
             for file in files:
@@ -407,6 +428,7 @@ class Runtime:
             runfile.write(f"    from acadia.runtime import Runtime\n")
             runfile.write(f"    from {runtime_module} import {self.__class__.__name__}\n")
             runfile.write(f"    runtime = {self.__class__.__name__}.load(\"{self.remote_directory}\")\n")
+            runfile.write(f"    runtime.data._save_count = {save_count}\n")
             runfile.write(f"    runtime.main()\n")
             runfile.write(f"    logging.info(\"Runtime complete.\")\n")
             runfile.write(f"except:\n")
@@ -447,6 +469,8 @@ class Runtime:
         """
         Retrieve a preprepared runtime screen, if it exists.
         """
+        logger = logging.getLogger("acadia")
+
         cmd = ""
 
         # If there's already an existing acadia screen running, we'll need to kill it
@@ -545,7 +569,7 @@ class Runtime:
                            do_update: bool, 
                            do_finalize: bool) -> Thread:
                 
-        def _func():
+        def event_loop():
             import time
 
             if do_initialize:
@@ -556,6 +580,8 @@ class Runtime:
 
             t_loop = time.time()
             last_sync_time = None
+            logger = logging.getLogger("acadia")
+
             while True:
                 if self._stop_flag.is_set():
                     logger.debug("Stop requested")
@@ -609,16 +635,24 @@ class Runtime:
                 except:
                     logger.error(f"Exception during finalization: {traceback.format_exc()}")
 
+            if self._displayed:
+                self._stop_button.disabled = True
+
+            if self._remove_remote_directory:
+                self._set_status("Removing remote directory")
+                run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
+
             self._set_status("Completed")
             
-        thread = Thread(target=_func,
+        thread = Thread(target=event_loop,
                         name="EventLoopThread",
                         daemon=True)
         return thread
 
     def _set_status(self, status):
+        logger = logging.getLogger("acadia")
         s = f"Status: {status}"
-        if hasattr(self, "_status"):
+        if self._displayed:
             self._status.value = s
         logger.debug(s)
         

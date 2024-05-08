@@ -200,40 +200,6 @@ class DynamicErrorbar:
                           [x,ydata[i]+yerr[i]]] for i,x in enumerate(xdata)]
         
         bars[0].set_segments([np.array(points) for points in new_errorbars])
-
-class DynamicComplexHistogram:
-
-    def __init__(self, ax, bins=50, **kwargs):
-        from matplotlib.pyplot import Axes
-
-        self.retval = None
-        self._kwargs = kwargs
-        self._ax: Axes = ax
-        self._bins = bins
-
-    def update(self, data):
-        """
-        Update the values of the colormesh. Note that moving in the x-direction
-        corresponds to moving from one row to the next; that is, a single 
-        data point is given by data[x_idx, y_idx]. See the documentation for
-        ``matplotlib.pyplot.pcolormesh`` for additional information.
-
-        If the range of the x or y axes changes by more than the axis update
-        threshold, the axes will be updated
-        """
-        if not isinstance(data, np.ndarray) or data.dtype.kind != 'c':
-            raise TypeError(f"Expecting complex numpy array; received {type(data)}")
-
-        histogram, xedges, yedges = np.histogram2d(data.real, data.imag, bins=self._bins)
-        histogram = histogram.T
-
-        if self.retval is not None:
-            self.retval.remove()
-            
-        self.retval = self._ax.pcolormesh(xedges, yedges, histogram, **self._kwargs)
-
-    def get_data(self):
-        return self.retval.get_array()
         
 class ProgressBar:
     def __init__(self, label=None):        
@@ -343,34 +309,138 @@ class Database:
         
         return d
         
-class ClusterDisplay:
-    """
-    A class for displaying complex histograms of collected spectroscopy data, 
-    identifying clusters by fitting to a Gaussian mixture model, and computing 
-    the optimal linear filters for separating two of the clusters. 
-    """
+# class ClusterDisplay:
+#     """
+#     A class for displaying complex histograms of collected spectroscopy data, 
+#     identifying clusters by fitting to a Gaussian mixture model, and computing 
+#     the optimal linear filters for separating two of the clusters. 
+#     """
 
-    def __init__(self, clusters: int = 2, iterations: int = 100):
-        """
-        :param clusters: Number of clusters to identify
-        :type clusters: int
-        :param iterations: Number of optimization iterations
-        :type iterations: int
-        """
+#     def __init__(self, clusters: int = 2, iterations: int = 100):
+#         """
+#         :param clusters: Number of clusters to identify
+#         :type clusters: int
+#         :param iterations: Number of optimization iterations
+#         :type iterations: int
+#         """
 
-        self._clusters = clusters
+#         self._clusters = clusters
 
-        from hmmlearn.hmm import GaussianHMM
-        self._model = GaussianHMM(n_components=clusters, covariance_type="full", n_iter=iterations)
+#         from hmmlearn.hmm import GaussianHMM
+#         self._model = GaussianHMM(n_components=clusters, covariance_type="full", n_iter=iterations)
+
+#     def update(self, data: np.ndarray):
+#         """
+#         :param data: Data to fit
+#         :type data: numpy.ndarray with complex datatype
+#         """            
+#         data_stacked = data.astype(f"<f{data.itemsize // 2}").reshape(-1,2)
+#         self._model.fit(data_stacked)
+
+class DynamicReadoutHistogram:
+
+    def __init__(self, ax, bins=50, **kwargs):
+        from matplotlib.pyplot import Axes
+
+        self.retval = None
+        self._kwargs = kwargs
+        self._ax: Axes = ax
+        self._bins = bins
+        self._ellipses = []
 
     def update(self, data: np.ndarray):
         """
-        :param data: Data to fit
-        :type data: numpy.ndarray with complex datatype
-        """            
-        data_stacked = data.astype(f"<f{data.itemsize // 2}").reshape(-1,2)
-        self._model.fit(data_stacked)
+        Update the values of the colormesh. Note that moving in the x-direction
+        corresponds to moving from one row to the next; that is, a single 
+        data point is given by data[x_idx, y_idx]. See the documentation for
+        ``matplotlib.pyplot.pcolormesh`` for additional information.
 
+        If the range of the x or y axes changes by more than the axis update
+        threshold, the axes will be updated
+        """
+        if not isinstance(data, np.ndarray) or data.dtype.kind != 'c':
+            raise TypeError(f"Expecting complex numpy array; received {type(data)}")
 
+        histogram, xedges, yedges = np.histogram2d(data.real, data.imag, bins=self._bins)
+        histogram = histogram.T
+
+        if self.retval is not None:
+            self.retval.remove()
+            
+        self.retval = self._ax.pcolormesh(xedges, yedges, histogram, **self._kwargs)
+
+    def fit_clusters(self, data: np.ndarray, n_clusters: int = 2):
+        """
+        Learn the locations of clusters in the data by fitting to a Gaussian
+        mixture model.
+        """
+        from sklearn.mixture import GaussianMixture
+        gmm = GaussianMixture(n_components=n_clusters, covariance_type="full")
+        data_2d = data.view(np.dtype(f"<f{data.itemsize//2}")).reshape(-1, 2)
+        gmm.fit(data_2d)
+        return gmm
+    
+    def plot_clusters(self, gmm, alpha=1, fill=False, facecolor="white", edgecolor="white", linewidth=0.5):
+        """
+        Plot ellipses in the 2D histogram corresponding to the identified latent distributions.
+        """
+        from matplotlib.patches import Ellipse
+
+        if gmm.means_.shape[1] != 2:
+            raise ValueError(f"Found GMM clusters centers with"
+                             f" {gmm.means_.shape[1]} dimensions")
+                
+        for ell in self._ellipses:
+            ell.remove()
+        
+        self._ellipses = []
+        for i in range(gmm.means_.shape[0]):
+            # Adapted from https://scikit-learn.org/stable/auto_examples/mixture/plot_gmm_covariances.html#sphx-glr-auto-examples-mixture-plot-gmm-covariances-py
+            # Get the magnitude and direction of the principal components of the data
+            v, w = np.linalg.eigh(gmm.covariances_[i])
+            u = w[0] / np.linalg.norm(w[0])
+            angle = 180*(1 + np.arctan2(u[1], u[0])) / np.pi
+            v = 2.0 * np.sqrt(2.0) * np.sqrt(v)
+
+            # Plot the cluster in an ellipse
+            ell = Ellipse(gmm.means_[i,:], v[0], v[1], 
+                          angle=angle, 
+                          fill=fill, 
+                          facecolor=facecolor,
+                          edgecolor=edgecolor,
+                          linewidth=linewidth)
+            ell.set_clip_box(self._ax.bbox)
+            ell.set_alpha(alpha)
+            self._ax.add_artist(ell)
+            self._ellipses.append(ell)
+
+    def get_data(self):
+        return self.retval.get_array()
+    
+def set_scientific_notation(plot_axis):
+    '''
+    Enforce displaying scientific notation on a pyplot axis.
+    Example use context:
+    
+    set_scientific_notation(ax.yaxis)
+    '''
+    
+    from matplotlib import ticker
+    formatter = ticker.ScalarFormatter(useMathText=True)
+    formatter.set_scientific(True) 
+    formatter.set_powerlimits((-1,1))
+    plot_axis.set_major_formatter(formatter)
+
+def readout_classify(gmm, point):
+    """
+    Given a description of a Gaussian mixture model, classify a given point
+    as belonging to a particular class.
+
+    :param gmm: Gaussian mixture model data structure
+    :type gmm: sklearn.mixture.GaussianMixture
+    :param point: Point to classify
+    :type point: n-dimensional sequence
+    """
+    raise NotImplemented
 
         
