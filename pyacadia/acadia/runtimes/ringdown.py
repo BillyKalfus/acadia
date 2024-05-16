@@ -151,28 +151,6 @@ class RingdownRuntime(Runtime):
         for i in self.data.count(self.iterations, "Iterations"):                                    
             acadia.run(assemble=(i==0))
             self.data.write("traces", capture_data)
-            
-            # self.completed_iterations = i
-
-        
-    
-    def create_formatter_scientific(self):
-        '''
-        Importing and defining a means of enforcing scientific notation 
-        of tick labels.
-        
-        Example use context:
-        
-        formatter = create_formatter_scientific()
-        ax.yaxis.set_major_formatter(formatter) 
-        
-        '''
-        from matplotlib import ticker
-        formatter = ticker.ScalarFormatter(useMathText=True)
-        formatter.set_scientific(True) 
-        formatter.set_powerlimits((-1,1)) # exponents beyond which scientific format is enforced
-        
-        return formatter
 
 
     def initialize(self):
@@ -180,9 +158,7 @@ class RingdownRuntime(Runtime):
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", self.plot_backend)
         import matplotlib.pyplot as plt
-        from acadia.processing import DynamicLine, ProgressBar
-        
-
+        from acadia.processing import DynamicLine, ProgressBar, set_scientific_notation
         
         # Create a progress bar for viewing things
         self.progress_bar = ProgressBar("Iterations")
@@ -226,10 +202,8 @@ class RingdownRuntime(Runtime):
         ax_data.set_xlabel("Time [s]")
         ax_data.set_ylabel("Amplitude [arb. V]")
         # ax_data.set_ticklabel_format(axis='y', style='sci')
-        formatter_xdata = self.create_formatter_scientific()
-        ax_data.xaxis.set_major_formatter(formatter_xdata) 
-        formatter_ydata = self.create_formatter_scientific()
-        ax_data.yaxis.set_major_formatter(formatter_ydata) 
+        set_scientific_notation(ax_data.xaxis) 
+        set_scientific_notation(ax_data.yaxis) 
         # ax_data.set_title("Average Signal Amplitude")
         ax_data.legend()
 
@@ -242,10 +216,8 @@ class RingdownRuntime(Runtime):
         # ax_mag.set_ylabel("$\left<\left|{I + jQ}\\right|\\right>^2$ [arb. V**2]")
         ax_mag.set_ylabel(r"$\left<I\right>^2 + \left<Q\right>^2$ [arb. $\rm{V}^2$]")
         # ax_mag.set_ticklabel_format(axis='y', style='sci')
-        formatter_x_mag = self.create_formatter_scientific()
-        ax_mag.xaxis.set_major_formatter(formatter_x_mag) 
-        formatter_y_mag = self.create_formatter_scientific()
-        ax_mag.yaxis.set_major_formatter(formatter_y_mag) 
+        set_scientific_notation(ax_mag.xaxis)
+        set_scientific_notation(ax_mag.yaxis) 
         # ax_mag.set_title("$\left|\overline{I + i Q}\\right|^2$")
         # ax_mag.legend()
 
@@ -257,10 +229,8 @@ class RingdownRuntime(Runtime):
         # ax_pwr.set_ylabel("Power [arb. V**2]")
         ax_pwr.set_ylabel(r"$\left<{I^2 + Q^2}\right>$ [arb. $\rm{V}^2$]")
         # ax_pwr.set_ticklabel_format(axis='y', style='sci')
-        formatter_x_pwr = self.create_formatter_scientific()
-        ax_pwr.xaxis.set_major_formatter(formatter_x_pwr) 
-        formatter_y_pwr = self.create_formatter_scientific()
-        ax_pwr.yaxis.set_major_formatter(formatter_y_pwr) 
+        set_scientific_notation(ax_pwr.xaxis) 
+        set_scientific_notation(ax_pwr.yaxis) 
         # ax_pwr.set_title("$\overline{I^2 + Q^2}$")
         # ax_pwr.legend()
         
@@ -343,9 +313,6 @@ class RingdownRuntime(Runtime):
                 ax.autoscale(axis='y')
                 ax.set_xlim(0, self.time_axis[-1])
                 
-            
-                
-                
         if self.did_tight_layout == False: 
             self.axes[0].relim()
             self.axes[0].autoscale(axis='y') # ensure both I and Q fit in the axes limits
@@ -364,8 +331,6 @@ class RingdownRuntime(Runtime):
         self.fig.savefig(os.path.join(self.local_directory, "plots.png"), 
                                     dpi=500, 
                                     transparent=self.plot_save_transparent)
-        
-        
     
 if __name__ == "__main__":
     import numpy as np
@@ -383,5 +348,5 @@ if __name__ == "__main__":
                             capture_time=2.5e-3,
                             iterations=1000,
                             pulse_stop_time=None)
-    rt.deploy("192.168.2.69", "acadia.runtimes.ringdown", log_debug=True, remote_directory="/tmp/%y%m%d/%H%M%S", local_directory="/tmp/%y%m%d/%H%M%S")    
+    rt.deploy("192.168.2.69", "acadia.runtimes.ringdown")    
     rt.display()

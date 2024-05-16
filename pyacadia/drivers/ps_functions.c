@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -302,12 +303,68 @@ unsigned long get_tbclk(void)
 	return cntfrq;
 }
 
-unsigned long timer_read_counter(void)
+// unsigned long timer_read_counter(void)
+// {
+// 	unsigned long cntpct;
+
+// 	isb();
+// 	asm volatile("mrs %0, cntpct_el0" : "=r" (cntpct));
+
+// 	return cntpct;
+// }
+
+// TODO: Find a way to actually get the GPIO numbers from the firmware configuration
+void sequencer_halt_and_reset(uint32_t* gpio_mem) 
 {
-	unsigned long cntpct;
+    // Unmask and clear GPIO 89 and 90
+    const uint32_t mask = (1 << 9) | (1 << 10);
+    const uint32_t data = (~mask) << 16;
+    volatile uint32_t* mask_data5_msw = (volatile uint32_t*)(gpio_mem + (0x2C >> 2));
+    *mask_data5_msw = data;
+}
 
-	isb();
-	asm volatile("mrs %0, cntpct_el0" : "=r" (cntpct));
+void sequencer_run(uint32_t* gpio_mem)
+{
+    // Unmask and set GPIO 89 and 90
+    const uint32_t mask = (1 << 9) | (1 << 10);
+    const uint32_t data = ((~mask) << 16) | mask;
+    volatile uint32_t* mask_data5_msw = (volatile uint32_t*)(gpio_mem + (0x2C >> 2));
+    *mask_data5_msw = data;
+}
 
-	return cntpct;
+uint8_t sequencer_done(uint32_t* gpio_mem)
+{
+    // Read GPIO 64
+    volatile uint32_t* data5_ro = (volatile uint32_t*)(gpio_mem + (0x74 >> 2));
+    return (uint8_t)(*data5_ro & 0x1);
+}
+
+void sequencer_complete(uint32_t* gpio_mem)
+{
+    // Wait until the sequencer is finished
+    // Block until GPIO 64 is set
+    volatile uint32_t* data5_ro = (volatile uint32_t*)(gpio_mem + (0x74 >> 2));
+    while(~(*data5_ro) & 0x1);
+}
+
+// void sequencer_gpio_barrier(uint32_t* gpio_mem)
+// {
+//     volatile uint32_t* data5_ro = (volatile uint32_t*)(gpio_mem + (0x74 >> 2));
+//     volatile uint32_t* gpio_data5 = (volatile uint32_t*)(gpio_mem + (0x54 >> 2));
+
+//     // Store the state of GPIO 65
+//     uint32_t flag1 = (*data5_ro) & 0x2;
+
+//     // Toggle GPIO 66
+//     *gpio_data5 ^= 0x4;
+
+//     // Wait for GPIO 65 to change
+//     while(~(((*data5_ro) & 0x2) ^ flag1));
+// }
+
+void sequencer_mem_barrier(uint32_t* mem)
+{
+    // Set the value of the memory equal to a constant and wait for it to change
+    *mem = 0xBEEBB00A;
+    while(*mem == 0xBEEBB00A);
 }

@@ -27,7 +27,6 @@ CONFIG_gdb
 CONFIG_gdbserver
 CONFIG_gdb-dev
 CONFIG_iptables
-CONFIG_valgrind
 CONFIG_packagegroup-core-buildessential
 CONFIG_rpm
 CONFIG_rpm-build
@@ -61,14 +60,11 @@ CONFIG_gzip
 CONFIG_hdparm
 CONFIG_man
 CONFIG_man-pages
-CONFIG_parted
 CONFIG_libgcc
 CONFIG_libgcc-dev
 CONFIG_neon
 CONFIG_neon-dev
 CONFIG_neon-dbg
-CONFIG_open-amp
-CONFIG_open-amp-dev
 CONFIG_cpufrequtils
 CONFIG_libstdc++-dev
 CONFIG_libstdc++
@@ -77,11 +73,6 @@ CONFIG_glibc-dev
 CONFIG_which
 CONFIG_netcat
 CONFIG_tcpdump
-CONFIG_wpa-supplicant
-CONFIG_wpa-supplicant-passphrase
-CONFIG_wpa-supplicant-cli
-CONFIG_packagegroup-petalinux-openamp
-CONFIG_packagegroup-petalinux-openamp-dev
 CONFIG_patch
 CONFIG_python3
 CONFIG_python3-numpy
@@ -91,8 +82,6 @@ CONFIG_python3-datetime
 CONFIG_python3-modules
 CONFIG_python3-numbers
 CONFIG_python3-pyvenv
-CONFIG_python3-netclient
-CONFIG_python3-netserver
 CONFIG_python3-math
 CONFIG_python3-asyncio
 CONFIG_python3-core
@@ -115,13 +104,8 @@ CONFIG_python3-pip
 CONFIG_python3-pybind11
 CONFIG_python3-cython
 CONFIG_python3-cffi
-CONFIG_python3-jupyterlab
-CONFIG_python3-matplotlib
-CONFIG_python3-pillow
 CONFIG_python3-pydot
 CONFIG_python3-psutil
-CONFIG_python3-pandas
-CONFIG_python3-ipywidgets
 CONFIG_python3-mpmath
 CONFIG_python3-aiofiles
 CONFIG_python3-aiohttp
@@ -129,10 +113,6 @@ CONFIG_python3-appdirs
 CONFIG_python3-async-timeout
 CONFIG_python3-bitarray
 CONFIG_python3-cachetools
-CONFIG_python3-colorama
-CONFIG_python3-dnspython
-CONFIG_python3-fasteners
-CONFIG_python3-h5py
 CONFIG_python3-ntplib
 CONFIG_python3-parse
 CONFIG_python3-parse-type
@@ -150,4 +130,3 @@ CONFIG_python3-requests
 CONFIG_python3-smbus
 CONFIG_python3-spidev
 CONFIG_python3-tqdm
-CONFIG_python3-widgetsnbextension

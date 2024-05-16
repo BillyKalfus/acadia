@@ -271,12 +271,12 @@ class ArrayRecordGroup(metaclass=RecordGroupMeta):
         record_bytes = reduce(operator.mul, metadata["shape"], dtype.itemsize)
         file_size = os.path.getsize(full_path)
         records = file_size // record_bytes
-        leftover_bytes = file_size % record_bytes
-        if leftover_bytes != 0:
-            logging.warning(f"File {self.filename()} does not contain an integer"
-                            f" number of records (file size {file_size}"
-                            f" bytes, {records} complete records of dtype"
-                            f" {dtype} and shape {metadata['shape']})")
+        # leftover_bytes = file_size % record_bytes
+        # if leftover_bytes != 0:
+        #     logging.warning(f"File {self.filename()} does not contain an integer"
+        #                     f" number of records (file size {file_size}"
+        #                     f" bytes, {records} complete records of dtype"
+        #                     f" {dtype} and shape {metadata['shape']})")
         
         if metadata["map"]:
             file = open(full_path, "rb")
@@ -380,6 +380,9 @@ class CounterRecordGroup(metaclass=RecordGroupMeta):
             raise TypeError(f"Incompatible type for counter value: {type(v)}")
             
         self._metadata["count"] = v
+
+    def write(self, record):
+        self.count = record
         
     @property
     def total(self):
@@ -520,11 +523,12 @@ class DataManager:
 
         metadata.update({name: self._groups[name].metadata() for name in groups})
                                 
-        logging.debug(f"Saving metadata for groups {list(metadata.keys())}")
         with open(metadata_path, "w") as file:
             fcntl.flock(file, fcntl.LOCK_EX)          
             json.dump(metadata, file)
             fcntl.flock(file, fcntl.LOCK_UN)
+
+        # logging.debug("Saved")
         
     @staticmethod
     def read_metadata(directory, raw=False):
@@ -638,8 +642,7 @@ class DataManager:
         counter.count = 0      
         for item in iter:
             yield item
-            counter += 1
-            self.save(name)
+            self.write(name, counter + 1)
             
     def filedeltas(self, metadata):
         """

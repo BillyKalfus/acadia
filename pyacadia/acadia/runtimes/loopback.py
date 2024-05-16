@@ -3,12 +3,12 @@ from dataclasses import dataclass
 from acadia.runtime import Runtime
 
 @dataclass
-class SpectroscopyRuntime(Runtime):
+class LoopbackRuntime(Runtime):
     """
     A :class:`Runtime` subclass for performing swept spectroscopy.
     """
-    # Iterable of frequencies
-    frequencies: list 
+    # Pulse frequency
+    frequency: float 
     
     # DAC channel used for stimulus
     DAC: int 
@@ -40,12 +40,7 @@ class SpectroscopyRuntime(Runtime):
     # Determine how the capture will be carried out
     # If 0, the full waveform will be integrated
     # Otherwise, this amount of decimation will be used
-    capture_decimation: int = 4
-    
-    # If ``0``, automatically fit phase data to 
-    # extract an electrical delay. If any ``float``, this will be 
-    # interpreted as the electrical delay to apply.
-    plot_electrical_delay: float = 0 
+    capture_decimation: int = 1
 
     # The number of full spectra to take
     iterations: int = 10
@@ -74,16 +69,13 @@ class SpectroscopyRuntime(Runtime):
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
-            with a.channel_synchronizer(block=False):
+            with a.channel_synchronizer():
                 a.generate(pulse)
                 a.generate_blank(capture_channel, self.capture_delay)
                 capture_data, _ = a.stream(capture_channel, 
                                    length=capture_time, 
                                    length_units="seconds", 
                                    decimation=self.capture_decimation)
-                
-            with a.channel_synchronizer(block=False):
-                a.generate(pulse)
                 
             return capture_data
 
@@ -108,25 +100,18 @@ class SpectroscopyRuntime(Runtime):
         # Set up the channels for synchronized NCO updates
         pulse_channel.configure_nco(update_source="sysref")
         capture_channel.configure_nco(update_source="sysref")
+        acadia.update_nco_frequency(pulse_channel, frequency=self.frequency)
+        acadia.update_nco_frequency(capture_channel, frequency=-self.frequency)
+        acadia.reset_nco_phase(pulse_channel)
+        acadia.reset_nco_phase(capture_channel)
+        acadia.update_ncos_synchronized()
 
         # Assemble and load the program
         acadia.load(*acadia.assemble())
 
-        # Loop while reporting progress back to the host
         for i in self.data.count(self.iterations, "Iterations"):
-            for frequency in self.data.count(self.frequencies, "Frequencies"):
-                # Synchronously set the modulation frequencies and reset phases
-                acadia.update_nco_frequency(pulse_channel, frequency=frequency)
-                acadia.update_nco_frequency(capture_channel, frequency=-frequency)
-                acadia.reset_nco_phase(pulse_channel)
-                acadia.reset_nco_phase(capture_channel)
-                acadia.update_ncos_synchronized()
-
-                # Run the sequencer                        
-                acadia.run(assemble=False)
-
-                # Grab the data from memory and save it
-                self.data.write("traces", capture_data)
+            acadia.run(assemble=False)
+            self.data.write("traces", capture_data)
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
@@ -135,37 +120,21 @@ class SpectroscopyRuntime(Runtime):
 
         from acadia.processing import DynamicLine, ProgressBar
         import matplotlib.pyplot as plt
-        from IPython.display import display
-        from ipywidgets import Label
 
-        self.fig,ax = plt.subplots(1,2, figsize=(7,3))
-        self.fig.subplots_adjust(hspace=0.35)
+        self.fig,self.ax = plt.subplots(1,1, figsize=(3,3))
         self.fig.tight_layout()
 
-        # Create a plot for the spectral magnitude
-        self.line_mag = DynamicLine(ax[0], ".-")
-        ax[0].set_xlabel("Frequency [MHz]")
-        ax[0].set_ylabel("Magnitude [arb. V*s]")
-        ax[0].set_title("Spectral Magnitude")
-        ax[0].grid()
-        
-        # Create a plot for the spectral phase
-        self.line_phase = DynamicLine(ax[1], ".-")
-        ax[1].set_xlabel("Frequency [MHz]")
-        ax[1].set_ylabel("Phase [rad.]")
-        ax[1].set_title("Spectral Phase")
-        ax[1].grid()
-
-        # Create a label for displaying the electrical delay
-        self._delay_label = Label("Electrical delay: ")
-        display(self._delay_label)
+        self.line_re = DynamicLine(self.ax, ".-")
+        self.line_im = DynamicLine(self.ax, ".-")
+        self.ax.set_xlabel("Time [s]")
+        self.ax.set_ylabel("Signal Amplitude [arb. V]")
+        self.ax.grid()
 
         self.progress_bar = ProgressBar("Iterations")
+        self.time_axis = None
 
     def update(self):
         import numpy as np
-        from scipy.optimize import curve_fit
-        from acadia.arrays import Waveform
 
         # First make sure that we actually have new data to process
         if not self.data.available("traces"):
@@ -174,29 +143,15 @@ class SpectroscopyRuntime(Runtime):
         if "Iterations" in self.data:
             self.progress_bar.update(self.data["Iterations"])
 
-        data_int = Waveform.sample_to_int(self.data["traces"].records())
-        data_reshaped = data_int.reshape(-1, len(self.frequencies), self.data["traces"].shape[-1], 2)
-        data_summed = np.sum(data_reshaped, axis=(0,2))
-        data_complex = np.squeeze(Waveform.to_complex(data_summed))
+        if self.time_axis is None:
+            self.time_axis = np.linspace(0, self.data["traces"].metadata()["capture_time"], self.data["traces"].shape[0], endpoint=False)
 
-        # Apply the electrical delay
-        data_complex *= np.exp(2*np.pi*1j*self.frequencies*self.plot_electrical_delay)
-
-        # We now have a 1D array of the amplitudes as a function of frequency,
-        # so we can do whatever processing we want
-        mags = np.abs(data_complex)
-        phases = np.unwrap(np.angle(data_complex))
-        self.line_mag.update(self.frequencies, mags)
-        self.line_phase.update(self.frequencies, phases)
-
-        # Update the fit
-        def model(freqs, delay, phi0):
-            return 2*np.pi*freqs*delay + phi0
-    
-        popt,pcov = curve_fit(model, self.frequencies, phases)
-        self._delay_label.value = f"Electrical delay = {round(popt[0]*1e9,1)} ns +/- {round(pcov[0,0]*1e12)} ps"
-
-        # Update the plot itself
+        trace_re = np.sum(self.data["traces"].records()["re"], axis=0)
+        trace_im = np.sum(self.data["traces"].records()["im"], axis=0)
+        self.line_re.update(self.time_axis, trace_re)
+        self.line_im.update(self.time_axis, trace_im)
+        self.ax.relim()
+        self.ax.autoscale_view()
         self.fig.canvas.draw_idle()
 
     def finalize(self):
@@ -204,21 +159,19 @@ class SpectroscopyRuntime(Runtime):
         self.progress_bar.finalize()
 
 
-if __name__ == "__main__":
-    import numpy as np
-    
-    # Run the program on the target
-    rt = SpectroscopyRuntime(frequencies=np.linspace(4.6e9, 4.7e9, 2),
+if __name__ == "__main__":    
+
+    rt = LoopbackRuntime(frequency=4.4e9,
                             DAC=4,
                             ADC=4, 
-                            stimulus_ramp_time=1e-6,
-                            stimulus_constant_time=10e-6,
+                            stimulus_ramp_time=256e-9,
+                            stimulus_constant_time=256e-9,
                             stimulus_amplitude=1,
                             stimulus_NZ=2,
+                            capture_time=1024e-9,
                             capture_decimation=0,
-                            capture_delay=224e-9,
-                            iterations=100,
-                            plot_electrical_delay=112.2e-9)
-    rt.deploy("192.168.2.69", "acadia.runtimes.spectroscopy")    
+                            capture_delay=0e-9,
+                            iterations=100000)
+    rt.deploy("192.168.2.69", "acadia.runtimes.loopback")    
     rt.display()
     
