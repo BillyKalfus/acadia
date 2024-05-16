@@ -67,6 +67,7 @@ class RingdownRuntime(Runtime):
     
     plot_save_transparent: bool = False
     
+                
     def main(self):
         import time
         import numpy as np
@@ -118,7 +119,9 @@ class RingdownRuntime(Runtime):
 
         # write pulse data to memory
         if self.stimulus_ramp_time != 0:
+            
             pulse_complex = np.hanning(len(pulse)).astype(np.complex64)
+              
             pulse[:] = Waveform.complex_to_sample(pulse_complex, scale=self.stimulus_amplitude)
         else:
             pulse[:] = np.complex64(self.stimulus_amplitude)
