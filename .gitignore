@@ -9,3 +9,4 @@ pyacadia/examples/*.py
 pyacadia/pyacadia*/
 testing/
 docs/_build
+.vscode*

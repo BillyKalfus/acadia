@@ -16,7 +16,8 @@
 --        - 0: CMD_ADDR/TRANSFER_STATUS
 --            Writing to this register issues a command to the DataMover 
 --            command FIFO whose address field is populated with the data
---            written to this register. The values of the other fields are 
+--            written to this register (plus the value of the 
+--            CMD_ADDR_OFFSET register). The values of the other fields are 
 --            derived from prior writes to other registers (see below).
 --            Reading this register pops a word from the status FIFO.
 --
@@ -35,14 +36,16 @@
 --                 9-6   : xCACHE
 --                 13-10 : xUSER
 --                 AXI_ADDRESS_WIDTH-32+14 - 14 : ADDR high bits
+--            
+--             Writing 1 to bit 31 performs an internal reset. 
 --                
---             Reading this register returns the total number of bytes transferred
---             by the DataMover since the controller was last reset.
+--             Reading this register returns the total number of bytes 
+--             transferred by the DataMover since the controller was last reset.
 --
---         - 3: CONTROLLER_RESET/CONTROLLER_STATUS
---             Writing any value to this register clears its lowest bit 
---             (described below) as well as TRANSFER_STATUS_COUNT and 
---             TOTAL_BYTES_TRANSFERRED.
+--         - 3: CMD_ADDR_OFFSET/CONTROLLER_STATUS
+--             This register contains an offset that is added to the value 
+--             written to CMD_ADDR when issuing to the DataMover itself. 
+-- 
 --             Reading this register returns a bitfield with some status signals:
 --                 0: This bit is set once the DataMover command interface sets 
 --                     TREADY after this module sets TVALID, indicating that it 
@@ -132,15 +135,23 @@ architecture rtl of acadia_datamover_controller is
 
     signal fifo_overflow_d : std_logic;
             
-    signal cmd_waiting : std_logic;
-    signal cmd_btt     : std_logic_vector(22 downto 0);
-    signal cmd_misc    : std_logic_vector(AXI_ADDRESS_WIDTH-32+14-1 downto 0);
-    signal cmd_ack     : std_logic;
-    signal err_latch   : std_logic;
-    signal sts         : std_logic_vector(31 downto 0);
-    signal sts_d       : std_logic_vector(31 downto 0);
-    signal sts_cnt     : std_logic_vector(STATUS_COUNT_WIDTH-1 downto 0);
-    signal sts_cnt_d   : std_logic_vector(STATUS_COUNT_WIDTH-1 downto 0);
+    signal cmd_state               : std_logic_vector(1 downto 0); -- 0 = idle, 1 = dispatch, 2 = waiting, 3 = ack
+    signal cmd_addr_offset         : std_logic_vector(AXI_ADDRESS_WIDTH-1 downto 0);
+    signal cmd_addr_base           : std_logic_vector(AXI_ADDRESS_WIDTH-1 downto 0);
+    signal cmd_addr                : std_logic_vector(AXI_ADDRESS_WIDTH-1 downto 0);
+
+    signal cmd_btt                   : std_logic_vector(22 downto 0);
+    signal cmd_tag                   : std_logic_vector(3 downto 0);
+    signal cmd_user                  : std_logic_vector(3 downto 0);
+    signal cmd_cache                 : std_logic_vector(3 downto 0);
+    signal cmd_eof                   : std_logic;
+    signal cmd_type                  : std_logic;
+    
+    signal err_latch                 : std_logic;
+    signal sts                       : std_logic_vector(31 downto 0);
+    signal sts_d                     : std_logic_vector(31 downto 0);
+    signal sts_cnt                   : std_logic_vector(STATUS_COUNT_WIDTH-1 downto 0);
+    signal sts_cnt_d                 : std_logic_vector(STATUS_COUNT_WIDTH-1 downto 0);
     signal total_bytes_transferred   : std_logic_vector(31 downto 0);
     signal total_bytes_transferred_d : std_logic_vector(31 downto 0);
 
@@ -149,30 +160,32 @@ begin
     fifo_nrst <= not rst;
     fifo_rst <= rst;
 
-    -- Use a process for loading commands into the DataMover's FIFO
-    cmd_tvalid <= cmd_waiting;
+    -- Connect the output interface signals to various internal registers
+    cmd_tvalid <= '1' when cmd_state = "10" else '0';
+    cmd_tdata  <= cmd_user 
+                & cmd_cache 
+                & "0000" -- reserved
+                & cmd_tag
+                & cmd_addr
+                & "0" -- DRR
+                & cmd_eof
+                & "000000" -- DSA
+                & cmd_type
+                & cmd_btt; 
+
     command_dispatch_proc: process(clk) begin
         if rising_edge(clk) then
             if(rst = '1') then
-                cmd_waiting <= '0';
-                cmd_tdata   <= (others => '0');
-                cmd_ack     <= '0';
+                cmd_state                  <= (others => '0');
+                cmd_addr_base(31 downto 0) <= (others => '0');
             elsif(master_bus_en = '1' and master_bus_we = '1' and master_bus_addr(1 downto 0) = "00") then    
-                cmd_tdata  <= cmd_misc(13 downto 6) -- xUSER & xCACHE
-                                                & "0000" -- reserved
-                                                & cmd_misc(5 downto 2) -- tag
-                                                & cmd_misc(AXI_ADDRESS_WIDTH-32+14-1 downto 14) -- addr high
-                                                & master_bus_mosi -- addr low
-                                                & "0" -- DRR
-                                                & cmd_misc(1) -- EOF
-                                                & "000000" -- DSA
-                                                & cmd_misc(0) -- type
-                                                & cmd_btt; -- btt
-                cmd_waiting <= '1';
-                cmd_ack <= '0';
-            elsif(cmd_waiting = '1' and cmd_tready = '1') then
-                cmd_waiting <= '0';
-                cmd_ack <= '1';
+                cmd_state                  <= "01";
+                cmd_addr_base(31 downto 0) <= master_bus_mosi;
+            elsif(cmd_state = "01") then
+                cmd_state <= "10";
+                cmd_addr  <= std_logic_vector(unsigned(cmd_addr_base) + unsigned(cmd_addr_offset));
+            elsif(cmd_state = "10" and cmd_tready = '1') then
+                cmd_state <= "11";
             end if;
         end if;
     end process command_dispatch_proc;
@@ -181,15 +194,27 @@ begin
     reg_wr_proc: process(clk) begin
         if rising_edge(clk) then
             if(rst = '1') then
-                rst         <= '0';
-                cmd_btt     <= (others => '0');
-                cmd_misc    <= (others => '0');                
+                rst       <= '0';
+                cmd_btt   <= (others => '0');
+                cmd_user  <= (others => '0');
+                cmd_cache <= (others => '0');
+                cmd_tag   <= (others => '0');
+                cmd_eof   <= '0';
+                cmd_type  <= '0';
+                cmd_addr_base(AXI_ADDRESS_WIDTH-1 downto 32) <= (others => '0');
+                cmd_addr_offset <= (others => '0');    
             elsif(master_bus_en = '1' and master_bus_we = '1' and master_bus_addr(1 downto 0) = "01") then
                 cmd_btt <= master_bus_mosi(22 downto 0);
             elsif(master_bus_en = '1' and master_bus_we = '1' and master_bus_addr(1 downto 0) = "10") then
-                cmd_misc <= master_bus_mosi(AXI_ADDRESS_WIDTH-32+14-1 downto 0);
+                cmd_addr_base(AXI_ADDRESS_WIDTH-1 downto 32) <= master_bus_mosi(AXI_ADDRESS_WIDTH-32+14-1 downto 14);
+                cmd_user  <= master_bus_mosi(13 downto 10);
+                cmd_cache <= master_bus_mosi(9 downto 6);
+                cmd_tag   <= master_bus_mosi(5 downto 2);
+                cmd_eof   <= master_bus_mosi(1);
+                cmd_type  <= master_bus_mosi(0);
+                rst       <= master_bus_mosi(31);
             elsif(master_bus_en = '1' and master_bus_we = '1' and master_bus_addr(1 downto 0) = "11") then
-                rst <= '1';
+                cmd_addr_offset(31 downto 0) <= master_bus_mosi;
             end if;
         end if;
     end process reg_wr_proc;
@@ -207,10 +232,10 @@ begin
                 when "10" =>
                     master_bus_miso <= total_bytes_transferred_d;
                 when "11" => 
-                    master_bus_miso(0) <= cmd_ack;
-                    master_bus_miso(1) <= err_latch;
-                    master_bus_miso(2) <= fifo_overflow_d;
-                    master_bus_miso(31 downto 3) <= (others => '0');
+                    master_bus_miso(1 downto 0)  <= cmd_state;
+                    master_bus_miso(2)           <= err_latch;
+                    master_bus_miso(3)           <= fifo_overflow_d;
+                    master_bus_miso(31 downto 4) <= (others => '0');
                 when others =>
                     master_bus_miso <= (others => '0');
                 end case;

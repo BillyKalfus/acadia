@@ -45,8 +45,7 @@ entity acadia_sequencer is
     );
     port
     (
-        clk                  : in  std_logic;
-        run                  : in  std_logic;        
+        clk                  : in  std_logic;      
         nrst                 : in  std_logic;
         
         -- Instruction memory interface(s)
@@ -227,7 +226,7 @@ begin
     -- Program counter and instruction loading
     instruction_proc: process(clk) begin
         if(rising_edge(clk)) then
-            if(nrst = '0' or run = '0') then
+            if(nrst = '0') then
                 pc             <= (others => '0');
                 pc_wr          <= '1';
                 instruction_p  <= (others => '0');
@@ -344,9 +343,7 @@ begin
     -- Make general-purpose registers
     reg_proc: process(clk) begin
         if(rising_edge(clk)) then        
-            if(nrst = '0') then
-                r <= (others => (others => '0'));
-            elsif(instr_dest1_maj = DEST_REG and dest1_en = '1') then
+            if(instr_dest1_maj = DEST_REG and dest1_en = '1') then
                 r(to_integer(unsigned(instr_dest1_min))) <= src1;
             elsif(instr_dest2_maj = DEST_REG and dest2_en = '1') then
                 r(to_integer(unsigned(instr_dest2_min))) <= src2;
@@ -358,8 +355,6 @@ begin
     bus_regs_proc: process(clk) begin
         if(rising_edge(clk)) then
             if(nrst = '0') then
-                bus_addr_reg <= (others => '0');
-                bus_data_reg <= (others => '0');
                 bus_wr_reg   <= '0';
                 bus_en_reg   <= '0';
             else
@@ -400,9 +395,7 @@ begin
     -- Process for conditional operation mask register
     mask_proc: process(clk) begin
         if(rising_edge(clk)) then
-            if(nrst = '0') then
-                mask <= (others => '0');
-            elsif(instr_dest1_maj = DEST_MASK and dest1_en = '1') then
+            if(instr_dest1_maj = DEST_MASK and dest1_en = '1') then
                 mask <= src1;
             elsif(instr_dest2_maj = DEST_MASK and dest2_en = '1') then
                 mask <= src2;
@@ -492,9 +485,7 @@ begin
     dsp_cfg_reg_proc: process(clk) begin
         if rising_edge(clk) then
             dsp_cfg_reg_loop: for i in 0 to NUM_DSP-1 loop
-                if(nrst = '0') then
-                    dsp_cfg_reg(i) <= (others => '0');
-                elsif(instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and to_integer(unsigned(instr_dest1_min)) = i) then
+                if(instr_dest1_maj = DEST_DSP_CFG and dest1_en = '1' and to_integer(unsigned(instr_dest1_min)) = i) then
                     dsp_cfg_reg(i) <= src1;
                 elsif(instr_dest2_maj = DEST_DSP_CFG and dest2_en = '1' and to_integer(unsigned(instr_dest2_min)) = i) then
                     dsp_cfg_reg(i) <= src2;
@@ -517,9 +508,7 @@ begin
     -- Pipeline the AB inputs
     dsp_ab_reg_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0') then
-                dsp_ab_reg <= (others => (others => '0'));
-            elsif(instr_dest1_maj = DEST_DSP_AB and dest1_en = '1') then
+            if(instr_dest1_maj = DEST_DSP_AB and dest1_en = '1') then
                 dsp_ab_reg(to_integer(unsigned(instr_dest1_min)))(31 downto 0)  <= src1;
                 dsp_ab_reg(to_integer(unsigned(instr_dest1_min)))(47 downto 32) <= (others => src1(31));
             elsif(instr_dest2_maj = DEST_DSP_AB and dest2_en = '1') then
@@ -532,9 +521,7 @@ begin
     -- Pipeline the C input
     dsp_c_reg_proc: process(clk) begin
         if rising_edge(clk) then
-            if(nrst = '0') then
-                dsp_c_reg <= (others => (others => '0'));
-            elsif(instr_dest1_maj = DEST_DSP_C and dest1_en = '1') then
+            if(instr_dest1_maj = DEST_DSP_C and dest1_en = '1') then
                 dsp_c_reg(to_integer(unsigned(instr_dest1_min)))(31 downto 0)  <= src1;
                 dsp_c_reg(to_integer(unsigned(instr_dest1_min)))(47 downto 32) <= (others => src1(31));
             elsif(instr_dest2_maj = DEST_DSP_C and dest2_en = '1') then

@@ -130,3 +130,6 @@ CONFIG_python3-requests
 CONFIG_python3-smbus
 CONFIG_python3-spidev
 CONFIG_python3-tqdm
+CONFIG_libgomp
+CONFIG_libgomp-dev
+CONFIG_libgomp-staticdev

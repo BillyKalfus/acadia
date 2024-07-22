@@ -1,9 +1,12 @@
 __all__ = ["DMA", "Descriptor"]
 
+import logging
 from dataclasses import dataclass
-from contextlib import contextmanager
+from typing import Union
 
 from .compiler import Processor, Symbol, Operation
+
+logger = logging.getLogger("acadia")
 
 @dataclass(eq=False)
 class Descriptor:
@@ -12,11 +15,11 @@ class Descriptor:
     descriptors define a single transfer to be carried out by a DMA.
     """
 
-    trace_length: [int, Symbol, Operation]
-    trace_address: [int, Symbol, Operation]
+    trace_length: Union[int, Symbol, Operation]
+    trace_address: Union[int, Symbol, Operation]
     decimate: int = 0
-    blank: [bool, Symbol] = False
-    fixed: [bool, Symbol] = False
+    blank: Union[bool, Symbol] = False
+    fixed: Union[bool, Symbol] = False
     
     def __eq__(self, other):
         return (hasattr(other, "trace_length") and self.trace_length is other.trace_length
@@ -28,15 +31,13 @@ class Descriptor:
     def assemble(self):
         tmp = 0
         
-        if isinstance(self.trace_length, Symbol) or isinstance(self.trace_length, Operation):
-            trace_length = self.trace_length.value()-1
+        if hasattr(self.trace_length, "value"):
+            trace_length = self.trace_length.value()
         elif isinstance(self.trace_length, int):
-            trace_length = self.trace_length-1
+            trace_length = self.trace_length
         else:
-            raise TypeError(f"Trace length must be an int; received {self.trace_length}")
-            
-        if trace_length & 0xFFFFFFFF != trace_length:
-            raise ValueError(f"Trace length must fit in 32 bits; received {trace_length}")
+            raise TypeError(f"Trace length must be an int or a Symbol"
+                            f" containing an int; received {self.trace_length}")
         
         if trace_length < 0:
             raise ValueError(f"Received negative trace length for descriptor {self}")
@@ -44,11 +45,17 @@ class Descriptor:
         if trace_length == 0:
             # Indicate that this is truly a null descriptor
             self.null = True
+            logger.debug(f"Marking null DMA descriptor: {self}")
             return 0
+        
+        trace_length -= 1
+            
+        if trace_length & 0xFFFFFFFF != trace_length:
+            raise ValueError(f"Trace length must fit in 32 bits; received {trace_length}")
             
         tmp |= trace_length
             
-        if isinstance(self.trace_address, Symbol) or isinstance(self.trace_address, Operation):
+        if hasattr(self.trace_address, "value"):
             trace_address = self.trace_address.value()
         elif isinstance(self.trace_address, int):
             trace_address = self.trace_address
@@ -60,12 +67,12 @@ class Descriptor:
             
         tmp |= trace_address << 32
             
-        if isinstance(self.decimate, Symbol) or isinstance(self.decimate, Operation):
+        if hasattr(self.decimate, "value"):
             tmp |= self.decimate.value() << 60
         else:
             tmp |= self.decimate << 60
             
-        if isinstance(self.fixed, Symbol) and self.fixed._value_type is bool:
+        if hasattr(self.fixed, "value"):
             tmp |= self.fixed.value() << 62
         elif isinstance(self.fixed, bool):
             tmp |= self.fixed << 62
@@ -74,7 +81,7 @@ class Descriptor:
                             f" type `bool` or a `Symbol` encapsulating one"
                             f" (received {self.fixed})")
 
-        if isinstance(self.blank, Symbol) and self.blank._value_type is bool:
+        if hasattr(self.blank, "value"):
             tmp |= self.blank.value() << 63
         elif isinstance(self.blank, bool):
             tmp |= self.blank << 63
@@ -114,9 +121,10 @@ class DMA(Processor):
                                         decimate=decimate,
                                         blank=blank)
         
-        for instruction in self.Instruction.instances:
+        for idx,instruction in enumerate(self.Instruction.instances):
             cmp_descriptor = Descriptor(**instruction.kwargs)
             if cmp_descriptor == request_descriptor:
+                logger.debug(f"Reusing descriptor {idx} of DMA {self} for request: {request_descriptor}")
                 return instruction
             
         return self.add_descriptor(trace_address=trace_address, 

@@ -3,20 +3,19 @@ import traceback
 import logging
 import json
 import shutil
-import time
 
-from datetime import datetime, timezone
+from datetime import datetime
 from threading import Thread, Event
 from typing import Any
 from dataclasses import asdict, is_dataclass
-from subprocess import Popen, PIPE, run
+from subprocess import PIPE, run
 from binascii import hexlify, unhexlify
 from io import BytesIO
 
 import numpy as np
 from numpy.lib.format import write_array, read_array
 
-from .data import DataManager, PickleRecordGroup
+from acadia.data import DataManager
 
 __all__ = ["Runtime"]
 
@@ -77,7 +76,7 @@ class Runtime:
         """
         Load a runtime from a directory on either the host or the target.
          
-        If the directory contains ``metadata.json``, a new :class:`DataManager` 
+        If the directory contains ``metadata.txt``, a new :class:`DataManager` 
         is created that wraps the
         data in the directory without overwriting anything. This allows the 
         user to "reload" data from a previous deployment (along with any 
@@ -89,16 +88,32 @@ class Runtime:
         objects and their :class:`RecordGroup` objects, any analysis can be 
         seamlessly performed both in real-time and retroactively.
         """
-        inst = cls(**Runtime._load_args(directory))
-        inst.data_manager = DataManager(directory)
-        if "metadata.json" in os.listdir(directory):
-            inst.data_manager.load()
+        logger = logging.getLogger("acadia")
+
+        kwargs_path = os.path.join(directory, "kwargs.json")
+        if os.path.exists(kwargs_path):
+            logger.debug(f"Loading kwargs from {kwargs_path}")
+            with open(kwargs_path, "r") as f:
+                kwargs = Runtime._untransform_arg(json.load(f))
+        else:
+            logger.warning(f"No kwargs.json file found in directory {directory}")
+            kwargs = {}
+        
+        inst = cls(**kwargs)
+        inst.data_manager = DataManager()
+        try:
+            inst.data_manager.load(directory)
+        except FileNotFoundError as e:
+            logger.warning(f"Unable to load DataManager from directory {directory}")
+            pass
+        except Exception as e:
+            raise e
 
         return inst
 
     def deploy(self, 
             target_address: str, 
-            runtime_module: str,
+            runtime_class: str,
             files: list[str] = None,
             remote_directory: str = "/run/media/mmcblk0p1/%y%m%d_%H%M%S", 
             local_directory: str = "/tmp/%y%m%d_%H%M%S",
@@ -110,7 +125,7 @@ class Runtime:
             do_initialize: bool = True,
             do_update: bool = True,
             do_finalize: bool = True,
-            save_count: int = 100,
+            finalization_time: float = 10,
             **kwargs):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
@@ -143,12 +158,10 @@ class Runtime:
         (for Acadia hardware, this occurs when the system is power cycled). 
         :param target_address: IP address of the target
         :type target_address: str
-        :param runtime_module: Module containing the class definition of the
-            :class:`Runtime` to execute. This is directly used in an ``import``
-            statement as ``from <runtime_module> import <subclass_name>``, and
-            the subclass name is automatically extracted when this method is 
-            called.
-        :type runtime_module: str
+        :param runtime_class: Name of the :class:`Runtime` subclass This is 
+            directly used in an ``import``
+            statement as ``import <runtime_class> as ...``.
+        :type runtime_class: str
         :param files: Files to be deployed to the target for use during the
             :class:`Runtime` execution. This should be a list and each element,
             which can be either a string or a tuple, will correspond to one 
@@ -188,10 +201,9 @@ class Runtime:
         :param do_finalize: If ``True``, this class' :meth:`finalize` 
             method is called after the event loop completes
         :type do_finalize: bool
-        :param save_count: The number of records that the target will store
-            before updating the metadata. If loops are running slower than 
-            expected, try increasing this number.
-        :type save_count: int
+        :param finalization_time: The amount of time for the remote process to
+            serve data to a host after the Runtime's main() has completed
+        :type finalization_time: float
         """      
         logger = logging.getLogger("acadia")
 
@@ -231,15 +243,16 @@ class Runtime:
         logger.propagate = False
         
         # Create a DataManager
-        self.data_manager = DataManager(self.local_directory)
-        self.data_manager.create_group(PickleRecordGroup, "properties", time_str=str(current_time))
-        self.data_manager.write("properties", key="time", record=current_time)
+        self.data_manager = DataManager()
+        self.data_manager.add_group("properties", clear_before_sync=True, clear_after_send=False)
+        self.data_manager["properties"].write({"time": current_time})
+        self.data_manager.save(self.local_directory)
                 
         self._set_status("Configuring SSH multiplexing")
         self._configure_ssh(multiplex_control_path)
 
         self._set_status("Preparing and deploying files")
-        self._prepare_files(files, runtime_module, log_level, save_count, kwargs)
+        self._prepare_files(files, runtime_class, log_level, finalization_time, kwargs)
 
         self._set_status("Preparing remote runtime screen")
         Runtime._prepare_screen(self.login, self._multiplex_options)
@@ -314,7 +327,7 @@ class Runtime:
             
             self._stop_button.on_click(_self_stop)
             self._status = HTML(value=f"")
-            self._metadata_link = HTML(value=f"<a href=\"{os.path.join(self.local_directory, 'metadata.json')}\">Metadata</a>")
+            self._metadata_link = HTML(value=f"<a href=\"{os.path.join(self.local_directory, 'metadata.txt')}\">Metadata</a>")
             self._local_log_link = HTML(value=f"<a href=\"{self._local_log_name}\">Local Log</a>")
             self._remote_log_link = HTML(value=f"<a href=\"{os.path.join(self.local_directory, 'remote_main.log')}\">Remote Log</a>")
             box = HBox([directory_label, self._stop_button, self._status, self._metadata_link, self._local_log_link, self._remote_log_link])
@@ -323,7 +336,7 @@ class Runtime:
         self._displayed = True
 
     @property
-    def data(self):
+    def data(self) -> DataManager:
         return self.data_manager
     
     def is_done(self):
@@ -331,51 +344,40 @@ class Runtime:
     
     # ----------------------- Internal utility functions --------------------- #
 
-    def _save_args(self, directory: str, **kwargs) -> str:
-        """
-        Save all necessary arguments into a file in the given directory.
-        """
-        filename = os.path.join(directory, "kwargs.json")
-
-        kwargs_transformed = {}
-        for k,v in kwargs.items():
-            if v is None or isinstance(v, (int, float, complex, bool, str)):
-                kwargs_transformed[k] = v
-            elif isinstance(v, (bytes, bytearray)):
-                kwargs_transformed[k] = f"bytes;{hexlify(v).decode('ascii')}"
-            elif isinstance(v, np.ndarray):
-                buf = BytesIO()
-                write_array(buf, v)
-                kwargs_transformed[k] = f"ndarray;{hexlify(buf.getbuffer()).decode('ascii')}"
-            else:
-                raise TypeError(f"Unable to save argument of type {type(v)}")
-
-        with open(filename, "w") as f:
-            json.dump(kwargs_transformed, f, indent=4)
-        
-        return filename
-
     @staticmethod
-    def _load_args(directory: str) -> dict:
-        """
-        Load saved arguments. 
-        """
-        path = os.path.join(directory, "kwargs.json")
-        if not os.path.exists(path):
-            return {}
+    def _transform_arg(v):
+        if isinstance(v, (bytes, bytearray)):
+            return f"bytes;{hexlify(v).decode('ascii')}"
         
-        kwargs_untransformed = {}
-        with open(path, "r") as f:
-            for k,v in json.load(f).items():
-                if isinstance(v, str) and v.startswith("bytes;"):
-                    kwargs_untransformed[k] = unhexlify(v[len("bytes;"):])
-                elif isinstance(v, str) and v.startswith("ndarray;"):
-                    buf = BytesIO(unhexlify(v[len("ndarray;"):]))
-                    kwargs_untransformed[k]  = read_array(buf)
-                else:
-                    kwargs_untransformed[k] = v
+        if isinstance(v, np.ndarray):
+            buf = BytesIO()
+            write_array(buf, v)
+            return f"ndarray;{hexlify(buf.getbuffer()).decode('ascii')}"
         
-        return kwargs_untransformed
+        if isinstance(v, (list, tuple)):
+            return [Runtime._transform_arg(item) for item in v]
+        
+        if isinstance(v, dict):
+            return {key: Runtime._transform_arg(value) for key,value in v.items()}
+        
+        return v
+    
+    @staticmethod
+    def _untransform_arg(v):
+        if isinstance(v, list):
+            return [Runtime._untransform_arg(item) for item in v]
+        
+        if isinstance(v, dict):
+            return {key: Runtime._untransform_arg(value) for key,value in v.items()}
+
+        if isinstance(v, str) and v.startswith("bytes;"):
+            return unhexlify(v[len("bytes;"):])
+        
+        if isinstance(v, str) and v.startswith("ndarray;"):
+            buf = BytesIO(unhexlify(v[len("ndarray;"):]))
+            return read_array(buf)
+        
+        return v
     
     def _configure_ssh(self, multiplex_control_path):
         # Configure SSH multiplexing
@@ -391,7 +393,7 @@ class Runtime:
         # run(f"ssh -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
         self._multiplex_options = (f"-o ControlMaster=auto -o ControlPath={self._multiplex_control_path}/%r@%h:%p -o ControlPersist=20")
     
-    def _prepare_files(self, files, runtime_module, log_level, save_count, kwargs):
+    def _prepare_files(self, files, runtime_filename, log_level, finalization_time, kwargs):
         logger = logging.getLogger("acadia")
 
         # Copy all of the files that we need into the local execution directory
@@ -412,8 +414,9 @@ class Runtime:
         with open(os.path.join(self.local_directory, "run.py"), "w") as runfile:
             runfile.write(f"import traceback\n")
             runfile.write(f"import sys\n")
-            runfile.write(f"sys.stdout = open(\"{self.remote_directory}/stdout.log\", 'w')\n")
-            runfile.write(f"sys.stderr = open(\"{self.remote_directory}/stderr.log\", 'w')\n\n")
+            runfile.write(f"import time\n")
+            runfile.write(f"sys.stdout = open(\"{self.remote_directory}/remote_stdout.log\", 'w')\n")
+            runfile.write(f"sys.stderr = open(\"{self.remote_directory}/remote_stderr.log\", 'w')\n\n")
 
             runfile.write(f"import logging\n")
             runfile.write(f"logging.basicConfig("
@@ -425,12 +428,24 @@ class Runtime:
             runfile.write(f"try:\n")
             runfile.write(f"    import os\n")
             runfile.write(f"    os.chdir(\"{self.remote_directory}\")\n")
-            runfile.write(f"    from acadia.runtime import Runtime\n")
-            runfile.write(f"    from {runtime_module} import {self.__class__.__name__}\n")
-            runfile.write(f"    runtime = {self.__class__.__name__}.load(\"{self.remote_directory}\")\n")
-            runfile.write(f"    runtime.data._save_count = {save_count}\n")
+            runfile.write(f"    from {runtime_filename} import {self.__class__.__qualname__}\n")
+            runfile.write(f"    runtime = {self.__class__.__qualname__}.load(\"{self.remote_directory}\")\n")
+            runfile.write(f"    runtime.data.serve()\n")
+            runfile.write(f"    logging.info(\"Executing main()...\")\n")
             runfile.write(f"    runtime.main()\n")
+            runfile.write(f"    logging.info(\"main() complete, spinning server for {finalization_time} seconds\")\n")
+            runfile.write(f"    runtime.data.finalize()\n")
+            runfile.write(f"    tstart = time.time()\n")
+            runfile.write(f"    retval = 2\n")
+            runfile.write(f"    while retval != 3 and time.time()-tstart < {finalization_time}:\n")
+            runfile.write(f"        retval = runtime.data.serve()\n")
+            runfile.write(f"    if retval == 1:\n")
+            runfile.write(f"        logging.warning(\"DataManager not connected to client.\")\n")
+            runfile.write(f"    if retval == 2:\n")
+            runfile.write(f"        logging.warning(\"DataManager failed to serve data to client during finalization.\")\n")
+            runfile.write(f"    logging.debug(f\"DataManager serve loop finished with retval {{retval}}.\")\n")
             runfile.write(f"    logging.info(\"Runtime complete.\")\n")
+            runfile.write(f"    runtime.data.disconnect()\n")
             runfile.write(f"except:\n")
             runfile.write(f"    logging.error(f'Runtime exception:\\n{{traceback.format_exc()}}')\n\n")
             runfile.write(f"sys.stdout.flush()\n")
@@ -449,7 +464,9 @@ class Runtime:
 
         if len(kwargs) != 0:
             logger.debug(f"Saving arguments")
-            self._save_args(self.local_directory, **kwargs)
+            filename = os.path.join(self.local_directory, "kwargs.json")
+            with open(filename, "w") as f:
+                json.dump(Runtime._transform_arg(kwargs), f, indent=4)
         else:
             logger.warning("No arguments found!")
 
@@ -497,71 +514,12 @@ class Runtime:
         logger.debug(f"Executing command {cmd}")
         run(cmd.split(" "), stdout=PIPE)
 
-    def _sync_files(self, last_sync: str = None):
-        """
-        Sync local files with those on the target
-        """
-        # Get logs
+    def _retrieve_logs(self):
         cmd = f"rsync -e \"ssh {self._multiplex_options}\" --append {self.login}:{self.remote_directory}/*.log {self.local_directory}"
+        logging.getLogger("acadia").debug(f"Retrieving logs with command: {cmd}")
         proc = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
         if proc.returncode != 0:
             raise ValueError(f"Process returned non-zero exit code:\n{proc}")
-
-        # Check to see whether any data has changed
-        cmd = f"ssh {self._multiplex_options} {self.login} stat --format \"%Y\" {self.remote_directory}/metadata.json"
-        modification_time = run(cmd.split(" "), stdout=PIPE, stderr=PIPE)
-
-        if modification_time == last_sync:
-            logging.debug("No changes to metadata since last sync")
-            return modification_time
-        
-        logging.debug("New data available")
-
-        # Lock the metadata, only to be unlocked once we've grabbed it
-        # Do this by creating a process that locks metadata and runs a loop that blocks until a file exists
-        # then we'll create that file once we're done and the loop will exit
-        unlock_file = f"{self.remote_directory}/metadata.unlock"
-        remotelock_file = f"{self.remote_directory}/metadata.remotelock"
-        lock_cmd = f"ssh {self._multiplex_options} {self.login} flock {self.remote_directory}/metadata.json -c \"touch {remotelock_file}; while [ ! -f {unlock_file} ]; do sleep 0.000001; done; rm {unlock_file}\""
-        lock_proc = Popen(lock_cmd.split(" "), stdout=PIPE, stderr=PIPE)
-
-        # Wait until the remote lock file has been created, indicating that we acquired the lock
-        while run(f"ssh {self._multiplex_options} {self.login} [ -f {remotelock_file} ]", shell=True).returncode != 0:
-            time.sleep(0.001)
-
-        run(f"ssh {self._multiplex_options} {self.login} rm {remotelock_file}", shell=True)
-
-        # Now actually pull the file itself
-        cmd = f"rsync -e \"ssh {self._multiplex_options}\" --inplace {self.login}:{self.remote_directory}/metadata.json {self.local_directory}/metadata.json"
-        proc = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
-        if proc.returncode != 0:
-            raise ValueError(f"Process returned non-zero exit code:\n{proc}")
-
-        # Unlock the metadata by creating the unlock file
-        cmd = f"ssh {self._multiplex_options} {self.login} touch {unlock_file}"
-        proc = run(cmd.split(" "), stdout=PIPE, stderr=PIPE)
-        if proc.returncode != 0:
-            raise ValueError(f"Process returned non-zero exit code:\n{proc}")
-        
-        # Verify that the lock process actually ended properly
-        # if not isinstance(lock_proc, CompletedProcess):
-        #     raise TypeError("Metadata lock process did not terminate.")
-
-        # Get data files
-        # TODO: we're not checking errors in this command because it'll error when there
-        # are no bin files in the remote directory, but we'd still like to catch unexpected
-        # problems
-        # TODO: record groups don't necessartily need to store files with "bin" extension, how do we handle this?
-        cmd = f"rsync -e \"ssh {self._multiplex_options}\" --append {self.login}:{self.remote_directory}/*.bin {self.local_directory}"
-        proc = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
-        # if proc.returncode != 0:
-        #     raise ValueError(f"Process returned non-zero exit code:\n{proc}")
-
-        # Reload the data manager and call any subclass update routines
-        self.data_manager.load(reload=True)
-        logging.debug("Data retrieval complete")
-
-        return modification_time
     
     def _create_event_loop(self, 
                            event_loop_period: float, 
@@ -579,7 +537,6 @@ class Runtime:
             self._set_status("Event loop running")
 
             t_loop = time.time()
-            last_sync_time = None
             logger = logging.getLogger("acadia")
 
             while True:
@@ -606,15 +563,31 @@ class Runtime:
                 
                 # Synchronize with the target and perform any updates
                 try:
-                    new_sync_time = self._sync_files(last_sync_time)
-                    if new_sync_time != last_sync_time:
-                        last_sync_time = new_sync_time
-                        if do_update:
-                            logging.debug("Updating...")
-                            self.update()
-                            logging.debug("Update complete")
+                    if not self.data.is_connected():
+                        logger.debug("Connecting to remote target DataManager")
+                        self.data.connect(self._target_address)
+                        logger.debug("Connected")
+
+                    # Exception will be thrown above if we're not connected and we can't connect
+                    logger.debug("Syncing")
+                    self.data.sync()
+                    logger.debug("Synced")
+
+                    if do_update:
+                        logger.debug("Updating...")
+                        self.update()
+                        logger.debug("Update complete")
+
+                    if self.data.is_finalized():
+                        logger.info("Received fully finalized data; exiting event loop")
+                        self.data.hangup()
+                        break
+                except ConnectionRefusedError:
+                    logger.warning("Unable to connect to target DataManager")
                 except:
                     logger.error(f"Exception synchronizing: {traceback.format_exc()}")
+
+                self._retrieve_logs()
 
                 # Ensure that at least event_loop_period seconds have 
                 while time.time() < t_loop + event_loop_period:
@@ -622,18 +595,15 @@ class Runtime:
 
                 t_loop = time.time()
 
-            self._set_status("Performing final synchronization")
-            try:
-                self._sync_files(last_sync_time)
-            except:
-                logger.error(f"Exception synchronizing: {traceback.format_exc()}")
-
             if do_finalize:
                 self._set_status("Finalizing event loop")
                 try:
+                    self.update()
                     self.finalize()
                 except:
                     logger.error(f"Exception during finalization: {traceback.format_exc()}")
+
+            self._retrieve_logs()
 
             if self._displayed:
                 self._stop_button.disabled = True

@@ -13,9 +13,10 @@ __all__ = ["Operable",
 
 import operator
 from dataclasses import dataclass, field
-from typing import get_type_hints
+from typing import get_type_hints, Union
 from abc import ABC, abstractmethod
 from itertools import chain
+from functools import reduce
 
 class Operable(type):
     """
@@ -332,9 +333,7 @@ class ManagedResource(type):
     :class:`ManagedResource`\. This also allows the resource objects themselves 
     to be of any type. Additionally, it allows allocation to occur immediately 
     when resource objects are created and potentially return existing resource 
-    objects if necessary. This is a subclass of :class:`Operable`\, so that 
-    actions on resource objects can be inferred by analyzing produced 
-    :class:`Operation` objects.
+    objects if necessary.
     """
 
     def __call__(type_self, *args, **kwargs):
@@ -351,15 +350,15 @@ class ManagedResource(type):
         :type track: bool
         """
 
-        size = kwargs.pop("size", 1)
+        resource_size = kwargs.pop("resource_size", 1)
         if (type_self._allocation_limit is not None 
             and type_self._allocation_index >= type_self._allocation_limit):
             # Find a free instance we can use, as indicated by noting that
             # it is released
             for instance in type_self.instances:
-                if instance._released and instance.size >= size:
+                if instance._released and instance._resource_size >= resource_size:
                     instance._released = False
-                    instance.size = size
+                    instance._resource_size = resource_size
                     return instance
 
             raise ValueError(f"Unable to allocate resource;"
@@ -369,14 +368,23 @@ class ManagedResource(type):
         instance = super().__call__(*args, **kwargs)
         instance._released = False
         instance._resource_id = type_self._allocation_index
-        instance.size = size
+        instance._resource_size = resource_size
         
         track = kwargs.pop("track", True)
         if track:
-            if type_self._next_instance_symbol is not None and not type_self._next_instance_symbol.assigned():
+            if (type_self._next_instance_symbol is not None 
+                and not type_self._next_instance_symbol.assigned()):
                 type_self._next_instance_symbol.assign(instance)            
             type_self.instances.append(instance)
-            type_self._allocation_index += instance.size
+
+            # Determine whether we need to reserve additional space in order to respect alignment
+            alignment_remainder = instance._resource_size % type_self._alignment
+            if alignment_remainder == 0:
+                type_self._allocation_index += instance._resource_size
+            else:
+                # need some extra resource IDs that will be unused
+                extra = type_self._alignment - alignment_remainder
+                type_self._allocation_index += instance._resource_size + extra
                 
         return instance
     
@@ -403,20 +411,33 @@ class ManagedResource(type):
                  type_name, 
                  type_bases, 
                  type_dct, 
-                 allocation_limit=None):
+                 allocation_limit=None,
+                 alignment=1):
+        """
+        Create a new resource factory. Each resource is created with a 
+        resource ID, which may be optionally aligned.
+
+        :param allocation_limit: The maximum resource ID
+        :type allocation_limit: int
+        :param alignment: The required alignment for resource IDs
+        :type alignment: int
+        """
         type_instance = super().__new__(type_self, type_name, type_bases, type_dct)
         
-        type_instance._allocation_limit = allocation_limit
-        type_instance.instances = []
         type_instance._allocation_index = 0
-                
+        type_instance._allocation_limit = allocation_limit
+        type_instance._alignment = alignment
+        type_instance.instances = []
+        
         type_self._next_instance_symbol = None
         
         return type_instance
     
 class ManagedMemory(ManagedResource):
     """
-    A class implementing additional common utilities for managing memory.
+    A class implementing additional common utilities for managing memory. 
+    Each instance of ManagedMemory is a type that produces tracked regions
+    of memory from a fixed pool.
     """
     
     def __new__(type_self, 
@@ -424,10 +445,9 @@ class ManagedMemory(ManagedResource):
                  type_bases, 
                  type_dct, 
                  memory_size,
-                 word_width,
-                 base_word_address=None,
-                 base_byte_address=None,
-                 default_getitem=True):
+                 base_address=0,
+                 getset="operation",
+                 alignment=1):
         """
         Creates a new type of managed memory. The total region of memory
         is comprised of a finite number of entries, referred to as words.
@@ -437,112 +457,108 @@ class ManagedMemory(ManagedResource):
         is word-addressed and the other is byte-addressed, with given offsets
         in both address spaces.
         
-        :param memory_size: The total size of the memory region in bytes.
+        :param memory_size: The total size of the memory region in bytes
         :type memory_size: int
-        :param word_width: Width of a word in bits.
-        :type word_width: int
-        :param base_word_address: The starting address of the memory region in
-            the word-addressed space.
-        :param base_byte_address: The starting address of the memory region in
-            the byte-addressed space.
-        :param default_getitem: If ``True``\, a __getitem__ method will be created
-            for the instances of the type. This method will return an 
+        :param alignment: The alignment of instances within the region in bytes
+        :type alignment: int
+        :param base_address: The starting address of the memory region in bytes
+        :type base_address: int
+        :param getset: Determines how (if at all) any __getitem__ and 
+            __setitem__ methods will be created for the instance. 
+
+            - If ``"operation"``, a __getitem__ will be created that returns a 
             :class:`Operation` instance with operation ``getitem`` and with the 
-            instance and key as arguments.
+            instance and key as arguments. A similar method will be created for
+            __setitem__.
+
+            - If ``"memory"``, __getitem__ and __setitem__ methods will be 
+            created that load and store data into memory, if attached.
+
+        :type getset: str
         """
 
         type_instance = super().__new__(type_self, 
                                         type_name, 
                                         type_bases, 
-                                        type_dct)
+                                        type_dct,
+                                        allocation_limit=memory_size,
+                                        alignment=alignment)
         
-        type_instance.memory_size = memory_size
-        type_instance.word_width = word_width
-        type_instance.base_word_address = base_word_address
-        type_instance.base_byte_address = base_byte_address
-        
-        def res_word_length(self):
-            """
-            :return: The length of the array in words
-            :rtype: int
-            """
+        type_instance._base_address = base_address
 
-            width = self.word_width
-            l = self.byte_length() * 8 / (width() if callable(width) else width)
-            if round(l, 3) != l:
-                raise ValueError(f"Non-integer word length ({l}) in array {self}.")
-            return int(round(l, 3))
-
-        def res_byte_length(self):
-            """
-            :return: The length of the array in bytes
-            :rtype: int
-            """
-
-            return self.size
-
-        def res_word_address(self):
-            """
-            :return: The address of the array within the word-indexed address 
-                space
-            :rtype: int
-            """
-
-            width = self.word_width
-            a = self.base_word_address + (self._resource_id * 8 / (width() if callable(width) else width))
-            if round(a, 3) != a:
-                raise ValueError(f"Non-integer address ({a}) in array {self}.")
-            return int(round(a, 3))
-
-        def res_byte_address(self):
-            """
-            :return: The address of the array within the byte-indexed address 
-                space
-            :rtype: int
-            """
-
-            return self.base_byte_address + self._resource_id 
-        
-        def res_view(self, byte_offset=0, byte_length=None):
-            """
-            Return an untracked ManagedMemory instance providing a view of the
-            resource.
-            
-            :param byte_offset: The offset into the memory where the view starts.
-            :type byte_offset: int
-            :param byte_length: The length of the view in bytes
-            :type byte_length: int
-            """
-            instance = type_self(size=(byte_length if byte_length is not None else self.size), 
-                                 track=False, 
-                                 dtype=self._dtype)
-            instance._resource_id = self._resource_id + byte_offset
-        
-        type_instance.word_length = res_word_length
-        type_instance.byte_length = res_byte_length
-        type_instance.word_address = res_word_address
-        type_instance.byte_address = res_byte_address
-        type_instance.view = res_view
-        type_instance.__len__ = res_word_length
-
-        if default_getitem:
+        if getset == "operation":
             def res_getitem(self, key):
                 return Operation("getitem", self, key)
             type_instance.__getitem__ = res_getitem
+        # elif getset == "memory":
+        #     def _getitem(self, key):
+        #         if self.__array_interface__ is None:
+        #             raise AttributeError(f"Attempted to get item from unattached memory.")
+        #         return mem_self.memory()[key]
+                
+        #     def _setitem(mem_self, key, value):
+        #         if mem_self._memory is None:
+        #             raise AttributeError(f"Attempted to set item of unattached memory.")
+        #         # We need to reshape the input because ManagedMemory objects are always flat
+        #         mem_self.memory()[key] = np.reshape(value, -1)
+        elif getset is not None:
+            raise ValueError(f"Unknown getset option {getset}")
         
         return type_instance
     
     def __call__(type_self, *args, **kwargs):
         """
         Create a new instance representing an entry in a pool of managed 
-        memory. The ``size`` keyword is understood to represent the amount
-        of occupied memory in bytes, and the ``dtype`` argument represents the
-        numpy type to which the memory will be cast when attached.
+        memory. The ``shape`` and ``dtype`` arguments are similar to those 
+        defined in numpy, though the ``dtype`` argument need not actually be
+        a numpy dtype object (it only needs to define the property 
+        ``itemsize``). The resource ID of an instance represents its byte
+        offset within the memory pool.
         """
+        
         dtype = kwargs.pop("dtype", None)
-        instance = super().__call__(*args, **kwargs)
-        instance._dtype = dtype 
+        itemsize = kwargs.pop("itemsize", 1 if dtype is None else dtype.itemsize)
+        itemkind = kwargs.pop("itemkind", 'V' if dtype is None else dtype.kind)
+
+        shape = kwargs.pop("shape", None)
+        if isinstance(shape, int):
+            shape = (shape,)
+        elif not isinstance(shape, tuple):
+            raise TypeError(f"Shape of {type_self} instance must be an int"
+                            f" or tuple of ints; received {shape}")
+        
+        size = reduce(operator.mul, shape, 1)
+
+        instance = super().__call__(*args, resource_size=size*itemsize, **kwargs)
+        instance.byte_address = type_self._base_address + instance._resource_id
+
+        if instance._resource_id % itemsize != 0:
+            raise IndexError(f"Misaligned index for resource of type"
+                            f" {type_self} with itemsize {itemsize}"
+                            f" at byte address 0x{instance.byte_address:010X}")
+            
+
+        instance.itemsize = itemsize
+        instance.itemkind = itemkind
+        instance.nbytes = instance._resource_size
+        instance.size = size
+        instance.shape = shape
+        instance.index = instance._resource_id // itemsize
+        instance.__array_interface__ = None
+
         return instance
+    
+    def attach(type_self, buf):
+        """
+        Attach the underlying memory pool to a buffer.
+        """
+        for instance in type_self.instances:
+            instance.__array_interface__ = {
+                "data": buf,
+                "shape": instance.shape,
+                "typestr": f"<{instance.itemkind}{instance.itemsize}",
+                "offset": instance._resource_id
+            }
             
     
 @dataclass
@@ -591,14 +607,14 @@ class ProcessorInstruction:
     compilation and should not be manually manipulated.
     """
     name: str = None
-    args: [list, tuple] = None
+    args: Union[list, tuple] = None
     kwargs: dict = None
     block_start: bool = False
     block_end: bool = False
     inline_block_start: bool = False 
     inline_block_end: bool = False
     inline_block_level: bool = False
-    address: [Symbol, int] = None
+    address: Union[Symbol, int] = None
     compiled: list = field(default=None, repr=False)
     
     def __post_init__(self):

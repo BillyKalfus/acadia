@@ -159,7 +159,7 @@ architecture rtl of acadia_stream_complex32_macc is
     ATTRIBUTE X_INTERFACE_INFO of data_out_tready : SIGNAL is "xilinx.com:interface:axis:1.0 data_out TREADY";
     ATTRIBUTE X_INTERFACE_INFO of data_out_tkeep  : SIGNAL is "xilinx.com:interface:axis:1.0 data_out TKEEP";
     ATTRIBUTE X_INTERFACE_MODE of data_out_tdata  : SIGNAL is "Master";
-    ATTRIBUTE X_INTERFACE_PARAMETER of data_out_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 1,HAS_TSTRB 0,HAS_TREADY 1,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 4";
+    ATTRIBUTE X_INTERFACE_PARAMETER of data_out_tdata: SIGNAL is "HAS_TLAST 1,HAS_TKEEP 1,HAS_TSTRB 0,HAS_TREADY 1,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES 8";
     
     ATTRIBUTE X_INTERFACE_INFO of registers_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 registers DIN";
     ATTRIBUTE X_INTERFACE_INFO of registers_miso: SIGNAL is "xilinx.com:interface:bram:1.0 registers DOUT";

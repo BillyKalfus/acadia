@@ -55,6 +55,9 @@ class Channel:
 
         if self.block > 4 or self.block < 0:
             raise ValueError(f"Received invalid block {self.block}.")
+        
+    def __str__(self):
+        return self.name()
             
     def name(self):
         return f"{'DAC' if self.is_dac else 'ADC'}{self.num}"
@@ -203,8 +206,21 @@ class Channel:
 
         return d
     
+    def set(self, **params):
+        for p,v in params.items():
+            setter = getattr(Channel, f"set_{p}")
+            if isinstance(v, dict):
+                setter(self, **v)
+            else:
+                setter(self, v)
+    
     def startup(self):
         self.RFDC_call_checked("StartUp", self.converter_type(), self.tile)
+
+    @classmethod
+    def startup_all(cls):
+        cls.RFDC_call_checked("StartUp", cls.RFDC_def("XRFDC_DAC_TILE"), -1)
+        cls.RFDC_call_checked("StartUp", cls.RFDC_def("XRFDC_ADC_TILE"), -1)
         
     def shutdown(self):
         self.RFDC_call_checked("Shutdown", self.converter_type(), self.tile)
@@ -213,11 +229,6 @@ class Channel:
     def shutdown_all(cls):
         cls.RFDC_call_checked("Shutdown", cls.RFDC_def("XRFDC_DAC_TILE"), -1)
         cls.RFDC_call_checked("Shutdown", cls.RFDC_def("XRFDC_ADC_TILE"), -1)
-        
-    @classmethod
-    def startup_all(cls):
-        cls.RFDC_call_checked("StartUp", cls.RFDC_def("XRFDC_DAC_TILE"), -1)
-        cls.RFDC_call_checked("StartUp", cls.RFDC_def("XRFDC_ADC_TILE"), -1)
     
     def reset(self):
         self.RFDC_call_checked("Reset", self.converter_type(), self.tile)
@@ -291,7 +302,7 @@ class Channel:
             
         return result
         
-    def configure_nco(self, mixer_type=None, frequency=None, phase=None, update_source=None, mixer_mode=None):
+    def set_nco(self, mixer_type=None, frequency=None, phase=None, update_source=None, mixer_mode=None):
         """
         Configures the modulator and NCO settings for the channel. The frequency
         and phase of the NCO will be cleared.

@@ -7,7 +7,7 @@ from typing import Union
 
 import numpy as np
 
-from acadia.data import DataManager, CounterRecordGroup
+from acadia.data import DataManager
 
 def process_data(source, dimensions=None):
     """
@@ -202,25 +202,21 @@ class DynamicErrorbar:
         bars[0].set_segments([np.array(points) for points in new_errorbars])
         
 class ProgressBar:
-    def __init__(self, label=None):        
+    def __init__(self, total=None, label=None):        
         from tqdm.notebook import tqdm
-        self.bar = tqdm(desc=label, dynamic_ncols=True)
+        self.bar = tqdm(desc=label, dynamic_ncols=True, total=total)
         self._last_count = 0
 
-    def update(self, group: CounterRecordGroup):
+    def update(self, group):
         """
-        Update the progress bar from the value in a :class:`CounterRecordGroup`.
+        Update the progress bar from the value in a :class:`RecordGroup`.
         """
         if self.bar.desc is None:
             self.bar.desc = group._name
             self.bar.refresh()
 
-        if "total" in group.metadata():
-            self.bar.total = group.total
-            self.bar.refresh()
-
-        self.bar.update(group.count - self._last_count)
-        self._last_count = group.count
+        self.bar.update(group[0] - self._last_count)
+        self._last_count = group[0]
             
     def finalize(self):
         self.bar.close()

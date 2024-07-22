@@ -1,6 +1,6 @@
 import struct
-import os
 import operator
+import logging
 from enum import Enum
 from typing import get_type_hints, Union
 from dataclasses import dataclass
@@ -8,6 +8,8 @@ from contextlib import contextmanager
 
 from .dsp_modes import DSPMode, generate_dsp_modes
 from .compiler import ManagedResource, Symbol, Operation, Processor, Operable, ProcessorInstruction
+
+logger = logging.getLogger("acadia")
 
 __all__ = ["Sequencer", "DSPConfiguration"]
 
@@ -298,6 +300,34 @@ class STP:
             s += f" ; {self.comment}"
 
         return s
+    
+    @staticmethod
+    def assemble_imm(imm):
+        logger.debug(f"Evaluating symbolic immediate value: {imm}")
+        while True:
+            if isinstance(imm, ProcessorInstruction):
+                if len(imm.compiled) == 0:
+                    raise ValueError(f"Attempted to assemble uncompiled instruction: {imm}")
+                
+                # If the instruction was assembled and determined to be a NOP for a DMA,
+                # we need to indicate that nothing should be pushed to the DMA's FIFO for
+                # this instruction
+                # Additionally, DMA instructions will only ever be compiled to a single
+                # Descriptor object, so we only need to check the first element of the compiled
+                # list
+                # TODO: this feels like a bad band-aid to support DMAs only, this should be
+                # implemented in a way that's more general. Can't just add a universal NOP flag
+                # an optimize out any NOPs, because NOPs are often used for delays in the sequencer
+                if hasattr(imm.compiled[0], "null") and imm.compiled[0].null:
+                    logger.debug(f"Converting null DMA descriptor to sequencer NOP: {imm}")
+                    return None
+                
+                imm = imm.address
+            elif hasattr(imm, "value"):
+                imm = imm.value() if callable(imm.value) else imm.value
+            else:
+                logger.debug(f"Resulting immediate: {imm}")
+                return imm
 
     def assemble(self):
         """
@@ -326,36 +356,19 @@ class STP:
         if self.dsp_cep is not None:
             tmp |= (self.dsp_cep.value() | 0x8) << (64-64)
 
-        imm1_value = self.imm1
-        while hasattr(imm1_value, "value") or hasattr(imm1_value, "address"):
-            if hasattr(imm1_value, "null") and imm1_value.null:
-                return struct.pack("<IIQ", 0, 0, 0)
-            if hasattr(imm1_value, "value"):
-                if callable(imm1_value.value):
-                    imm1_value = imm1_value.value()
-                else:
-                    imm1_value = imm1_value.value
-            if hasattr(imm1_value, "address"):
-                if callable(imm1_value.address):
-                    imm1_value = imm1_value.address()
-                else:
-                    imm1_value = imm1_value.address
+        imm1_value = STP.assemble_imm(self.imm1)
+        if imm1_value is None:
+            # A null DMA descriptor was translated, convert to NOP
+            logger.debug(f"Identified null DMA descriptor in imm1 for sequencer instruction: {self}")
+            return struct.pack("<IIQ", 0, 0, 0)
 
-        imm2_value = self.imm2
-        while hasattr(imm2_value, "value") or hasattr(imm2_value, "address"):
-            if hasattr(imm2_value, "null") and imm2_value.null:
-                return struct.pack("<IIQ", 0, 0, 0)
-            if hasattr(imm2_value, "value"):
-                if callable(imm2_value.value):
-                    imm2_value = imm2_value.value()
-                else:
-                    imm2_value = imm2_value.value
-            if hasattr(imm2_value, "address"):
-                if callable(imm2_value.address):
-                    imm2_value = imm2_value.address()
-                else:
-                    imm2_value = imm2_value.address
-            
+        imm2_value = STP.assemble_imm(self.imm2)
+        if imm2_value is None:
+            # A null DMA descriptor was translated, convert to NOP
+            logger.debug(f"Identified null DMA descriptor in imm2 for sequencer instruction: {self}")
+            return struct.pack("<IIQ", 0, 0, 0)
+        
+        logger.debug(f"Assembled instruction: IMM1=0x{imm1_value:08X} IMM2=0x{imm2_value:08X} upper=0x{tmp:08X} from {self}")
         return struct.pack("<IIQ", imm2_value, imm1_value, tmp)
 
 class Sequencer(Processor):
@@ -631,7 +644,7 @@ class Sequencer(Processor):
         """
         A generalized method for storing data. It is assumed that multiple 
         consecutive calls to ``store`` may be aggregated into a smaller number
-        of STP and/or STC instructions.
+        of STP instructions.
         
         Keyword arguments:
 
@@ -658,6 +671,7 @@ class Sequencer(Processor):
         dest = kwargs["dest"]
         
         if dest is None:
+            logger.debug(f"Optimizing store() without destination to NOP: {instruction_resource}")
             instruction_resource.compiled = [STP()]
             return
             
@@ -675,6 +689,7 @@ class Sequencer(Processor):
         instructions = []
         if kwargs.get("condition", None) is not None:
             condition_kwargs,condition_instructions,condition_resources = self.compile_condition(kwargs["condition"], kwargs.get("mask", None))
+            logger.debug(f"Compiled condition for store(): {kwargs['condition']} -> {condition_instructions}")
             instructions += condition_instructions
         else:
             condition_kwargs = {}

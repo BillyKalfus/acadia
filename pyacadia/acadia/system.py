@@ -4,19 +4,25 @@ import time
 import logging
 import struct
 import builtins
+import re
 from dataclasses import dataclass
 from functools import wraps
 from typing import Union, Callable
 
 import numpy as np
 
-from .arrays import Array, Waveform
+from .waveforms import Waveform, ChannelWaveform, FixedChannelWaveform, DecimatedChannelWaveform, WindowedConstantWaveform
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
 from .channel import Channel
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
 from .firmware import Firmware
+
+try:
+    from acadia.ps_functions import sequencer_halt_and_reset, sequencer_run, sequencer_complete, attach
+except:
+    pass
 
 __all__ = ["DMASynchronizer", 
            "RFDCSynchronizer", 
@@ -98,7 +104,7 @@ class DMASynchronizer(Synchronizer):
                     channel_lengths[channel] = [length]
                     
                 self.dma_mask |= acadia.get_dma(channel).mask
-                descriptor = acadia.channel_dma_stream(**kwargs)
+                acadia.channel_dma_stream(**kwargs)
                 if channel not in channels_used:
                     latest_first_call = idx_call
                     channels_used.append(channel)
@@ -117,12 +123,8 @@ class DMASynchronizer(Synchronizer):
                 # Reset channel lengths so that when we hit the next barrier 
                 # (if any) it only adds delays after this one
                 channel_lengths = {}
-
-                if len(total_channel_lengths) == 1:
-                    barrier_time = list(total_channel_lengths.values())[0]
-                else:
-                    barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
-                logger.debug(f"Inserting DMA barrier at time {barrier_time}")
+                logger.debug(f"Total channel lengths at barrier insertion time: {total_channel_lengths}")
+                barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
                                                 
                 # Then, for every channel that has some action after the 
                 # barrier, we need to add a blank so that the next action 
@@ -134,16 +136,17 @@ class DMASynchronizer(Synchronizer):
                         future_channels.append(call["kwargs"]["channel"])
                 
                 for channel in future_channels:
-                    channel_length = total_channel_lengths[channel] if channel in total_channel_lengths else 0
-                    delay_length = barrier_time - channel_length
-                    # TODO: when delay_length is fully known at compile time, we could remove the
-                    # DMA stream command if it's zero length. However, we can't know if this is 
-                    # because it's the first point of some sweep where it's going to be changed
-                    # later. This seems universal for all ConstantWaveforms
+                    if channel in total_channel_lengths:
+                        pre_barrier_delay = barrier_time - total_channel_lengths[channel]
+                    else:
+                        pre_barrier_delay = barrier_time
+
                     acadia.channel_dma_stream(channel=channel,
-                                                length=delay_length,
+                                                length=pre_barrier_delay,
                                                 word_address=0,
+                                                fixed=True,
                                                 blank=True)
+                    
                     if channel not in channels_used:
                         latest_first_call = idx_call
                         channels_used.append(channel)
@@ -183,6 +186,9 @@ class DMASynchronizer(Synchronizer):
             # However, if we write multiple times to a FIFO, this counts as cycles that
             # separate the first push from the trigger, so we don't need to add as many
             # NOPs
+            # TODO: pushing to channel FIFOs should be reordered so that the first push
+            # to each channel happens as early as possible
+            # TODO: what happens if the first push (or more) gets translated into a NOP?
             nops = required_latency - (len(self._calls) - latest_first_call)
             for _ in range(nops):
                 proc.nop(comment=f"Trigger latency (latest first call at {latest_first_call},"
@@ -546,8 +552,8 @@ class Acadia:
         self._mem_file = os.open("/dev/mem", os.O_SYNC | os.O_RDWR)
         self._mem_maps = []
         
-        self._attach_resource(self.CacheArray, default_dtype=np.uint32)
-        self._attach_resource(self.OCMArray, default_dtype=np.uint32)
+        self._attach_resource(self.CacheArray)
+        self._attach_resource(self.OCMArray)
         
         # Map instruction memory for all of the processors
         self._sequencer_instruction_memory = self._attach_memory(
@@ -639,7 +645,6 @@ class Acadia:
         PSGPIO.sysfs_export(self._sequencer_done)
         PSGPIO.sysfs_set_direction(self._sequencer_done, "in")
 
-        from acadia.ps_functions import attach
         attach()
         
     def detach(self):
@@ -690,14 +695,33 @@ class Acadia:
         
         # Call the function to populate the sequencer object and compile it
         with s:
-             # Reset all the stream modules
+            # Reset all the stream modules
             self.reset_all_streams()
+
+            # Clear the stream offsets
+            # Technically this isn't needed because resetting the streams resets 
+            # the Datamover controller which clears the address offset register, 
+            # but compiling in these instructions makes it easy to update them
+            # for module_num,module in enumerate(self._firmware["stream_processing_path"]["modules"]):
+            #     datamover_name = f"module{module_num}_s2mm_datamover_controller"
+            #     bus_address_base = self._firmware.sequencer_bus_decoder[datamover_name].address().value()
+            #     self._active_sequencer.bus_write(address=bus_address_base+3, 
+            #                                     data=0,
+            #                                     comment=f"Clear offset for"
+            #                                             f" {datamover_name}"
+            #                                             f" ({module['kind']})")
+
             retval = func(self)
             
         self._active_sequencer = None
 
+        # Add one instruction buffer between the end of the program and completion reporting,
+        # just for sanity (TODO maybe this isn't needed anymore?)
         s.nop()
+
+        # Report to the PS that the sequencer is halted
         s.bus_write(address=self._firmware.sequencer_bus_decoder["ps_gpio5"].address(), data=1)
+
         s.halt()
         
         # Because the sequence resource object was created before we knew its 
@@ -934,7 +958,7 @@ class Acadia:
         """
         Configure the clock sources and distribution for the RFDC tiles.
         """
-        # Using their own PLLs:
+        # Using their own PLLs, distributing a reference:
         # import pyxrfdc as xrfdc
 
         # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
@@ -1193,22 +1217,45 @@ class Acadia:
     
     # -------------- CHANNEL HELPERS ----------- #
 
-    def DAC(self, num: int) -> Channel:
+    def DAC(self, num: Union[int, str]) -> Channel:
         """
         :return: a :class:`Channel` representing a DAC.
         :rtype: :class:`Channel`
         """
 
-        return self._DAC_channels[num]
+        return self._DAC_channels[int(num)]
 
-    def ADC(self, num: int) -> Channel:
+    def ADC(self, num: Union[int, str]) -> Channel:
         """
         :return: a :class:`Channel` representing an ADC.
         :rtype: :class:`Channel`
         """
 
-        return self._ADC_channels[num]
+        return self._ADC_channels[int(num)]
     
+    def channel(self, specifier: Union[str, Channel, None]) -> Channel:
+        """
+        Obtain a channel object via a string specifier of the form "DACxx"
+        or "ADCxx".
+        """
+
+        if specifier is None or isinstance(specifier, Channel):
+            return specifier
+        
+        if not isinstance(specifier, str):
+            raise TypeError(f"Channel specifier must be a string;"
+                            f" received {specifier}")
+        
+        m = re.match("(ADC|DAC)([0-9]+)", specifier)
+        if m is None:
+            raise ValueError(f"Unable to parse channel specifier {specifier}")
+        
+        channel_type, num = m.groups()
+        if channel_type == "ADC":
+            return self.ADC(num)
+        
+        return self.DAC(num)
+
     def get_dma(self, channel: Channel):
         """
         Get the DMA for a given channel.
@@ -1272,46 +1319,6 @@ class Acadia:
                     f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num}")
         
         return descriptor
-        
-    @requires_sequencer
-    def generate(self, signal):
-        """
-        Stream a signal out of a DAC. 
-        
-        :param channel: Channel to stream
-        :type channel: :class:`Channel`
-        :param signal: Signal to stream
-        :type signal: :class:`self.DACArray` or any type implementing 
-            `dma_parameters()` returning a list of `dict`. Each `dict` will 
-            result in a sequential call to `channel_dma_stream` whose arguments
-            are the key/value pairs in the `dict`. 
-        """
-        
-        dma_parameters = None
-        if dma_parameters is None and hasattr(signal, "dma_parameters"):
-            dma_parameters = signal.dma_parameters()
-        else:
-            for i in range(self._firmware.NUM_DACS):
-                if isinstance(signal, self.DACArray[i]):
-                    dma_parameters = [{
-                        "channel": self.DAC(i),
-                        "length": signal.byte_length() // self.DAC(i).interface_width_bytes,
-                        "word_address": signal.word_address() // (self.DAC(i).interface_width_bytes // 4)
-                    }]
-                    break
-            
-        if dma_parameters is None:
-            raise ValueError("Unable to identify DMA parameters"
-                             " for `generate`")
-        
-        # Notify the synchronizer, which will add the DMA command for us
-        for params in dma_parameters:
-            self.channel_synchronizer.add({
-                "function": DMASynchronizer.DMA, 
-                "self": self, 
-                "args": (), 
-                "kwargs": params,
-                "retval": None})
             
     def convert(self,
                 value: float,
@@ -1447,63 +1454,357 @@ class Acadia:
             return self.convert(int(round(value_cycles)), "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
 
         raise ValueError(f"Unrecognized value unit {value_units}")
+    
+    def memory_region(self, 
+                      specifier: Union[Channel, ManagedMemory, np.ndarray, str, StreamConfiguration, None]) -> callable:
+        """
+        Retrieve a memory region for this instance from a specifier object. The
+        returned object will always be a callable that can accept the arguments 
+        "shape" and "dtype" in order to allocate memory in the desired region.
+        
+        Valid options for ``specifier`` and the corresponding returned regions 
+        are:
+
+        - A :class:`Channel` object for a DAC: The waveform memory allocator 
+            for that channel is returned.
+
+        - A :class:`StreamConfiguration` for a CMACC module: The kernel memory
+            for that CMACC module is returned.
+
+        - A string of the form ``"DACxx"``: The waveform memory allocator for that
+            channel is returned.
+
+        - ``"plddr"`` or ``"plddr0"``: The memory allocator for channel 0 of
+            the PL DDR is returned.
+
+        - ``"plddr1"``: The memory allocator for channel 1 of the PL DDR is 
+            returned.
+
+        - ``"cache"``: The memory allocator for the sequencer-PS shared cache
+            is returned.
+
+        - ``"ocm"``: The memory allocator for the region of PS on-chip memory
+            (OCM) is returned.
+
+        - ``"numpy"``: An allocator that creates a numpy array in the memory
+            space of the running process is returned.
+        """
+        if specifier is None or isinstance(specifier, (ManagedMemory, np.ndarray)):
+            return specifier
+        
+        if isinstance(specifier, Channel) and specifier.is_dac:
+            return specifier.memory_type
+        
+        if isinstance(specifier, StreamConfiguration) and specifier.module == "cmacc":
+            return self.CMACCKernelArray[specifier.module_resource._resource_id]
+        
+        if not isinstance(specifier, str):
+            raise TypeError(f"Unable to convert object into memory region: {specifier}")
+        
+        # Check whether it's a string of a channel
+        m = re.match("DAC([0-9]+)", specifier)
+        if m is not None:
+            return self.DAC(m.groups()[0]).memory_type
+        
+        s = str.lower(specifier)
+        
+        if s == "plddr0" or s == "plddr":
+            return self.PLDDR0Array
+        
+        if s == "plddr1":
+            return self.PLDDR1Array
+        
+        if s == "cache":
+            return self.CacheArray
+        
+        if s == "ocm":
+            return self.OCMArray
+        
+        if s == "numpy":
+            return np.empty
+        
+        raise ValueError(f"Unable to parse memory region specifier string: {specifier}")
+    
+    def create_waveform(self,
+                        channel: Channel,
+                        length: Union[int, float, np.ndarray],
+                        fixed: bool = False,
+                        blank: bool = False,
+                        decimation: Union[int, None] = 1,
+                        flat_top_length: Union[float, None] = None,
+                        region: Union[Channel, ManagedMemory, None, str] = None) -> Waveform:
+        """
+        Allocate a waveform. This function allows for a few different signatures; 
+        the first argument is always a :class:`Channel` object. 
+        argument ``length`` determines the required signature:
+
+        - If a ``float`` or a numpy float dtype, this should contain the length
+            of the waveform in seconds.
+
+        - If a numpy array with a complex or float dtype, the waveform is 
+            allocated so that the data in the array could be stored after 
+            being converted to samples. The shape of the resulting waveform 
+            is also extracted from the argument. 
+
+        - If a numpy array with an integer dtype, the argument is assumed to
+            contain the sample data that will eventually be stored in the 
+            waveform. The last dimension of the array must be of length 2.
             
+        :param channel: Channel for the waveform
+        :type channel: :class:`Channel`
+        :param length: The length of the waveform; see description above
+        :type length: float, np.ndarray[complex], np.ndarray[float]
+        :param fixed: Create a fixed waveform. If ``True``, ``region`` must
+            be ``None``
+        :type fixed: bool
+        :param blank: Create a blank waveform. If ``True``, ``region`` must
+            be ``None``
+        :type blank: bool
+        :param decimation: Decimation for ADC waveforms
+        :type decimation: int
+        :param flat_top_length: If nonzero, the length of time in seconds of
+            a constant region to add in the middle of the pulse
+        :type flat_top_length: float
+        """
+        #################################################################
+        # Start by validating the provided parameters
+        #################################################################
+
+        channel = self.channel(channel)
+        region = self.memory_region(region)
+        
+        if decimation is None:
+            decimation = 1
+        elif isinstance(decimation, float) and round(decimation) == round(decimation, 1):
+            decimation = int(round(decimation))
+        elif not isinstance(decimation, int):
+            raise TypeError(f"Decimation must be an integer;"
+                                    f" received {decimation}")
+        
+        if channel.is_dac and decimation != 1:
+            raise ValueError(f"Decimation must be 1 for DAC channels.")
+        
+        if fixed or blank:
+            if region is not None:
+                raise TypeError(f"Cannot specify region for fixed or blank waveforms")
+            if flat_top_length is not None:
+                raise ValueError(f"Cannot have a flat top length for fixed or blank waveforms")
+            if decimation != 1:
+                raise ValueError(f"Cannot have decimation for fixed or blank waveforms")
+
+        # Figure out how many samples will be processed at the channel interface
+        # All channels use 32 bits per sample at the FIFO, so we can infer this directly from the tile config        
+        if region is None:
+            if channel.is_dac:
+                region = channel.memory_type
+                channel_samples_per_cycle = self._firmware["rfdc"]["dac"]["channel_interface_width"][channel.num] // 32
+            else:
+                if not fixed:
+                    raise TypeError(f"Allocating a waveform for ADC{channel.num}"
+                                    f" requires specifying a memory region.")
+                channel_samples_per_cycle = self._firmware["rfdc"]["adc"]["channel_interface_width"][channel.num] // 32
+        else:
+            # The source is either an ADC channel or a location in memory
+            # ADC channels must have interface widths equal to the path width
+            channel_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
+
+        if flat_top_length is not None:
+            if isinstance(flat_top_length, float) and flat_top_length > 0:
+                flat_top_length_cycles_float = flat_top_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+                flat_top_length_cycles = round(flat_top_length_cycles_float)
+                if flat_top_length_cycles != round(flat_top_length_cycles_float, 1):
+                    raise ValueError(f"Flat top length {flat_top_length} seconds"
+                                        f" is not an integer number of cycles"
+                                        f" ({flat_top_length_cycles_float} cycles)")
+            elif isinstance(flat_top_length, (Symbol, Operation)):
+                logger.warning(f"Unable to validate symbolic flat top length")
+                flat_top_length_cycles_float = flat_top_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+                flat_top_length_cycles = Operation(round, flat_top_length_cycles_float)
+            else:
+                raise TypeError(f"Unable to use flat top length {flat_top_length}")
+        else:
+            flat_top_length_cycles = None
+
+        #######################################################################
+        # Given a length, determine the number of samples in the array
+        # For ADC channels, this is the number of samples after decimation
+        # Also determine the number of cycles that the operation will run for
+        # These are always directly proportional, but the proportionality
+        # constant is dependent on the decimation and the type of channel
+        #######################################################################
+        if isinstance(length, float):
+            # Length of waveforms in seconds
+            length_cycles_float = length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            length_cycles = round(length_cycles_float)
+            if length_cycles != round(length_cycles_float, 1):
+                raise ValueError(f"Waveform length {length} seconds does not"
+                                    f" correspond to an integer number of cycles"
+                                    f" ({length_cycles_float})")
+            
+            input_length_samples = length_cycles * channel_samples_per_cycle
+            if decimation == 0:
+                decimation = input_length_samples
+
+            elif input_length_samples % decimation != 0:
+                raise ValueError(f"Number of input samples ({input_length_samples})"
+                                 f" is not a multiple of the decimation ({decimation}) ")
+            
+            length_samples = input_length_samples // decimation
+
+            if decimation != 1:
+                logger.debug(f"Allocating DecimatedChannelWaveform for channel {channel} with"
+                          f" {length_samples} samples, which corresponds to"
+                          f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                          f" samples per cycle, decimation {decimation})")
+                
+                return DecimatedChannelWaveform(channel, length_samples, decimation, region)
+            
+            if fixed:
+                logger.debug(f"Allocating FixedWaveform for channel {channel} of length"
+                             f" {length_cycles} cycles")
+                
+                return FixedChannelWaveform(channel, length_cycles, blank)
+            
+            if flat_top_length is not None:
+                logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
+                             f" a flat top length of {flat_top_length_cycles} cycles and"
+                            f" {length_samples} window samples, which corresponds to"
+                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                            f" samples per cycle)")
+                
+                return WindowedConstantWaveform(channel, length_samples, flat_top_length_cycles)
+
+            logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
+                            f" {length_samples} samples, which corresponds to"
+                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                            f" samples per cycle)")
+            
+            return ChannelWaveform(channel, length_samples, resource_allocator=region)
+
+        elif isinstance(length, (Symbol, Operation)):
+            if not fixed:
+                raise ValueError("Symbolic length values may only be provided"
+                                 " for fixed waveforms.")
+            
+            logger.warning(f"Unable to validate symbolic length for fixed waveform")
+            length_cycles_float = length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            length_cycles = Operation(round, length_cycles_float)
+
+            logger.debug(f"Allocating FixedWaveform for channel {channel} of length"
+                             f" {length_cycles} cycles")
+
+            return FixedChannelWaveform(channel, length_cycles, blank)
+
+        elif isinstance(length, np.ndarray):
+            # When decimation is not 1, we don't have enough information to determine
+            # how long in time the waveform is
+            if decimation != 1:
+                raise ValueError(f"When specifying a waveform size with a numpy"
+                                 f" array, decimation must be 1.")
+
+            if length.dtype.kind == 'f' or length.dtype.kind == 'c':
+                # Convert float arrays to complex
+                length_samples = length.size
+
+            elif length.dtype.kind == 'i':
+                if length.shape[-1] != 2:
+                    raise ValueError(f"Waveforms specified by numpy arrays must"
+                                    f" have a shape in which the last dimension"
+                                    f" is of length 2 (received array with shape"
+                                    f" {length.shape})")
+                length_samples = length.size // 2
+            
+            else:
+                raise TypeError(f"Waveforms specified by numpy arrays must have"
+                                f" float, complex, or integer dtypes (received"
+                                f" dtype {length.dtype})")
+
+            if length_samples % channel_samples_per_cycle != 0:
+                raise ValueError(f"Number of waveform samples ({length_samples})"
+                                f" is not a multiple of the number of samples per"
+                                f" cycle ({channel_samples_per_cycle}) and no"
+                                f" decimation is used.")
+        
+            length_cycles = length_samples // channel_samples_per_cycle
+
+            if fixed:
+                logger.debug(f"Allocating FixedWaveform for channel {channel} of length"
+                             f" {length_cycles} cycles")
+                
+                return FixedChannelWaveform(channel, length_cycles, blank)
+            
+            if flat_top_length is not None:
+                logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
+                             f" a flat top length of {flat_top_length_cycles} cycles and"
+                            f" {length_samples} window samples, which corresponds to"
+                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                            f" samples per cycle)")
+                
+                return WindowedConstantWaveform(channel, length_samples, flat_top_length_cycles)
+
+            logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
+                            f" {length_samples} samples, which corresponds to"
+                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                            f" samples per cycle)")
+            
+            return ChannelWaveform(channel, length_samples, resource_allocator=region)
+            
+        else:
+            raise TypeError(f"Waveform length must be specified as a float"
+                            f" or as a numpy array (received {type(length)}).")
+        
+    @requires_sequencer
+    def schedule_waveform(self, waveform: ChannelWaveform):
+        """
+        Schedule a waveform on a channel's DMA. 
+        
+        :param channel: Channel to stream
+        :type channel: :class:`Channel`
+        :param waveform: Signal to stream
+        :type waveform: :class:`ChannelWaveform` or any type implementing 
+            `dma_parameters()` returning a list of `dict`. Each `dict` will 
+            result in a sequential call to `channel_dma_stream` whose arguments
+            are the key/value pairs in the `dict`. 
+        """
+        # Notify the synchronizer, which will add the DMA command for us
+        for params in waveform.dma_parameters():
+            self.channel_synchronizer.add({
+                "function": DMASynchronizer.DMA, 
+                "self": self, 
+                "args": (), 
+                "kwargs": params,
+                "retval": None})
+        
     @requires_sequencer
     def stream(self, 
-                src: Union[Channel,Array], 
-                dst: Waveform = None, 
-                length: Union[int,float] = None,
-                length_units: str = "samples",
-                offset: Union[int,float] = 0,
-                offset_units: str = "elements",
-                decimation: int = None,
-                configuration: StreamConfiguration = None):
+                src: Union[Channel, Waveform], 
+                dst: Waveform, 
+                length: Union[int, None] = None,
+                offset: int = 0,
+                configuration: Union[StreamConfiguration, None] = None):
         """
-        Stream data from a source to a destination array through a DSP module
-        configured to decimate the input stream. This method is able to 
-        automatically allocate an array for the capture destination, depending
-        on the following combinations of keywords:
-
-        Note that in this method, ``length`` refers to the length of the signal
-        before decimation, rather than the length of data that will be occupied
-        after decimation. Additionally, if ``decimation == 0``, the actual
-        decimation will be set equal to the length such that only a single 
-        value is generated.
-
-        - If ``length`` is provided but ``dst`` and ``decimation`` are 
-            ``None``, a :class:`Waveform` is allocated to store the 
-            result with an inferred decimation of 1.
+        Stream data from a source to a destination Waveform array. 
         
-        - If ``dst`` is ``None`` but ``length`` and ``decimation`` are 
-            provided, a :class:`Waveform` is allocated to store the 
-            decimated result. 
+        The source of data can either be a :class:`Channel` representing an 
+        ADC, or it can be an array in memory captured by an :class:`Array`
+        object. The ``decimation`` property of ``dst`` will be used to 
+        determine whether the stream passed directly from the input into memory
+        or whether a DSP module will be used for decimating the stream.
 
-        - If ``dst`` and ``decimation`` are provided but ``length`` is not,
-            the full length of the destination is used and the length of the
-            input is inferred from the destination length and the decimation.
-
-        - If ``dst`` and ``length`` are provided but ``decimation`` is not, the
-            decimation factor is inferred from ratio of ``length`` to the size 
-            of ``dst``.
-
-        - If ``dst``, ``length``, and ``decimation`` are all provided, 
-            ``length`` is interpreted as the length of the input, which
-            will be decimated by a factor given by ``decimation`` and stored in
-            ``dst``.
+        By default, the entirety of ``dst`` is filled. Alternatively, one may
+        optionally specify ``length`` (and also optionally ``offset``) to fill
+        only a portion of ``dst``.
 
         :param src: Data source. If a configuration is provided and this is of
             type :class:`Channel`, the channel in the configuration must match.
         :type src: :class:`Channel` or :class:`Array`
         :param dst: Data destination
-        :type dst: :class:`DecimatedWaveform`
-        :param offset: Offset within `dst` at which the stream will be written
-        :param offset_units: Units for `offset`. May be either "elements" (of 
-            dst), "bytes", or "seconds"
-        :param length: Length of data to stream
-        :param length_units: Units for `length`. May be either "elements" (of 
-            dst), "bytes", "cycles", or "seconds"
-        :param decimation: Decimation factor
-        :type decimation: int
+        :type dst: :class:`ADCWaveform`
+        :param length: Length of data to stream in samples. Note that this
+            is the length after any decimation.
+        :param offset: Offset within `dst` at which the stream will be written,
+            in units of samples. Note that this offset is applied after any 
+            decimation.
         :param configuration: Stream configuration to use. If `None`, a new one
             will be requested.
         :type configuration: :class:`StreamConfiguration`
@@ -1511,115 +1812,42 @@ class Acadia:
         :rtype: :class:`StreamConfiguration`
         """
 
-        if (length is not None and dst is None and decimation is None):
-            decimation = 1
-
-        if ((dst is None and length is None) 
-                or (dst is None and decimation is None) 
-                or (decimation is None and length is None)):
-            raise ValueError("Must provide ``length`` or at least two of"
-                             " `dst`, `length`, and `decimation`.")
-
-        path_width = self._firmware["stream_processing_path"]["width"]
-        input_samples_per_cycle = self.convert(1, 
-                                         "cycles", 
-                                         "samples", 
-                                         4,
-                                         path_width // 8)
+        if not isinstance(dst, Waveform):
+            raise TypeError(f"Stream destination must be a Waveform;"
+                            f" received {type(dst)}")
         
-        # Validate the decimation if we have one
-        if decimation is not None:
-            if isinstance(decimation, float):
-                if round(decimation) == round(decimation, 1):
-                    decimation = round(decimation)
-                else:
-                    raise ValueError(f"Decimation must be an integer;"
-                                     f" received {decimation}")
-                
-            if decimation != 1 and decimation % input_samples_per_cycle != 0:
-                raise ValueError(f"Decimation results in a non-integer"
-                                    f" number of cycles"
-                                    f" ({input_samples_per_cycle} samples per"
-                                    f" cycle, decimation {decimation})")
-            
-        # Validate or create the destination
-        if dst is None:
-            # We must have length and decimation
-            input_length_samples = self.convert(length, 
-                                              length_units, 
-                                              "samples", 
-                                              4, 
-                                              path_width // 8)
-            if decimation == 0:
-                decimation = input_length_samples
-
-            if input_length_samples % decimation != 0:
-                raise ValueError(f"Decimation results in a non-integer"
-                                    f" number of output samples"
-                                    f" ({input_length_samples} samples,"
-                                    f" decimation {decimation})")
-            
-            logger.debug(f"Allocating Waveform with"
-                          f" {input_length_samples} / {decimation} ="
-                          f" {input_length_samples // decimation} samples")
-            dst = Waveform(channel=(src if isinstance(src, Channel) else None), 
-                            length=input_length_samples // decimation, 
-                            region=self.PLDDR0Array, 
-                            quadrature_width=(16 if decimation == 1 else 32))
-        elif decimation != 1 and dst.dtype != np.dtype('V8'): 
-            raise TypeError(f"Destination must have a dtype of V8 (found"
-                            f" {dst.dtype})")
-        elif decimation == 1 and dst.dtype != np.dtype('V4'):
-            raise TypeError(f"Destination must have a dtype of V4 (found"
-                            f" {dst.dtype})")
-
-        # We now have a valid destination. Check whether we have a valid 
-        # length, decimation, or both 
-        if length is None:
-            # We must have decimation and will infer the input length from
-            # the size of the destination
-            # output samples * (input samples per output sample) * (1 / input samples per cycle) = number of cycles
-            if (len(dst) * decimation) % input_samples_per_cycle != 0:
-                raise ValueError(f"Stream results in non-integer number of"
-                                 f" cycles (dst {len(dst)} elements,"
-                                 f" decimation {decimation},"
-                                 f" {input_samples_per_cycle} input"
-                                 f" samples per cycle)")
-            length_cycles = len(dst) * decimation // input_samples_per_cycle
-            output_length_bytes = dst.byte_length()
-        else:
-            # We have length
-            length_cycles = self.convert(length, 
-                                        length_units, 
-                                        "cycles", 
-                                        4, 
-                                        path_width // 8)
-            
-            # We may or may not have the decimation
-            # If we don't, derive it based on the length of the output
-            if decimation is None:
-                if (length_cycles * input_samples_per_cycle) % len(dst) != 0:
-                    raise ValueError(f"Inferred non-integer decimation"
-                                     f" ({length_cycles} cycles,"
-                                     f" {len(dst)} output samples)")
-                decimation = length_cycles * input_samples_per_cycle // len(dst)
-
-            output_length_bytes = 8 * length_cycles * input_samples_per_cycle // decimation
-
         if configuration is None:
             config_src = src if isinstance(src, Channel) else "memory"
-            configuration = self._request_stream_configuration(config_src, "memory" if decimation == 1 else "dsp")
+            module = "dsp" if isinstance(dst, DecimatedChannelWaveform) else "memory"
+            configuration = self._request_stream_configuration(config_src, module)
 
-        if decimation == 1:
-            if offset_units == "seconds" or offset_units == "cycles":
-                raise TypeError(f"Use space-like input units for the offset")
-            
-            offset_bytes = self.convert(offset, 
-                                        offset_units, 
-                                        "bytes", 
-                                        32 // 8) # Channels create 32-bit elements
+        dst_params = dst.dma_parameters()[0]
+        if isinstance(src, Channel):
+            dst_params["channel"] = src
 
+        if length is None:
+            # Fill the output
+            # The waveform length will already have been validated when the waveform was created
+            length = dst.size
+        
+        input_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
+
+        # Use the value of length to determine parameters for the DataMover
+        if isinstance(dst, DecimatedChannelWaveform):
+            dst_params["length"] = length * dst.cycles_per_output_sample
         else:
+            # When not decimating, the DataMover writes one path-width of data per cycle
+            if length % input_samples_per_cycle != 0:
+                raise ValueError(f"Stream of length {length} samples does not"
+                                 f" produce an integer number of cycles"
+                                 f" ({length / input_samples_per_cycle})")
+            dst_params["length"] = length // input_samples_per_cycle
+                
+
+        output_length_bytes = length * 2*dst.dtype.itemsize
+        offset_bytes = offset * 2*dst.dtype.itemsize
+
+        if isinstance(dst, DecimatedChannelWaveform):
             # Configure the DSP for decimation
             # At packet start and counter start, we'll load in the input value
             # Otherwise, when we receive valid data, we'll add it to P
@@ -1645,24 +1873,18 @@ class Acadia:
             self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
             
             # Counter period low and high
-            counter_value = (decimation // input_samples_per_cycle) - 1
+            counter_value = (dst._decimation // input_samples_per_cycle) - 1
             self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
             self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
- 
-            if offset_units == "seconds" or offset_units == "cycles":
-                raise TypeError(f"Use space-like input units for the offset")
-            
-            offset_bytes = self.convert(offset, 
-                                        offset_units, 
-                                        "bytes", 
-                                        64 // 8) # DSP module creates 64-bit elements
+
         
-        logger.debug(f"Stream length {length_cycles} cycles, decimation {decimation},"
+        logger.debug(f"Stream length {dst_params['length']} cycles, decimation"
+                     f" {dst._decimation if isinstance(dst, DecimatedChannelWaveform) else 1},"
                       f" of output size {output_length_bytes} bytes to address"
-                      f" 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
+                      f" 0x{dst.byte_address:010X} + 0x{offset_bytes:X}")
 
         self._command_datamover(configuration.output_datamover(), 
-                                dst.byte_address() + offset_bytes,
+                                dst.byte_address + offset_bytes,
                                 output_length_bytes)
 
         if isinstance(src, Channel):
@@ -1671,31 +1893,22 @@ class Acadia:
                 "function": DMASynchronizer.DMA, 
                 "self": self, 
                 "args": (), 
-                "kwargs": {
-                    "channel": src,
-                    "length": length_cycles,
-                    "word_address": 0
-                },
+                "kwargs": dst_params,
                 "retval": None})
         else:
-            input_length_bytes = self.convert(length, length_units, "bytes")
             self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
-                                   src.byte_address(),
-                                   input_length_bytes)
+                                   src.byte_address,
+                                   src.nbytes)
             
-        return dst,configuration
+        return configuration
         
     @requires_sequencer
     def stream_accumulated(self, 
-                            src, 
-                            accumulation_length: Union[int,float], 
-                            accumulation_length_units: str,
-                            dst: Waveform = None, 
-                            offset: Union[int,float] = 0,
-                            offset_units = "elements",
-                            kernel_length: Union[int,float] = None,
-                            kernel_length_units: float = "elements",
-                            kernel: Waveform = None,
+                            src: Channel, 
+                            dst: DecimatedChannelWaveform,
+                            accumulation_length_seconds: float, 
+                            kernel: Union[Waveform,float] = 0,
+                            offset: int = 0,
                             cmacc_preload_re: int = 0,
                             cmacc_preload_im: int = 0,
                             write_mode: str = "upper", 
@@ -1761,44 +1974,22 @@ class Acadia:
             configuration = self._request_stream_configuration(config_src, "cmacc")
             self.stream_reset(configuration)
 
-        accumulation_length_cycles = self.convert(accumulation_length, 
-                                                    accumulation_length_units, 
-                                                    "cycles", 
-                                                    32 // 8)
-
-        if dst is None and write_mode is not None:
-            if last_only:
-                dst_length_samples = 1
-            else:
-                dst_length_samples = self.convert(accumulation_length_cycles, 
-                                                    "cycles", 
-                                                    "elements", 
-                                                    64 // 8, # Kernel memory is 32 bits wide 
-                                                    64 // 8)
-            dst = Waveform(length=dst_length_samples, region=self.PLDDR0Array, quadrature_width=32)
-
-        # Allocate kernel memory if needed
-        if kernel is None:
-            if kernel_length == 0:
+        # Figure out what kind of kernel to use
+        if isinstance(kernel, float):
+            # Allocate a new kernel with a length in seconds given by kernel
+            if kernel == 0:
                 kernel_length_elements = 1
-            elif kernel_length is not None:
-                kernel_length_elements = self.convert(kernel_length, 
-                                                    kernel_length_units, 
-                                                    "elements", 
-                                                    32 // 8, # Kernel memory is 32 bits wide 
-                                                    32 // 8)
-            elif not last_only:
-                kernel_length_elements = dst.word_length()
             else:
-                raise ValueError("Unable to infer kernel length.")
+                kernel_length_elements = kernel * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
 
-            logger.debug(f"Allocating kernel Waveform with {kernel_length_elements} samples")
-            kernel = Waveform(length=kernel_length_elements, 
-                            region=self.CMACCKernelArray[configuration.module_resource._resource_id]) 
-        elif kernel_length is not None:
-            raise ValueError(f"Parameter `kernel_length` must be `None` when"
-                            f" the kernel is provided (received"
-                            f" {kernel_length}).")
+            logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
+            kernel = Waveform(shape=kernel_length_elements, 
+                              dtype="<i2",
+                            resource_allocator=self.CMACCKernelArray[configuration.module_resource._resource_id]) 
+        elif not isinstance(kernel, Waveform):
+            raise TypeError(f"Kernel must be either a length in seconds or a"
+                            f" Waveform previously allocated by"
+                            f" stream_accumulated (received {kernel})")
 
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
 
@@ -1809,8 +2000,8 @@ class Acadia:
 
         # Set the kernel start and end addresses
         # The kernel uses one element per cycle
-        logger.debug(f"Using kernel at address 0x{kernel.word_address():04X} of length {len(kernel)}")
-        kernel_reg = kernel.word_address() | ((kernel.word_address() + len(kernel) - 1) << 16)
+        logger.debug(f"Using kernel at address 0x{kernel.index():04X} of length {kernel.size}")
+        kernel_reg = kernel.index() | ((kernel.index() + kernel.size - 1) << 16)
         kernel_reg &= 0xFFFFFFFF
         self.sequencer().bus_write(address=registers+3, data=kernel_reg)
             
@@ -1842,42 +2033,34 @@ class Acadia:
             
         logger.debug(f"Setting CMACC control register to 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
+
+        accumulation_length_cycles = accumulation_length_seconds * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
         
         # Command the destination datamover
         if write_mode is not None:
-            # CMACC produces 32 bits per cycle at its output
-            output_length_bytes = 64 // 8
+            # CMACC produces 64 bits per cycle at its output
+            if last_only:
+                output_length_bytes = 2*dst.dtype.itemsize
 
-            if not last_only:
-                output_length_bytes *= self.convert(accumulation_length, 
-                                                    accumulation_length_units, 
-                                                    "cycles", 
-                                                    32 // 8) 
+            else:
+                output_length_bytes = accumulation_length_cycles * 2*dst.dtype.itemsize
                 
-            if offset_units == "seconds" or offset_units == "cycles":
-                raise TypeError(f"Use space-like input units for the offset")
-        
-            offset_bytes = self.convert(offset, 
-                                        offset_units, 
-                                        "bytes", 
-                                        dst.dtype.itemsize,
-                                        self._firmware["stream_processing_path"]["width"] // 8)
-
+            offset_bytes = offset * 2*dst.itemsize
             self._command_datamover(configuration.output_datamover(), 
-                                    dst.byte_address() + offset_bytes,
+                                    dst.byte_address + offset_bytes,
                                     output_length_bytes)
             
-        logger.debug(f"Stream length {accumulation_length_cycles} cycles,"
+            logger.debug(f"Stream length {accumulation_length_cycles} cycles,"
                       f" of output size {output_length_bytes} bytes to address"
-                      f" 0x{dst.byte_address():010X} + 0x{offset_bytes:X}")
-        
+                      f" 0x{dst.byte_address:010X} + 0x{offset_bytes:X}")
+        else:
+           logger.debug(f"Stream length {accumulation_length_cycles} cycles,"
+                        f" nothing written")
+            
         # Add commands to get data from the source
+        # TODO: support accumulation from memory, not just channels
         if isinstance(src, Channel):
             # notify the synchronizer, which will then add the DMA command for us       
-            if accumulation_length is None:
-                raise ValueError(f"Accumulation length must be provided when"
-                                 f" the source is a channel.") 
-            
             self.channel_synchronizer.add({
                 "function": DMASynchronizer.DMA, 
                 "self": self, 
@@ -1888,17 +2071,6 @@ class Acadia:
                     "word_address": 0
                 },
                 "retval": None})
-        elif isinstance(src, Array):
-            if accumulation_length is None:
-                accumulation_length = src.byte_length()
-                accumulation_length_units = "bytes"
-            accumulation_length_bytes = self.convert(accumulation_length, 
-                                                    accumulation_length_units, 
-                                                    "bytes", 
-                                                    src.dtype)
-            self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
-                                   src.byte_address(),
-                                   accumulation_length_bytes)
         else:
             raise TypeError(f"Unable to use source of type {type(src)}")
         
@@ -1988,40 +2160,7 @@ class Acadia:
         registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
         self.sequencer().bus_write(address=registers, data=value.real)
         self.sequencer().bus_write(address=registers+1, data=value.imag)
-    
-    @requires_sequencer
-    def generate_blank(self, channel, length) -> None:
-        """
-        Generate a blank signal on a channel for a given length of time. This
-        can be used to insert delays between DMA commands without sequencer 
-        intervention.
-        
-        :param channel: Channel on which to insert a blank command
-        :type channel: :class:`Channel`
-        :param length: Delay length in seconds
-        :type length: float
-        """
-        if isinstance(length, (float, int)) == 0:
-            return
-        
-        length_cycles = self._firmware["clocks"]["generated_clocks"]["seq_clk"]*length
-        
-        if round(length_cycles,5) != round(length_cycles):
-            raise ValueError("DMA blanking length does not result in an"
-                             " integer number of cycles (received length"
-                             f" {length*1e9} ns = {length_cycles} cycles)") 
-        
-        self.channel_synchronizer.add({
-            "function": DMASynchronizer.DMA, 
-            "self": self, 
-            "args": (), 
-            "kwargs": {
-                "channel": channel,
-                "length": round(length_cycles),
-                "word_address": 0,
-                "blank": True
-            },
-            "retval": None})
+
         
     @DMASynchronizer.synchronized(DMASynchronizer.BARRIER, "channel_synchronizer")
     def barrier(self):
@@ -2052,11 +2191,11 @@ class Acadia:
         # using the provided configuration
         
         self._command_datamover(configuration.output_datamover(), 
-                                   dst.byte_address(),
-                                   src.byte_length())
+                                   dst.byte_address,
+                                   src.nbytes)
         self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
-                                   src.byte_address(),
-                                   src.byte_length())
+                                   src.byte_address,
+                                   src.nbytes)
 
     # -------------- CONVENIENCE FUNCTIONS FOR THE SEQUENCER ----------- #
 
@@ -2064,7 +2203,7 @@ class Acadia:
     def reset_all_streams(self):
         for idx,module_dict in enumerate(self._firmware["stream_processing_path"]["modules"]):
             address = self._firmware.sequencer_bus_decoder[f"module{idx}_s2mm_datamover_controller"].address().value()
-            self.sequencer().bus_write(address=address+3, data=0)
+            self.sequencer().bus_write(address=address+2, data=0x80000000)
             
             # Reset the module
             if module_dict["kind"] == "adder":
@@ -2093,7 +2232,7 @@ class Acadia:
             
         for cfg in configurations:
             address = self._firmware.sequencer_bus_decoder[f"{cfg.output_datamover()}_controller"].address().value()
-            self.sequencer().bus_write(address=address+3, data=0)
+            self.sequencer().bus_write(address=address+2, data=0x80000000)
             
             # Reset the module
             if cfg.module_resource.kind == "adder":
@@ -2137,7 +2276,19 @@ class Acadia:
                                         comment=f"Writing bus address register to"
                                                 f" retrieve status count for {datamover_name}",
                                         latency=self._bus_latency(datamover_name))  
-            
+    
+    @requires_sequencer
+    def stream_set_offset(self, configuration: StreamConfiguration, offset):
+        """
+        Apply an offset for a DataMover controller.
+        """
+        datamover_name = f"{configuration.output_datamover()}_controller"
+        bus_address_base = self._firmware.sequencer_bus_decoder[datamover_name].address().value()
+        self._active_sequencer.bus_write(address=bus_address_base+3, 
+                                         data=offset,
+                                         comment=f"Set offset for"
+                                                 f" {datamover_name}")
+                    
     @requires_sequencer
     def channel_trigger(self, *channels):
         """
@@ -2236,7 +2387,7 @@ class Acadia:
                 self.configure_stream(cfg)
                 
         # logger.debug("Running sequencer")
-        from acadia.ps_functions import sequencer_halt_and_reset, sequencer_run, sequencer_complete
+        
         # self.sequencer_reset()
         # self.sequencer_run()
         sequencer_halt_and_reset()
@@ -2315,6 +2466,7 @@ class Acadia:
         idx = 0
         for s in self._sequencer_type.instances:
             for instr in s._compiled_program:
+                logger.debug(f"Assembling instruction at 0x{idx:04X}")
                 sequencer_program[idx*16 : idx*16 + 16] = instr.assemble()
                 idx += 1
             
@@ -2512,22 +2664,24 @@ class Acadia:
         def _cache_getitem(cache_self, key):
             proc = Processor.active_processor()
             if proc is None:
-                if not hasattr(cache_self, "memory"):
+                if cache_self.__array_interface__ is None:
                     raise AttributeError(f"Attempted to get item from unattached memory.")
-                return cache_self.memory[key]
+                return np.array(cache_self)[key]
             elif isinstance(proc, Sequencer):
-                return proc.bus_read(cache_self.word_address() + key, 
+                base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
+                return proc.bus_read(base_address + cache_self.index() + key, 
                                      latency=self._bus_latency("cache"))
             return Operation("getitem", cache_self, key)
             
         def _cache_setitem(cache_self, key, value):
             proc = Processor.active_processor()
             if proc is None:
-                if not hasattr(cache_self, "memory"):
+                if cache_self.__array_interface__ is None:
                     raise AttributeError(f"Attempted to set item of unattached memory.")
-                cache_self.memory[key] = value
+                np.array(cache_self)[key] = value
             elif isinstance(proc, Sequencer):
-                proc.bus_write(address=cache_self.word_address() + key,
+                base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
+                proc.bus_write(address=base_address + cache_self.index() + key,
                                data=value,
                                comment=f"Write to cache address {key}")
             else:
@@ -2538,129 +2692,55 @@ class Acadia:
             {"OPERATORS": [], 
              "__getitem__": _cache_getitem, 
              "__setitem__": _cache_setitem},
-            base_word_address=self._firmware.sequencer_bus_decoder["cache"].address().value(),
-            base_byte_address=self._firmware["sequencer_cache_memory"]["address"],
-            word_width=32,
+            base_address=self._firmware["sequencer_cache_memory"]["address"],
+            alignment=4,
             memory_size=self._firmware["sequencer_cache_memory"]["size_bits"] // 8,
-            default_getitem=False)
+            getset=None)
         
     def _create_dac_arrays(self):
-        def _getitem(mem_self, key):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to get item from unattached memory.")
-            return mem_self.memory[key]
-            
-        def _setitem(mem_self, key, value):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to set item of unattached memory.")
-            mem_self.memory[key] = value
-            
         self.DACArray = [ManagedMemory(f"DAC{i}Array", 
             (), 
-            {"OPERATORS": [], 
-             "__getitem__": _getitem, 
-             "__setitem__": _setitem},
-            base_word_address=0,
-            base_byte_address=(self._firmware[f"dac_tile{i // 4}_sample_memory"]["address"] 
+            {"OPERATORS": []},
+            base_address=(self._firmware[f"dac_tile{i // 4}_sample_memory"]["address"] 
                                + (i % 4)*(self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8)),
-            word_width=32,
+            alignment=self._firmware["rfdc"]["dac"]["channel_interface_width"][i] // 8,
             memory_size=self._firmware[f"dac_tile{i // 4}_sample_memory"]["size_bits"] // 8,
-            default_getitem=False) for i in range(self._firmware.NUM_DACS)]
+            getset=None) for i in range(self._firmware.NUM_DACS)]
         
     def _create_cmacc_kernel_arrays(self):
-        def _getitem(mem_self, key):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to get item from unattached memory.")
-            return mem_self.memory[key]
-            
-        def _setitem(mem_self, key, value):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to set item of unattached memory.")
-            mem_self.memory[key] = value
-            
         self.CMACCKernelArray = [ManagedMemory(f"CMACC{i}KernelArray", 
             (), 
-            {"OPERATORS": [], 
-             "__getitem__": _getitem, 
-             "__setitem__": _setitem},
-            base_word_address=0,
-            base_byte_address=(self._firmware["stream_processing_path"]["cmacc_kernel_memory_controller"]["base_address"] 
+            {"OPERATORS": []},
+            base_address=(self._firmware["stream_processing_path"]["cmacc_kernel_memory_controller"]["base_address"] 
                                + i*(self._firmware._max_cmacc_memory * 32 // 8)),
-            word_width=32,
+            alignment=4,
             memory_size=self._firmware._max_cmacc_memory * 32 // 8) for i in range(self._firmware._num_cmaccs)]
         
-    def _create_pl_ddr_arrays(self):
-        def _getitem(mem_self, key):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to get item from unattached memory.")
-            return mem_self.memory[key]
-            
-        def _setitem(mem_self, key, value):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to set item of unattached memory.")
-            mem_self.memory[key] = value
-            
+    def _create_pl_ddr_arrays(self):            
         self.PLDDR0Array = ManagedMemory(f"PLDDR0Array", 
             (),
-            {"OPERATORS": [], 
-             "__getitem__": _getitem, 
-             "__setitem__": _setitem},
-            base_word_address=self._firmware["memory"]["ddr4_c0"]["address"],
-            base_byte_address=self._firmware["memory"]["ddr4_c0"]["address"],
-            word_width=8,
+            {"OPERATORS": []},
+            base_address=self._firmware["memory"]["ddr4_c0"]["address"],
             memory_size=self._firmware["memory"]["ddr4_c0"]["size_bits"] // 8)
         
         self.PLDDR1Array = ManagedMemory(f"PLDDR1Array", 
             (), 
-            {"OPERATORS": [], 
-             "__getitem__": _getitem, 
-             "__setitem__": _setitem},
-            base_word_address=self._firmware["memory"]["ddr4_c1"]["address"],
-            base_byte_address=self._firmware["memory"]["ddr4_c1"]["address"],
-            word_width=8,
-            memory_size=self._firmware["memory"]["ddr4_c1"]["size_bits"])
+            {"OPERATORS": []},
+            base_address=self._firmware["memory"]["ddr4_c1"]["address"],
+            memory_size=self._firmware["memory"]["ddr4_c1"]["size_bits"] // 8)
         
     def _create_ps_ddr_arrays(self):
-        def _getitem(mem_self, key):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to get item from unattached memory.")
-            return mem_self.memory[key]
-            
-        def _setitem(mem_self, key, value):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to set item of unattached memory.")
-            mem_self.memory[key] = value
-            
-        # PS DDR
         self.PSDDRArray = ManagedMemory(f"PSDDRArray", 
             (),
-            {"OPERATORS": [], 
-             "__getitem__": _getitem, 
-             "__setitem__": _setitem},
-            base_word_address=0x8_0000_0000,
-            base_byte_address=0x8_0000_0000,
-            word_width=8,
+            {"OPERATORS": []},
+            base_address=0x8_0000_0000,
             memory_size=2**30)
         
     def _create_ocm_arrays(self):
-        def _getitem(mem_self, key):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to get item from unattached memory.")
-            return mem_self.memory[key]
-            
-        def _setitem(mem_self, key, value):
-            if not hasattr(mem_self, "memory"):
-                raise AttributeError(f"Attempted to set item of unattached memory.")
-            mem_self.memory[key] = value
-            
         self.OCMArray = ManagedMemory(f"OCMArray", 
             (), 
-            {"OPERATORS": [], 
-             "__getitem__": _getitem, 
-             "__setitem__": _setitem},
-            base_word_address=0xFFFC_0000,
-            base_byte_address=0xFFFC_0000,
-            word_width=8,
+            {"OPERATORS": []},
+            base_address=0xFFFC_0000,
             memory_size=2**18)
         
     def _create_zdma(self):
@@ -2704,7 +2784,7 @@ class Acadia:
         self._stream_processing_path_input_switch = AXISSwitch()
         self._ADC_input_switch = AXISSwitch()
         
-    def _attach_resource(self, resource_manager, default_dtype=np.uint8):
+    def _attach_resource(self, resource_manager: ManagedMemory):
         """
         Maps the memory associated with a managed resource in the physical 
         address space of the hardware. Instances of ``memoryview`` are assigned
@@ -2717,24 +2797,23 @@ class Acadia:
         :type mem_cast: str, optional
         """
 
+        if not isinstance(resource_manager, ManagedMemory):
+            raise TypeError(f"Only ManagedMemory objects can be attached; received {resource_manager}")
+
+        logger = logging.getLogger("acadia")
+        logger.debug(f"Attaching resource manager {resource_manager} at"
+                     f" address 0x{resource_manager._base_address:010X}"
+                     f" ({resource_manager._allocation_limit} bytes)")
+
         m = mmap.mmap(self._mem_file, 
-            resource_manager.memory_size, 
+            resource_manager._allocation_limit, 
             mmap.MAP_SHARED, 
             mmap.PROT_READ | mmap.PROT_WRITE, 
             0, 
-            resource_manager.base_byte_address)
+            resource_manager._base_address)
         
         self._mem_maps.append(m)
-        resource_manager._pool_memory = m
-        
-        for instance in resource_manager.instances:
-            start_byte = instance.byte_address() - resource_manager.base_byte_address
-            t = instance._dtype if instance._dtype is not None else default_dtype
-            instance.memory = np.frombuffer(m, 
-                                            dtype=np.uint8, 
-                                            offset=start_byte, 
-                                            count=instance.byte_length()).view(t)
-
+        resource_manager.attach(m)
         
     def _attach_memory(self, address, size, dtype=np.uint8, return_map=False):
         """
@@ -2745,6 +2824,10 @@ class Acadia:
         :param size: Size of the space to map in bytes
         :type size: int
         """
+
+        logging.getLogger("acadia").debug(f"Attaching memory of size {size}"
+                                          f" bytes at address 0x{address:010X}"
+                                          f" with dtype {dtype}")
 
         m = mmap.mmap(self._mem_file, 
             size, 
@@ -2759,7 +2842,12 @@ class Acadia:
         
         return np.frombuffer(m, dtype=dtype)
 
-    def _command_datamover(self, datamover_name, address, size, tag=0xA, incr=True, address_base=None):
+    def _command_datamover(self, 
+                           datamover_name: str, 
+                           address: Union[int, Symbol], 
+                           size: Union[int, Symbol], 
+                           tag: int = 0xA, 
+                           incr: bool = True):
         """
         Configure a DataMover (either MM2S or S2MM).
 
@@ -2783,12 +2871,18 @@ class Acadia:
         :type address_base: int, optional
         """
 
-        if isinstance(size, int) or isinstance(size, float):
+        if isinstance(size, int):
             if size > 2**23:
                 raise ValueError(f"Size must be less than 8 MB; received {size}.")
+        elif isinstance(size, Symbol) and (size.value_type() == int):
+            if size.assigned() and size.value() > 2**23:
+                raise ValueError(f"Size must be less than 8 MB; received {size}.")
+            else:
+                logger.warning("Unable to verify size of transfer;"
+                                 "ensure that the size is less than 8 MB.") 
         else:
-            print("Unable to determine size of transfer;"
-                  "ensure that the size is less than 8 MB.")
+            logger.warning("Unable to verify size of transfer;"
+                            "ensure that the size is less than 8 MB.")
                 
         transfer_type = int(incr) # INCR transaction
         transfer_eof = 0 # TLAST will arrive with the data
@@ -2801,29 +2895,25 @@ class Acadia:
                     | (transfer_tag << 2) 
                     | (transfer_eof << 1) 
                     | (transfer_type << 0))
-
-        if address_base is not None:
-            misc_reg |= (address_base >> 32) << 14
-            addr_reg = address
-        else:
-            misc_reg |= (address >> 32) << 14
-            addr_reg = address & 0xFFFFFFFF
+        
+        # TODO: is there a way to get from the firmware config that the address bus is 40 bits rather than hardcode it?
+        misc_reg |= ((address >> 32) & 0xFF) << 14
 
         # Configure the DataMover controller (the last bus write will 
         # push the complete command into the command FIFO)
         bus_address_base = self._firmware.sequencer_bus_decoder[f"{datamover_name}_controller"].address().value()
         self._active_sequencer.bus_write(address=bus_address_base+2, 
                                          data=misc_reg,
-                                         comment=f"Configuration for {size}-byte transfer to address"
-                                                 f" {str(address_base) + '+' if address_base is not None else ''}"
-                                                 f"{address} using DataMover"
+                                         comment=f"Misc configuration for DataMover"
                                                  f" {datamover_name}")
         self._active_sequencer.bus_write(address=bus_address_base+1, 
-                            data=size)
+                            data=size,
+                            comment=f"Transfer size for DataMover {datamover_name}")
         self._active_sequencer.bus_write(address=bus_address_base, 
-                            data=addr_reg)
+                            data=(address & 0xFFFFFFFF),
+                            comment=f"Base address and dispatch for DataMover {datamover_name}")
                
-    def _bus_latency(self, port):
+    def _bus_latency(self, port: str) -> int:
         """
         Get the latency for a port on the sequencer's bus, taking into account
         any pipelining configured in the firmware.
@@ -2834,7 +2924,7 @@ class Acadia:
         :type port: str
         """
         # One cycle to load the bus registers in the sequencer
-        latency = 2
+        latency = 1
 
         if self._firmware["sequencer_bus"]["decoder_pipeline_miso"]:
             latency += 1
@@ -2860,7 +2950,9 @@ class Acadia:
 
         return latency
     
-    def _request_stream_configuration(self, input_source, module) -> StreamConfiguration:
+    def _request_stream_configuration(self, 
+                                      input_source: Union[Channel, str], 
+                                      module: str) -> StreamConfiguration:
         """
         Request configuration parameters for a stream. Streams are uniquely 
         determined by their input source and by the module that processes them.

@@ -657,13 +657,6 @@ class Firmware:
             
             # ------------------- Sequencer ----------------------------- #
             
-            # Slice the PS GPIO for the sequencer run signal
-            create_slice(f, name=f"hedgehog/xlslice_sequencer_run", 
-                             input_width=2, 
-                             input_from=0,
-                             input_to=0)
-            connect_bd_net(f, f"hedgehog/xlslice_sequencer_run/Din", "hedgehog/PS_GPIO_SEQUENCER")
-            
             # Slice the PS GPIO for the sequencer nrst signal
             create_slice(f, name=f"hedgehog/xlslice_sequencer_nrst", 
                              input_width=2, 
@@ -672,11 +665,6 @@ class Firmware:
             connect_bd_net(f, f"hedgehog/xlslice_sequencer_nrst/Din", "hedgehog/PS_GPIO_SEQUENCER")
             
             # Create synchronizers for the GPIO
-            create_ip(f, name=f"hedgehog/xpm_cdc_sequencer_run", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
-            set_property(f, name="hedgehog/xpm_cdc_sequencer_run", properties={"CDC_TYPE": "xpm_cdc_sync_rst"})
-            connect_bd_net(f, f"hedgehog/xpm_cdc_sequencer_run/src_rst", "hedgehog/xlslice_sequencer_run/Dout")
-            connect_bd_net(f, f"hedgehog/xpm_cdc_sequencer_run/dest_clk", f"hedgehog/clk_wiz/seq_clk")
-            
             create_ip(f, name=f"hedgehog/xpm_cdc_sequencer_nrst", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
             set_property(f, name="hedgehog/xpm_cdc_sequencer_nrst", properties={"CDC_TYPE": "xpm_cdc_sync_rst"})
             connect_bd_net(f, f"hedgehog/xpm_cdc_sequencer_nrst/src_rst", "hedgehog/xlslice_sequencer_nrst/Dout")
@@ -684,7 +672,6 @@ class Firmware:
             
             create_module(f, f"hedgehog/sequencer", "acadia_sequencer")
             connect_bd_net(f, "hedgehog/sequencer/clk", "hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/sequencer/run", f"hedgehog/xpm_cdc_sequencer_run/dest_rst_out")
             connect_bd_net(f, f"hedgehog/sequencer/nrst", f"hedgehog/xpm_cdc_sequencer_nrst/dest_rst_out")
 
             # ------------------- Sequencer Bus and Associated Modules -------------------- #
