@@ -181,7 +181,7 @@ class Waveform:
        
     @staticmethod
     def sample_to_complex(input: np.ndarray, 
-                            output: Union[np.ndarray, np.dtype, None], 
+                            output: Union[np.ndarray, np.dtype, None] = None, 
                             scale: Union[float, complex] = 1.0) -> np.ndarray:
         """
         Convert sample data from its integer quadratures to complex 

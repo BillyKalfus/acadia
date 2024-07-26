@@ -111,7 +111,7 @@ class SpectroscopyRuntime(Runtime):
     def update(self):
         import numpy as np
         from scipy.optimize import curve_fit
-        from acadia.arrays import Waveform
+        from acadia.waveforms import Waveform
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
