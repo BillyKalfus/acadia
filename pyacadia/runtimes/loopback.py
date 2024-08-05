@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from scipy.signal.windows import cosine
 from acadia.runtime import Runtime
 
 @dataclass
@@ -131,15 +130,15 @@ if __name__ == "__main__":
 
         "waveform": {
             "length": 1e-6,
-            "flat_top_length": 1e-6
+            # "flat_top_length": 1e-6
         },
         
         "signal": {
             "data": ("scipy", "hann"),
-            "scale": 1.0
+            "scale": 0.05
         }
     }
-    
+
     capture: dict = {
         "channel": "ADC1",
 
@@ -152,12 +151,12 @@ if __name__ == "__main__":
 
         "waveform": {
             "length": 4e-6,
-            "decimation": 4,
+            "decimation": 1,
             "region": "plddr"
         }
     }
 
-    rt = LoopbackRuntime(stimulus, capture, iterations=8)
-    rt.deploy("192.168.2.69", "loopback", files=[__file__], log_debug=True)    
+    rt = LoopbackRuntime(stimulus, capture, iterations=10000)
+    rt.deploy("192.168.2.69", "loopback", files=[__file__], log_debug=True, remove_remote_directory=False, remote_directory="/home/root/%y%m%d_%H%M%S")    
     rt.display()
     

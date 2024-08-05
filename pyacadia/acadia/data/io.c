@@ -161,11 +161,9 @@ int read_polled(int fd, void* dest, size_t size, int timeout_ms)
 {
     struct pollfd poll_struct;
     int retval;
-    size_t items_read;
 
     // Run a loop, since the data may not be available right away
-    items_read = 0;
-    while(items_read < size)
+    while(size)
     {
         // Wait until the file can be read
         poll_struct.fd = fd;
@@ -203,8 +201,8 @@ int read_polled(int fd, void* dest, size_t size, int timeout_ms)
             return -1;
         }
 
-        retval = read(fd, dest + items_read, size);
-        if(retval == 0)
+        retval = read(fd, dest, size);
+        if(retval <= 0)
         {
             // Since we've already polled to wait for the file to be readable,
             // this indicates an error
@@ -212,7 +210,8 @@ int read_polled(int fd, void* dest, size_t size, int timeout_ms)
             return -1;
         }
 
-        items_read += retval;
+        dest += retval;
+        size -= retval;
     }
 
     return 0;

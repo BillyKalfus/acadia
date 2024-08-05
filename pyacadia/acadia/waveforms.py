@@ -142,8 +142,11 @@ class Waveform:
             if len(kwargs) != 0:
                 raise ValueError(f"Keyword arguments are not allowed for"
                                  " scalar or array data.")
-            # load from scalar
-            data = np.asarray(data)
+            if not hasattr(data, "dtype"):
+                raise AttributeError(f"Scalar inputs must define a dtype")
+
+            # Make 1D array from scalar for proper broadcasting
+            data = np.array(data, dtype=data.dtype, ndmin=1)
             if data.dtype.kind == 'f':
                 data = data.astype(np.dtype(f"<c{2*data.dtype.itemsize}"))
 
@@ -223,15 +226,13 @@ class Waveform:
         return output
 
     @staticmethod
-    def complex_to_sample(input: Union[complex, np.ndarray], 
+    def complex_to_sample(input: Union[np.ndarray], 
                         output: Union[np.ndarray, np.dtype] = None, 
                         scale: Union[float, complex] = 1.0) -> np.ndarray:
         """
-        Pack the complex floating-point data in an array into integer samples.
+        Convert complex floating-point data into integer samples and pack into
+        an array in the order expected by the RF tiles.
         """
-        if isinstance(input, complex):
-            input = np.complex128(input)
-
         if not hasattr(input, "dtype"):
             raise TypeError(f"Input must have a dtype (input is of type"
                             f" {type(input)})")
@@ -439,6 +440,19 @@ class FixedChannelWaveform(ChannelWaveform):
             "fixed": True,
             "blank": self.blank
         }]
+    
+    def set(self, data, scale: complex = 1.0):
+
+        # If the user specifies a scipy signal envelope but a zero-length window,
+        # we can't just call set() on the data argument because Waveform.set() will 
+        # try to populate the nominally-constant four-wide memory block of the fixed
+        # waveform with non-constant values. therefore, only use pass through the 
+        # data argument if the user provided a number or a direct array
+        # Otherwise, just pass in a constant 1 so that the constant will be broadcasted
+        # during the assignment
+        set_data = data if np.isscalar(data) or isinstance(data, np.ndarray) else np.float64(1.0)
+        super().set(set_data, scale)
+
                 
 class WindowedConstantWaveform(ChannelWaveform):
     """
