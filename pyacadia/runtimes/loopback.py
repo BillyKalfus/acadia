@@ -21,17 +21,19 @@ class LoopbackRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create the waveforms that we'll need 
-        stimulus = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
-        capture_data = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
-                
+        stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
+        capture_waveform = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
+        
         # Create a record group for saving captured data
         self.data.add_group("traces", uniform=True)
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
+            capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+
             with a.channel_synchronizer():
-                a.schedule_waveform(stimulus)
-                a.stream(capture_channel, capture_data)
+                a.schedule_waveform(stimulus_waveform)
+                a.stream(capture_stream, capture_waveform)
 
         # Compile the sequence
         acadia.compile(sequence)
@@ -44,14 +46,14 @@ class LoopbackRuntime(Runtime):
         capture_channel.set(**self.capture["datapath"])
 
         # Populate the stimulus with data
-        stimulus.set(**self.stimulus["signal"])
+        stimulus_waveform.set(**self.stimulus["signal"])
 
         # Assemble and load the program
         acadia.load(*acadia.assemble())
 
         for i in range(self.iterations):
             acadia.run(assemble=False)
-            self.data["traces"].write(capture_data.array)
+            self.data["traces"].write(capture_waveform.array)
             self.data.serve()
 
 
@@ -135,7 +137,7 @@ if __name__ == "__main__":
         
         "signal": {
             "data": ("scipy", "hann"),
-            "scale": 0.05
+            "scale": 0.2
         }
     }
 
@@ -145,18 +147,18 @@ if __name__ == "__main__":
         "datapath": {
             "nyquist_zone": 2,
             "nco": {
-                "frequency": -4.6e9
+                "frequency": 4.6e9
             }
         },
 
         "waveform": {
-            "length": 4e-6,
-            "decimation": 1,
+            "length": 4.096e-6,
+            "decimation": 0,
             "region": "plddr"
         }
     }
 
-    rt = LoopbackRuntime(stimulus, capture, iterations=10000)
+    rt = LoopbackRuntime(stimulus, capture, iterations=100000)
     rt.deploy("192.168.2.69", "loopback", files=[__file__], log_debug=True, remove_remote_directory=False, remote_directory="/home/root/%y%m%d_%H%M%S")    
     rt.display()
     

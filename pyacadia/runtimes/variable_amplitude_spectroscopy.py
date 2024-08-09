@@ -22,15 +22,16 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         stimulus_channel = acadia.channel(self.stimulus["channel"])
         capture_channel = acadia.channel(self.capture["channel"])
 
-        stimulus = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
-        capture_data = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
+        capture_waveform = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
                 
         self.data.add_group("traces", uniform=True)
                 
         def sequence(a: Acadia):
+            capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
             with a.channel_synchronizer():
-                a.schedule_waveform(stimulus)
-                a.stream(capture_channel, capture_data)
+                a.schedule_waveform(stimulus_waveform)
+                a.stream(capture_stream, capture_waveform)
 
         acadia.compile(sequence)
         acadia.attach()
@@ -47,7 +48,7 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         for i in range(self.iterations):
             for amplitude in self.amplitudes:
                 self.stimulus["signal"]["scale"] = amplitude
-                stimulus.set(**self.stimulus["signal"])
+                stimulus_waveform.set(**self.stimulus["signal"])
                 for frequency in self.frequencies:
                     # Synchronously set the modulation frequencies and reset phases
                     acadia.update_nco_frequency(stimulus_channel, frequency=frequency)
@@ -58,7 +59,7 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
 
                     # Run the sequencer                        
                     acadia.run(assemble=False)
-                    self.data["traces"].write(capture_data.array)
+                    self.data["traces"].write(capture_waveform.array)
             
                     # Check whether the host wants data
                     self.data.serve()

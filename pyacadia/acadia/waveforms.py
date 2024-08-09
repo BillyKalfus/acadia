@@ -244,32 +244,38 @@ class Waveform:
         float_type = np.dtype(f"<f{input.dtype.itemsize // 2}")
 
         if output is None:
-            output = np.dtype("<i2")
-
-        if isinstance(output, np.dtype):
-            output = np.empty((*input.shape, 2), dtype=output)
+            output = np.empty((*input.shape, 2), dtype=np.int16)
 
         if not hasattr(output, "dtype"):
             raise TypeError(f"Output must have a dtype (output is of type"
                             f" {type(output)})")
 
-        if output.dtype.kind != "i":
-            raise TypeError(f"Output dtype must be integer (found kind"
-                            f" {output.dtype.kind})")
+        if output.dtype.kind != "i" or output.dtype.itemsize != 2:
+            raise TypeError(f"Output dtype must be 16-bit integer (found dtype"
+                            f" {output.dtype})")
         
         if output.shape[-1] != 2:
             raise ValueError(f"Converting complex values to samples requires"
                              f" the last dimension to correspond to quadrature"
                              f" (received shape {output.shape})")
         
-        scale *= 2**(output.dtype.itemsize*8 - 1) - 1 
 
         # If the input is a complex scalar, this will keep the outer length-1
         # dimension and allow the rounding to broadcast correctly
-        scaled = np.multiply(input, scale).view(float_type).reshape(-1, 2)
-        np.rint(scaled, 
-                out=np.reshape(output, (-1,2)), 
-                casting="unsafe")
+
+        # shift range from [-1,1) to [0,2)
+        shifted = np.reshape(input*scale, -1) + 1 + 1j
+
+        # scale range from [0,2) to [0, 2^14 - 1] and round
+        scaled = np.multiply(shifted, (2**14-1)/2.0).view(float_type)
+        rounded = np.rint(scaled).astype(np.int16, casting="unsafe")
+
+        # shift range from [0, 2^14-1] to [-2^13, 2^13-1]
+        rounded -= 2**13
+
+        # left shift for packing 14-bit samples into 16-bit words
+        rounded <<= 2
+        np.copyto(np.reshape(output, -1), rounded)
         return output
         
 class ChannelWaveform(Waveform):
