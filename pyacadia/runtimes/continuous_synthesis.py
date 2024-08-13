@@ -37,8 +37,8 @@ class ContinuousSynthesisRuntime(Runtime):
         acadia.run(block=False)
         time.sleep(self.length)
         acadia.sequencer_halt()
-    
-if __name__ == "__main__":
+
+def run():
     stimulus: dict = {
         "channel": "DAC1",
 
@@ -64,4 +64,9 @@ if __name__ == "__main__":
     rt = ContinuousSynthesisRuntime(stimulus)
     rt.deploy("10.66.3.214", "continuous_synthesis", files=[__file__])    
     rt.display()
+
+    return rt
+    
+if __name__ == "__main__":
+    rt = run()
     

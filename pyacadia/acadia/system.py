@@ -1527,11 +1527,10 @@ class Acadia:
     
     def create_waveform(self,
                         channel: Channel,
-                        length: Union[int, float, np.ndarray],
-                        fixed: bool = False,
+                        length: Union[int, float, np.ndarray] = 0.0,
+                        fixed_length: Union[float, Symbol, Operation] = 0.0,
                         blank: bool = False,
                         decimation: Union[int, None] = 1,
-                        flat_top_length: Union[float, None] = None,
                         region: Union[Channel, ManagedMemory, None, str] = None) -> ChannelWaveform:
         """
         Allocate a waveform. This function allows for a few different signatures; 
@@ -1549,22 +1548,21 @@ class Acadia:
         - If a numpy array with an integer dtype, the argument is assumed to
             contain the sample data that will eventually be stored in the 
             waveform. The last dimension of the array must be of length 2.
+            Note that this does not store the sample data in any way; it just
+            uses it to determine the shape of aray must be allocated.
             
         :param channel: Channel for the waveform
         :type channel: :class:`Channel`
         :param length: The length of the waveform; see description above
         :type length: float, np.ndarray[complex], np.ndarray[float]
-        :param fixed: Create a fixed waveform. If ``True``, ``region`` must
-            be ``None``
-        :type fixed: bool
+        :param fixed_length: The length of the fixed part of the waveform, if any.
+        :type fixed_length: float, Symbol, or Operation
         :param blank: Create a blank waveform. If ``True``, ``region`` must
             be ``None``
         :type blank: bool
         :param decimation: Decimation for ADC waveforms
         :type decimation: int
-        :param flat_top_length: If nonzero, the length of time in seconds of
-            a constant region to add in the middle of the pulse
-        :type flat_top_length: float
+        :param region: The memory region in which the Waveform is stored
         """
         #################################################################
         # Start by validating the provided parameters
@@ -1584,13 +1582,9 @@ class Acadia:
         if channel.is_dac and decimation != 1:
             raise ValueError(f"Decimation must be 1 for DAC channels.")
         
-        if fixed or blank:
-            if region is not None:
-                raise TypeError(f"Cannot specify region for fixed or blank waveforms")
-            if flat_top_length is not None:
-                raise ValueError(f"Cannot have a flat top length for fixed or blank waveforms")
-            if decimation != 1:
-                raise ValueError(f"Cannot have decimation for fixed or blank waveforms")
+        if decimation != 1 and decimation % 4 != 0:
+            raise ValueError(f"Decimation may only be 1 or a multiple of 4"
+                             f" (received {decimation})")
 
         # Figure out how many samples will be processed at the channel interface
         # All channels use 32 bits per sample at the FIFO, so we can infer this directly from the tile config        
@@ -1599,31 +1593,28 @@ class Acadia:
                 region = channel.memory_type
                 channel_samples_per_cycle = self._firmware["rfdc"]["dac"]["channel_interface_width"][channel.num] // 32
             else:
-                if not fixed:
-                    raise TypeError(f"Allocating a waveform for ADC{channel.num}"
+                raise TypeError(f"Allocating a waveform for ADC{channel.num}"
                                     f" requires specifying a memory region.")
-                channel_samples_per_cycle = self._firmware["rfdc"]["adc"]["channel_interface_width"][channel.num] // 32
         else:
             # The source is either an ADC channel or a location in memory
             # ADC channels must have interface widths equal to the path width
             channel_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
 
-        if flat_top_length is not None:
-            if isinstance(flat_top_length, float) and flat_top_length > 0:
-                flat_top_length_cycles_float = flat_top_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
-                flat_top_length_cycles = round(flat_top_length_cycles_float)
-                if flat_top_length_cycles != round(flat_top_length_cycles_float, 1):
-                    raise ValueError(f"Flat top length {flat_top_length} seconds"
-                                        f" is not an integer number of cycles"
-                                        f" ({flat_top_length_cycles_float} cycles)")
-            elif isinstance(flat_top_length, (Symbol, Operation)):
-                logger.warning(f"Unable to validate symbolic flat top length")
-                flat_top_length_cycles_float = flat_top_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
-                flat_top_length_cycles = Operation(round, flat_top_length_cycles_float)
-            else:
-                raise TypeError(f"Unable to use flat top length {flat_top_length}")
+        if isinstance(fixed_length, float) and fixed_length >= 0:
+            fixed_length_cycles_float = fixed_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            fixed_length_cycles = round(fixed_length_cycles_float)
+            if fixed_length_cycles != round(fixed_length_cycles_float, 1):
+                raise ValueError(f"Fixed length {fixed_length} seconds"
+                                    f" is not an integer number of cycles"
+                                    f" ({fixed_length_cycles_float} cycles)")
+        elif isinstance(fixed_length, (Symbol, Operation)):
+            logger.warning(f"Unable to validate symbolic fixed length;"
+                           " please ensure that the value provided is an"
+                           " integer number of cycles after being rounded.")
+            fixed_length_cycles_float = fixed_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            fixed_length_cycles = Operation(round, fixed_length_cycles_float)
         else:
-            flat_top_length_cycles = None
+            raise TypeError(f"Unable to use fixed length {fixed_length}")
 
         #######################################################################
         # Given a length, determine the number of samples in the array
@@ -1651,7 +1642,20 @@ class Acadia:
             
             length_samples = input_length_samples // decimation
 
+            if length_cycles == 0:
+                if fixed_length_cycles == 0:
+                    raise ValueError("Waveform has total length zero.")
+                
+                logger.debug(f"Allocating FixedWaveform for channel {channel} with"
+                             f" a length of {fixed_length_cycles} cycles"
+                             f" ({channel_samples_per_cycle} samples per cycle)")
+                
+                return FixedChannelWaveform(channel, fixed_length_cycles, blank)
+                
             if decimation != 1:
+                if fixed_length_cycles != 0:
+                    raise ValueError("Fixed length must be zero for decimated waveforms.")
+                
                 logger.debug(f"Allocating DecimatedChannelWaveform for channel {channel} with"
                           f" {length_samples} samples, which corresponds to"
                           f" {length_cycles} cycles ({channel_samples_per_cycle}"
@@ -1659,20 +1663,18 @@ class Acadia:
                 
                 return DecimatedChannelWaveform(channel, length_samples, decimation, region)
             
-            if fixed:
-                logger.debug(f"Allocating FixedWaveform for channel {channel} of length"
-                             f" {length_cycles} cycles")
+            if fixed_length_cycles != 0:
+                # we have non-zero length and fixed length
+                if region is not None and not (channel.is_dac and region is channel.memory_type):
+                    raise ValueError(f"Region may not be specified for WindowedConstantWaveform objects.")
                 
-                return FixedChannelWaveform(channel, length_cycles, blank)
-            
-            if flat_top_length is not None:
                 logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
-                             f" a flat top length of {flat_top_length_cycles} cycles and"
+                             f" a fixed length of {fixed_length_cycles} cycles and"
                             f" {length_samples} window samples, which corresponds to"
                             f" {length_cycles} cycles ({channel_samples_per_cycle}"
                             f" samples per cycle)")
                 
-                return WindowedConstantWaveform(channel, length_samples, flat_top_length_cycles)
+                return WindowedConstantWaveform(channel, length_samples, fixed_length_cycles)
 
             logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
                             f" {length_samples} samples, which corresponds to"
@@ -1680,20 +1682,6 @@ class Acadia:
                             f" samples per cycle)")
             
             return ChannelWaveform(channel, length_samples, resource_allocator=region)
-
-        elif isinstance(length, (Symbol, Operation)):
-            if not fixed:
-                raise ValueError("Symbolic length values may only be provided"
-                                 " for fixed waveforms.")
-            
-            logger.warning(f"Unable to validate symbolic length for fixed waveform")
-            length_cycles_float = length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
-            length_cycles = Operation(round, length_cycles_float)
-
-            logger.debug(f"Allocating FixedWaveform for channel {channel} of length"
-                             f" {length_cycles} cycles")
-
-            return FixedChannelWaveform(channel, length_cycles, blank)
 
         elif isinstance(length, np.ndarray):
             # When decimation is not 1, we don't have enough information to determine
@@ -1733,14 +1721,14 @@ class Acadia:
                 
                 return FixedChannelWaveform(channel, length_cycles, blank)
             
-            if flat_top_length is not None:
+            if fixed_length is not None:
                 logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
-                             f" a flat top length of {flat_top_length_cycles} cycles and"
+                             f" a flat top length of {fixed_length_cycles} cycles and"
                             f" {length_samples} window samples, which corresponds to"
                             f" {length_cycles} cycles ({channel_samples_per_cycle}"
                             f" samples per cycle)")
                 
-                return WindowedConstantWaveform(channel, length_samples, flat_top_length_cycles)
+                return WindowedConstantWaveform(channel, length_samples, fixed_length_cycles)
 
             logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
                             f" {length_samples} samples, which corresponds to"
@@ -1943,7 +1931,7 @@ class Acadia:
     @requires_sequencer
     def configure_cmacc(self, 
                         src,
-                        kernel: Union[Waveform, float, None],
+                        kernel: Union[Waveform, float, None] = None,
                         write_mode: Union[str, None] = "upper", 
                         last_only: bool = True, 
                         reset_fifo: bool = False,
@@ -2024,7 +2012,7 @@ class Acadia:
                      f" 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
 
-        return kernel
+        return configuration, kernel
         
     
     @requires_sequencer

@@ -1,6 +1,7 @@
 from typing import Union
 from functools import reduce
 from operator import mul
+import logging
 
 import numpy as np
 from .channel import Channel
@@ -11,6 +12,8 @@ __all__ = ["Waveform",
            "DecimatedChannelWaveform",
            "FixedChannelWaveform", 
            "WindowedConstantWaveform"]
+
+logger = logging.getLogger("acadia")
 
 class Waveform:
     """
@@ -58,15 +61,13 @@ class Waveform:
     @property
     def __array_interface__(self) -> dict:
         if self._resource is None:
-            raise MemoryError(f"Attempted access of non-attached memory {self}"
-                              f" with resource {self._resource}")
+            raise MemoryError(f"Attempted access of unattached memory {self}")
         return self._resource.__array_interface__
     
     @property
     def byte_address(self) -> int:
         if self._resource is None:
-            raise MemoryError(f"Attempted access of non-attached memory {self}"
-                              f" with resource {self._resource}")
+            raise MemoryError(f"Attempted access of unattached memory {self}")
         return self._resource.byte_address
     
     @property
@@ -83,9 +84,8 @@ class Waveform:
     
     @property
     def array(self) -> np.ndarray:
-        if self._resource is None or self._resource.__array_interface__ is None:
-            raise MemoryError(f"Attempted access of non-attached memory {self}"
-                                f" with resource {self._resource}")
+        if self._resource is None:
+            raise MemoryError(f"Attempted access of unattached memory {self}")
         
         a = self._resource.__array_interface__
         return np.frombuffer(a["data"], 
@@ -158,10 +158,16 @@ class Waveform:
                 
                 # copyto will automatically broadcast if necessary
                 np.copyto(self.array, data)
+                return data
 
             elif data.dtype.kind == 'c':
                 # complex_to_sample will automatically take care of broadcasting a scalar
-                Waveform.complex_to_sample(data, output=self.array, scale=scale)
+                if self._resource is None:
+                    logger.warning(f"Attempted to set data of non-attached"
+                                   f" memory with array of shape {data.shape}.")
+                    return Waveform.complex_to_sample(data, scale=scale)
+                
+                return Waveform.complex_to_sample(data, output=self.array, scale=scale)
             else:
                 raise TypeError(f"Unable to convert waveform data of dtype"
                                 f" {data.dtype} to complex.")
@@ -174,7 +180,11 @@ class Waveform:
             
             if data[0] == "scipy":
                 from scipy.signal.windows import get_window
-                self.set(get_window(data[1], self.size), scale=scale)
+
+                logger.warning(f"Attempted to set data of non-attached"
+                                   f" memory with scipy window `{data[1]}`.")
+
+                return self.set(get_window(data[1], self.size), scale=scale)
             else:
                 raise ValueError(f"Unrecognized signature specifier for"
                                  f" waveform set: {data[0]}")
@@ -187,7 +197,7 @@ class Waveform:
                             output: Union[np.ndarray, np.dtype, None] = None, 
                             scale: Union[float, complex] = 1.0) -> np.ndarray:
         """
-        Convert sample data from its integer quadratures to complex 
+        Convert sample data from its signed integer quadratures to complex 
         floating-point numbers. Inputs must have an innermost dimension of 
         size 2.
         """
@@ -216,7 +226,7 @@ class Waveform:
         
         float_type = np.dtype(f"<f{output.dtype.itemsize // 2}")
 
-        scale *= 2**(input.dtype.itemsize*8 - 1) - 1 
+        scale *= 2**(input.dtype.itemsize*8 - 1) 
         np.multiply(np.reshape(input, -1), 
                     1/scale, 
                     out=np.reshape(output, -1).view(float_type), 
@@ -231,11 +241,16 @@ class Waveform:
                         scale: Union[float, complex] = 1.0) -> np.ndarray:
         """
         Convert complex floating-point data into integer samples and pack into
-        an array in the order expected by the RF tiles.
+        an array in the order expected by the RF tiles. The input 
+        floating-point values must be in the range [-1, 1). Note that the upper
+        bound is exclusive; the last valid value in the range is 1 - 2^-13.
         """
         if not hasattr(input, "dtype"):
             raise TypeError(f"Input must have a dtype (input is of type"
                             f" {type(input)})")
+        
+        if input.dtype.kind == "f":
+            input = input.astype(f"<c{input.dtype.itemsize*2}")
         
         if input.dtype.kind != "c":
             raise TypeError(f"Input dtype must be complex (found kind"
@@ -275,7 +290,7 @@ class Waveform:
 
         # left shift for packing 14-bit samples into 16-bit words
         rounded <<= 2
-        np.copyto(np.reshape(output, -1), rounded)
+        np.copyto(np.reshape(output, (-1, 2)), rounded)
         return output
         
 class ChannelWaveform(Waveform):

@@ -11,6 +11,7 @@ class LoopbackRuntime(Runtime):
     stimulus: dict
     capture: dict
     iterations: int
+    plot: bool = True
         
     def main(self):     
         from acadia.system import Acadia
@@ -59,26 +60,29 @@ class LoopbackRuntime(Runtime):
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
-        from IPython.core.getipython import get_ipython
-        get_ipython().run_line_magic("matplotlib", "widget")
+        if self.plot:
+            from IPython.core.getipython import get_ipython
+            get_ipython().run_line_magic("matplotlib", "widget")
 
-        from acadia.processing import DynamicLine
-        import matplotlib.pyplot as plt
+            from acadia.processing import DynamicLine
+            import matplotlib.pyplot as plt
+
+            self.fig,self.ax = plt.subplots(1,1, figsize=(3,3))
+            self.fig.tight_layout()
+
+            self.line_re = DynamicLine(self.ax, ".-")
+            self.line_im = DynamicLine(self.ax, ".-")
+            self.ax.set_xlabel("Time [s]")
+            self.ax.set_ylabel("Signal Amplitude [arb. V]")
+            self.ax.grid()
+
+            self.time_axis = None
+
         from tqdm.notebook import tqdm
-
-        self.fig,self.ax = plt.subplots(1,1, figsize=(3,3))
-        self.fig.tight_layout()
-
-        self.line_re = DynamicLine(self.ax, ".-")
-        self.line_im = DynamicLine(self.ax, ".-")
-        self.ax.set_xlabel("Time [s]")
-        self.ax.set_ylabel("Signal Amplitude [arb. V]")
-        self.ax.grid()
-
         self.progress_bar = tqdm(desc="Iterations", dynamic_ncols=True, total=self.iterations)
         self.previous_completed_iterations = 0
 
-        self.time_axis = None
+        
         # self.fig.show()
 
     def update(self):
@@ -106,19 +110,19 @@ class LoopbackRuntime(Runtime):
         # Because the record group is uniform, when we get the records from the
         # group, they are stacked into a single array of shape (iterations, samples, 2)
         self.trace_summed = np.sum(self.data["traces"].records(), axis=0)
-        self.line_re.update(self.time_axis, self.trace_summed[:,0])
-        self.line_im.update(self.time_axis, self.trace_summed[:,1])
-        self.ax.relim()
-        self.ax.autoscale(tight=True)
-        self.fig.canvas.draw_idle()
+        
+        if self.plot:
+            self.line_re.update(self.time_axis, self.trace_summed[:,0])
+            self.line_im.update(self.time_axis, self.trace_summed[:,1])
+            self.ax.relim()
+            self.ax.autoscale(tight=True)
+            self.fig.canvas.draw_idle()
 
     def finalize(self):
         super().finalize()
         self.progress_bar.close()
 
-
-if __name__ == "__main__":    
-
+def run(plot=True):   
     stimulus: dict = {
         "channel": "DAC1",
 
@@ -153,12 +157,17 @@ if __name__ == "__main__":
 
         "waveform": {
             "length": 4.096e-6,
-            "decimation": 0,
+            "decimation": 4,
             "region": "plddr"
         }
     }
 
-    rt = LoopbackRuntime(stimulus, capture, iterations=100000)
+    rt = LoopbackRuntime(stimulus, capture, plot=plot, iterations=100000)
     rt.deploy("192.168.2.69", "loopback", files=[__file__], log_debug=True, remove_remote_directory=False, remote_directory="/home/root/%y%m%d_%H%M%S")    
     rt.display()
+
+    return rt
+
+if __name__ == "__main__":
+    rt = run()
     
