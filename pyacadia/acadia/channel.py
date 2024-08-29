@@ -464,7 +464,7 @@ class Channel:
                        self.converter_type(), self.tile, self.block,
                        self.RFDC_def("XRFDC_EVENT_CRSE_DLY"))
         
-    def frequency_to_nco_tuning_word(self, frequency):
+    def frequency_to_nco_tuning_word(self, frequency, sampling_frequency):
         """
         Converts a frequency in Hz to the nearest integer tuning word for the
         NCO.
@@ -474,16 +474,9 @@ class Channel:
         :return: NCO tuning word corresponding to the provided frequency
         :rtype: int
         """
-        
-        if not hasattr(self, "analog_sample_frequency"):
-            raise ValueError("Channel missing sample rate information."
-                             " Make sure that `configure_rfdc` was"
-                             " called on the `Acadia` instance that produced"
-                             " this `Channel` object.")
             
         # If we're using IMR mode, the NCO frequency is half
-        nco_sample_frequency = self.analog_sample_frequency if self.analog_sample_frequency < 7e9 else self.analog_sample_frequency / 2
-            
+        nco_sample_frequency = sampling_frequency if sampling_frequency < 7e9 else sampling_frequency / 2
         word = frequency / nco_sample_frequency
         
         # Move the desired NCO frequency into the proper Nyquist zone

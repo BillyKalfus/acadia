@@ -281,18 +281,19 @@ class Runtime:
         self._stop_flag.set()
 
         try: 
+            # We don't need to remove the remote directory here since the 
+            # event loop will do that for us when it's exiting
             self._event_loop.join(timeout=timeout)
             self._set_status("Stopped")
         except:
             logging.error("Event loop thread did not join, manually stopping")
             self.kill()
+            if self._remove_remote_directory:
+                self._set_status("Removing remote directory (after killing process)")
+                run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
 
         if self._displayed:
             self._stop_button.disabled = True
-
-        if self._remove_remote_directory:
-            self._set_status("Removing remote directory")
-            run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
 
     def kill(self):
         """
@@ -408,7 +409,7 @@ class Runtime:
                 else:
                     raise TypeError(f"Unable to prepare file: {file}")
                 
-                shutil.copy2(src, dst)
+                shutil.copyfile(src, dst)
 
         # Create the run file
         with open(os.path.join(self.local_directory, "run.py"), "w") as runfile:

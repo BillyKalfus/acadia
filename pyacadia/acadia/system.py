@@ -790,7 +790,7 @@ class Acadia:
         :type frequency: float
         """     
         
-        frequency_word = channel.frequency_to_nco_tuning_word(frequency)
+        frequency_word = channel.frequency_to_nco_tuning_word(frequency, channel.analog_sample_frequency)
         
         proc = Processor.active_processor()
         if proc is None:
@@ -1102,12 +1102,49 @@ class Acadia:
 
         pass
 
-    def configure_sampling_rates(self, **kwargs):
+    def set_dac_sampling_rates(self, tile0=6e9, tile1=6e9, tile2=6e9, tile3=6e9):
         """
         Configure the sampling rates of the RFDC tiles. Each keyword argument
         must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
         """
-        pass
+        import pyxrfdc as xrfdc
+        settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
+        Channel.RFDC_call_checked("GetClkDistribution", settings)
+
+        frequencies = (tile0, tile1, tile2, tile3)
+        for idx, rate in enumerate(frequencies):
+            settings.DAC[idx].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+            settings.DAC[idx].PLLEnable = True
+            settings.DAC[idx].PLLSettings.Enabled = True
+            settings.DAC[idx].PLLSettings.RefClkFreq = 250
+            settings.DAC[idx].PLLSettings.SampleRate = round(rate / 1e6) # Needs to be in MHz
+
+        settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+        settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
+        settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+
+        Channel.RFDC_call_checked("SetClkDistribution", settings)
+
+        for idx,channel in enumerate(self._DAC_channels):
+            channel.analog_sample_frequency = frequencies[idx // 4]
+
+    def get_dac_sampling_rates(self):
+        """
+        Configure the sampling rates of the RFDC tiles. Each keyword argument
+        must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
+        """
+        import pyxrfdc as xrfdc
+        settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
+        Channel.RFDC_call_checked("GetClkDistribution", settings)
+        clock_status = self.get_clock_status()
+
+        frequencies = [clock_status[f"DAC{i}_sampling_frequency"] for i in range(4)]
+        for idx,channel in enumerate(self._DAC_channels):
+            channel.analog_sample_frequency = frequencies[idx // 4]
+
+        return frequencies
+
 
     def pulse_sysref(self, count=None):
         """
@@ -1616,13 +1653,11 @@ class Acadia:
         else:
             raise TypeError(f"Unable to use fixed length {fixed_length}")
 
-        #######################################################################
-        # Given a length, determine the number of samples in the array
+        # Given a length and fixed length, determine the number of samples in the array
         # For ADC channels, this is the number of samples after decimation
         # Also determine the number of cycles that the operation will run for
         # These are always directly proportional, but the proportionality
         # constant is dependent on the decimation and the type of channel
-        #######################################################################
         if isinstance(length, float):
             # Length of waveforms in seconds
             length_cycles_float = length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
@@ -1641,47 +1676,6 @@ class Acadia:
                                  f" is not a multiple of the decimation ({decimation}) ")
             
             length_samples = input_length_samples // decimation
-
-            if length_cycles == 0:
-                if fixed_length_cycles == 0:
-                    raise ValueError("Waveform has total length zero.")
-                
-                logger.debug(f"Allocating FixedWaveform for channel {channel} with"
-                             f" a length of {fixed_length_cycles} cycles"
-                             f" ({channel_samples_per_cycle} samples per cycle)")
-                
-                return FixedChannelWaveform(channel, fixed_length_cycles, blank)
-                
-            if decimation != 1:
-                if fixed_length_cycles != 0:
-                    raise ValueError("Fixed length must be zero for decimated waveforms.")
-                
-                logger.debug(f"Allocating DecimatedChannelWaveform for channel {channel} with"
-                          f" {length_samples} samples, which corresponds to"
-                          f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                          f" samples per cycle, decimation {decimation})")
-                
-                return DecimatedChannelWaveform(channel, length_samples, decimation, region)
-            
-            if fixed_length_cycles != 0:
-                # we have non-zero length and fixed length
-                if region is not None and not (channel.is_dac and region is channel.memory_type):
-                    raise ValueError(f"Region may not be specified for WindowedConstantWaveform objects.")
-                
-                logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
-                             f" a fixed length of {fixed_length_cycles} cycles and"
-                            f" {length_samples} window samples, which corresponds to"
-                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                            f" samples per cycle)")
-                
-                return WindowedConstantWaveform(channel, length_samples, fixed_length_cycles)
-
-            logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
-                            f" {length_samples} samples, which corresponds to"
-                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                            f" samples per cycle)")
-            
-            return ChannelWaveform(channel, length_samples, resource_allocator=region)
 
         elif isinstance(length, np.ndarray):
             # When decimation is not 1, we don't have enough information to determine
@@ -1715,31 +1709,55 @@ class Acadia:
         
             length_cycles = length_samples // channel_samples_per_cycle
 
-            if fixed:
-                logger.debug(f"Allocating FixedWaveform for channel {channel} of length"
-                             f" {length_cycles} cycles")
-                
-                return FixedChannelWaveform(channel, length_cycles, blank)
-            
-            if fixed_length is not None:
-                logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
-                             f" a flat top length of {fixed_length_cycles} cycles and"
-                            f" {length_samples} window samples, which corresponds to"
-                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                            f" samples per cycle)")
-                
-                return WindowedConstantWaveform(channel, length_samples, fixed_length_cycles)
-
-            logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
-                            f" {length_samples} samples, which corresponds to"
-                            f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                            f" samples per cycle)")
-            
-            return ChannelWaveform(channel, length_samples, resource_allocator=region)
-            
         else:
             raise TypeError(f"Waveform length must be specified as a float"
                             f" or as a numpy array (received {type(length)}).")
+        
+        # We now know how many cycles the waveform will take and how many
+        # samples it will consume, so create the appropriate waveform.
+        if blank:
+            return FixedChannelWaveform(channel, length_cycles + fixed_length_cycles, True) 
+        
+        if length_cycles == 0:
+            if fixed_length_cycles == 0:
+                raise ValueError("Waveform has total length zero.")
+            
+            logger.debug(f"Allocating FixedWaveform for channel {channel} with"
+                            f" a length of {fixed_length_cycles} cycles"
+                            f" ({channel_samples_per_cycle} samples per cycle)")
+            
+            return FixedChannelWaveform(channel, fixed_length_cycles)
+            
+        if decimation != 1:
+            if fixed_length_cycles != 0:
+                raise ValueError("Fixed length must be zero for decimated waveforms.")
+            
+            logger.debug(f"Allocating DecimatedChannelWaveform for channel {channel} with"
+                        f" {length_samples} samples, which corresponds to"
+                        f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                        f" samples per cycle, decimation {decimation})")
+            
+            return DecimatedChannelWaveform(channel, length_samples, decimation, region)
+        
+        if fixed_length_cycles != 0:
+            # we have non-zero length and fixed length
+            if region is not None and not (channel.is_dac and region is channel.memory_type):
+                raise ValueError(f"Region may not be specified for WindowedConstantWaveform objects.")
+            
+            logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
+                            f" a fixed length of {fixed_length_cycles} cycles and"
+                        f" {length_samples} window samples, which corresponds to"
+                        f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                        f" samples per cycle)")
+            
+            return WindowedConstantWaveform(channel, length_samples, fixed_length_cycles)
+
+        logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
+                        f" {length_samples} samples, which corresponds to"
+                        f" {length_cycles} cycles ({channel_samples_per_cycle}"
+                        f" samples per cycle)")
+        
+        return ChannelWaveform(channel, length_samples, resource_allocator=region)
         
     @requires_sequencer
     def schedule_waveform(self, waveform: ChannelWaveform):

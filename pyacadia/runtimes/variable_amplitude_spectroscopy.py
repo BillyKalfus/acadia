@@ -24,17 +24,21 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
+        capture_waveform = acadia.create_waveform(capture_channel, decimation=0, **self.capture["waveform"]) 
                 
         self.data.add_group("traces", uniform=True)
                 
         def sequence(a: Acadia):
-            capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+            capture_stream, kernel = acadia.configure_cmacc(capture_channel, reset_fifo=True)
+            acadia.cmacc_load(capture_stream, 0)
+
             with a.channel_synchronizer():
                 a.schedule_waveform(stimulus_waveform)
                 a.stream(capture_stream, capture_waveform)
 
-        acadia.compile(sequence)
+            return kernel
+
+        kernel = acadia.compile(sequence)
         acadia.attach()
         acadia.align_tile_latencies()
 
@@ -43,6 +47,9 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         stimulus_channel.set_nco(update_source="sysref")
         capture_channel.set(**self.capture["datapath"])
         capture_channel.set_nco(update_source="sysref")
+
+        import numpy as np
+        kernel.set(np.float64(0.1))
 
         acadia.load(*acadia.assemble())
 
@@ -191,13 +198,13 @@ def run(plot=True):
         "channel": "DAC4",
 
         "datapath": {
-            "vop": 12000,
+            "vop": 4000,
             "nyquist_zone": 2
         },
 
         "waveform": {
             "length": 128e-9,
-            "flat_top_length": 100e-6
+            "fixed_length": 10e-6
         },
         
         "signal": {
@@ -214,14 +221,13 @@ def run(plot=True):
         },
 
         "waveform": {
-            "length": 100e-6,
-            "decimation": 0,
+            "length": 10e-6,
             "region": "plddr"
         }
     }
 
-    frequencies = np.linspace(9.01e9, 9.02e9, 101)
-    amplitudes = np.linspace(0.1, 1, 10)
+    frequencies = np.linspace(9.15e9, 9.25e9, 201)
+    amplitudes = np.linspace(0.2, 0.8, 4)
 
     # Run the program on the target
     rt = VariableAmplitudeSpectroscopyRuntime(

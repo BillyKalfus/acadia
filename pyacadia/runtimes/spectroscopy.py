@@ -204,39 +204,39 @@ def run(plot=True):
     import numpy as np
 
     stimulus: dict = {
-        "channel": "DAC1",
+        "channel": "DAC4",
 
         "datapath": {
-            "vop": 12000,
+            "vop": 4000,
             "nyquist_zone": 2
         },
 
         "waveform": {
             "length": 128e-9,
-            "fixed_length": 100e-6
+            "fixed_length": 2e-6
         },
         
         "signal": {
             "data": ("scipy", "hann"),
-            "scale": 0.25
+            "scale": 0.8
         }
     }
     
     capture: dict = {
-        "channel": "ADC1",
+        "channel": "ADC4",
 
         "datapath": {
             "nyquist_zone": 1
         },
 
         "waveform": {
-            "length": 100e-6,
+            "length": 2.5e-6,
             "decimation": 0,
             "region": "plddr"
         }
     }
 
-    frequencies = np.linspace(9.012e9, 9.018e9, 121)
+    frequencies = np.linspace(9.15e9, 9.25e9, 201)
     
     # Run the program on the target
     rt = SpectroscopyRuntime(frequencies=frequencies,
@@ -244,7 +244,7 @@ def run(plot=True):
                             capture=capture,
                             iterations=1000,
                             plot=plot,
-                            electrical_delay=60e-9)
+                            electrical_delay=108e-9)
     rt.deploy("192.168.2.70", "spectroscopy", files=[__file__])    
     rt.display()
 

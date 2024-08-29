@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from spectroscopy import SpectroscopyRuntime
 
 class CMACCSpectroscopyRuntime(SpectroscopyRuntime):
@@ -71,46 +69,48 @@ def run(plot=True):
     import numpy as np
 
     stimulus: dict = {
-        "channel": "DAC1",
+        "channel": "DAC4",
 
         "datapath": {
-            "vop": 12000,
+            "vop": 4000,
             "nyquist_zone": 2
         },
 
         "waveform": {
-            "length": 0.0,
-            "fixed_length": 1e-6
+            "length": 64e-9,
+            "fixed_length": 2e-6
         },
         
         "signal": {
             "data": ("scipy", "hann"),
-            "scale": 0.01
+            "scale": 0.8
         }
     }
     
     capture: dict = {
-        "channel": "ADC1",
+        "channel": "ADC4",
 
         "datapath": {
             "nyquist_zone": 2
         },
 
         "waveform": {
-            "length": 4e-6,
+            "length": 2.56e-6,
             "region": "plddr"
         }
     }
-    
+
+    frequencies = np.linspace(9.15e9, 9.25e9, 201)
+
     # Run the program on the target
     rt = CMACCSpectroscopyRuntime(
-        frequencies=np.linspace(4.55e9, 4.9e9, 101),
+        frequencies=frequencies,
         stimulus=stimulus,
         capture=capture,
         iterations=1000,
         plot=plot,
-        electrical_delay=0e-9)
-    rt.deploy("192.168.2.69", "cmacc_spectroscopy", files=[__file__, "spectroscopy.py"])    
+        electrical_delay=108e-9)
+    rt.deploy("192.168.2.70", "cmacc_spectroscopy", files=[__file__, "spectroscopy.py"])    
     rt.display()
     
     return rt

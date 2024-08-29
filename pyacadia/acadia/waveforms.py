@@ -281,16 +281,13 @@ class Waveform:
         # shift range from [-1,1) to [0,2)
         shifted = np.reshape(input*scale, -1) + 1 + 1j
 
-        # scale range from [0,2) to [0, 2^14 - 1] and round
-        scaled = np.multiply(shifted, (2**14-1)/2.0).view(float_type)
+        # scale range from [0,2) to [0, 2^16 - 1] and round
+        scaled = np.multiply(shifted, (2**16-1)/2.0).view(float_type)
         rounded = np.rint(scaled).astype(np.int16, casting="unsafe")
 
-        # shift range from [0, 2^14-1] to [-2^13, 2^13-1]
-        rounded -= 2**13
-
-        # left shift for packing 14-bit samples into 16-bit words
-        rounded <<= 2
-        np.copyto(np.reshape(output, (-1, 2)), rounded)
+        # shift range from [0, 2^16-1] to [-2^15, 2^15-1]
+        rounded -= 2**15
+        np.copyto(np.reshape(output, (-1, 2)), np.reshape(rounded, (-1, 2)))
         return output
         
 class ChannelWaveform(Waveform):
