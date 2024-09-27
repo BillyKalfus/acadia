@@ -144,42 +144,40 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         self.frequencies_progress_bar.update(completed_frequencies - self.frequencies_previous)
 
         # Only continue processing data if we have at least one complete iteration
-        if completed_iterations == 0:
-            return
-        
-        valid_traces = completed_iterations*len(self.frequencies)*len(self.amplitudes)
-        data = self.data["traces"].records()[:valid_traces, ...]
+        if completed_iterations != 0:
+            valid_traces = completed_iterations*len(self.frequencies)*len(self.amplitudes)
+            data = self.data["traces"].records()[:valid_traces, ...]
 
-        samples_per_trace = data.shape[-2]
-        data_reshaped = data.reshape(-1, len(self.amplitudes), len(self.frequencies), samples_per_trace, 2)
-        new_data = data_reshaped[self.iterations_previous:, :, :, :, :]
+            samples_per_trace = data.shape[-2]
+            data_reshaped = data.reshape(-1, len(self.amplitudes), len(self.frequencies), samples_per_trace, 2)
+            new_data = data_reshaped[self.iterations_previous:, :, :, :, :]
 
-        # Sum the new data and then add it to the aggregated array of trace data
-        new_data_summed = np.sum(new_data, axis=(0,3), keepdims=False)
-        if self.data_summed is None:
-            self.data_summed = new_data_summed
-        else:
-            self.data_summed += new_data_summed
-        
-        for idx,amp in enumerate(self.amplitudes):
-            scale = amp / completed_iterations
-            self.data_complex[idx, :] = Waveform.sample_to_complex(self.data_summed[idx, :], scale=scale)
-
-        # Apply the electrical delay
-        self.data_complex *= self.electrical_delay_phases
-
-        if self.plot:
+            # Sum the new data and then add it to the aggregated array of trace data
+            new_data_summed = np.sum(new_data, axis=(0,3), keepdims=False)
+            if self.data_summed is None:
+                self.data_summed = new_data_summed
+            else:
+                self.data_summed += new_data_summed
+            
             for idx,amp in enumerate(self.amplitudes):
-                # Don't rescale the plot when updating the lines, we'll do it all at once when we have the full plot
-                self.lines_mag[idx].update(self.frequencies, np.abs(self.data_complex[idx,:]), rescale_axis=False)
-                self.lines_phase[idx].update(self.frequencies, np.angle(self.data_complex[idx,:]), rescale_axis=False)
+                scale = amp / completed_iterations
+                self.data_complex[idx, :] = Waveform.sample_to_complex(self.data_summed[idx, :], scale=scale)
 
-            # Rescale axes and redraw plot
-            self.lines_mag[0]._ax.relim()
-            self.lines_mag[0]._ax.autoscale(tight=True)
-            self.lines_phase[0]._ax.relim()
-            self.lines_phase[0]._ax.autoscale(tight=True)
-            self.fig.canvas.draw_idle()
+            # Apply the electrical delay
+            self.data_complex *= self.electrical_delay_phases
+
+            if self.plot:
+                for idx,amp in enumerate(self.amplitudes):
+                    # Don't rescale the plot when updating the lines, we'll do it all at once when we have the full plot
+                    self.lines_mag[idx].update(self.frequencies, np.abs(self.data_complex[idx,:]), rescale_axis=False)
+                    self.lines_phase[idx].update(self.frequencies, np.angle(self.data_complex[idx,:]), rescale_axis=False)
+
+                # Rescale axes and redraw plot
+                self.lines_mag[0]._ax.relim()
+                self.lines_mag[0]._ax.autoscale(tight=True)
+                self.lines_phase[0]._ax.relim()
+                self.lines_phase[0]._ax.autoscale(tight=True)
+                self.fig.canvas.draw_idle()
 
         self.iterations_previous = completed_iterations
         self.amplitudes_previous = completed_amplitudes

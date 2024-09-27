@@ -17,6 +17,9 @@ from typing import get_type_hints, Union
 from abc import ABC, abstractmethod
 from itertools import chain
 from functools import reduce
+import logging
+
+logger = logging.getLogger("acadia")
 
 class Operable(type):
     """
@@ -46,9 +49,7 @@ class Operable(type):
                          "and": operator.and_, 
                          "or": operator.or_, 
                          "xor": operator.xor}
-                         
-    # MISC_OPERATORS = ["len", "iter", "getitem", "setitem", "call", "contains"]
-    
+                             
     AUGMENTING_OPERATORS = {"iadd": operator.iadd, 
                             "isub": operator.isub, 
                             "imul": operator.imul, 
@@ -120,8 +121,7 @@ class Operable(type):
             
         else:
             supported_operators = chain(Operable.NUMERIC_OPERATORS, 
-                                        # Operable.MISC_OPERATORS,
-                                        Operable.AUGMENTING_OPERATORS,
+                                        # Operable.AUGMENTING_OPERATORS,
                                         Operable.RIGHTHAND_OPERATORS)
 
         for op in supported_operators:
@@ -196,7 +196,9 @@ class Operation(metaclass=Operable):
                 solved_kwargs[key] = value.value()
             else:
                 solved_kwargs[key] = value
-                
+
+        logger.debug(f"Computing operation {self._op} with args {solved_args}"
+                     f" and kwargs {solved_kwargs}")    
         return self._op(*solved_args, **solved_kwargs)
     
     def resolveable(self):
@@ -230,7 +232,7 @@ class Operation(metaclass=Operable):
         self._args = (clone, *args)
         self._kwargs = {}
     
-class Symbol(metaclass=Operable, operators=Operable.NUMERIC_OPERATORS):
+class Symbol(metaclass=Operable):
     """
     A symbolic variable with a value not necessarily known at the point of 
     instantiation, but to which a reference should be maintained. A canonical 
@@ -359,6 +361,9 @@ class ManagedResource(type):
                 if instance._released and instance._resource_size >= resource_size:
                     instance._released = False
                     instance._resource_size = resource_size
+                    logger.debug(f"Reused instance ID {instance._resource_id}"
+                                 f" for resource of type {type_self} and of"
+                                 f" size {resource_size}")
                     return instance
 
             raise ValueError(f"Unable to allocate resource;"
@@ -385,7 +390,12 @@ class ManagedResource(type):
                 # need some extra resource IDs that will be unused
                 extra = type_self._alignment - alignment_remainder
                 type_self._allocation_index += instance._resource_size + extra
-                
+            logger.debug(f"Allocated resource of type {type_self} with"
+                         f" resource ID {instance._resource_id} and of size"
+                         f" {instance._resource_size}")
+        else:
+            logger.debug(f"Created untracked instance of type {type_self}"
+                         f" at allocation index {type_self._allocation_index}") 
         return instance
     
     def usage(type_self):
@@ -545,6 +555,13 @@ class ManagedMemory(ManagedResource):
         instance.shape = shape
         instance.index = instance._resource_id // itemsize
         instance.__array_interface__ = None
+
+        logger.debug(f"Allocated memory with itemsize {instance.itemsize},"
+                     f" itemkind {instance.itemkind},"
+                     f" nbytes {instance._resource_size},"
+                     f" size {instance.size},"
+                     f" shape {instance.shape},"
+                     f" index {instance.index}")
 
         return instance
     
@@ -843,6 +860,7 @@ class Processor:
             # for the class, we just want to cache it in the instruction set
             instruction_name = compilation_func.__name__ if name is None else name
             cls._instruction_set[instruction_name] = compilation_func
+            logger.debug(f"Registered instruction {instruction_name} for class {cls}")
             return cls.make_instruction_func(instruction_name)
             
         return named_instruction_decorator
@@ -925,6 +943,8 @@ class Processor:
                 self._inline_block_start_next = True
             else:
                 self._block_start_next = True
+
+        logger.debug(f"Started block at instruction {len(self.Instruction.instances)}")
             
     def block_end(self, inline=False, next_instruction=False):
         """
@@ -949,6 +969,8 @@ class Processor:
                 self.Instruction.instances[-1].inline_block_end = True
             else:
                 self.Instruction.instances[-1].block_end = True
+
+        logger.debug(f"Ended block at instruction {len(self.Instruction.instances)}")
         
     def compile_all(self, overwrite=False):
         """
@@ -1153,7 +1175,8 @@ class Synchronizer:
             return synchronized_func
         return make
     
-    def __init__(self, allow_standalone=False):
+    def __init__(self, name, allow_standalone=False):
+        self._name = name
         self._active = False
         self._allow_standalone = allow_standalone
 
@@ -1165,7 +1188,10 @@ class Synchronizer:
         self._kwargs = kwargs
         return self
     
-    def add(self, obj):        
+    def add(self, obj):
+        logger.debug(f"Synchronized event added function {obj['function']}"
+                     f" notified synchronizer {self._name}"
+                     f" with arguments: {obj}")        
         if self._active:            
             self._calls.append(obj)
         elif self._allow_standalone:
@@ -1177,12 +1203,15 @@ class Synchronizer:
              
     def __enter__(self):
         if self._active:
-            raise ValueError("Synchronizer is already active.")
+            raise ValueError(f"Synchronizer {self._name}"
+                             f" is already active.")
+        logging.debug(f"Entered synchronizer {self._name}")
         self._active = True
         self._calls = []
         return self
                 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        logging.debug(f"Exited synchronizer {self._name}")
         self._active = False
         self._kwargs = {}
 

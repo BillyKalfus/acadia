@@ -115,7 +115,7 @@ class Runtime:
             target_address: str, 
             runtime_class: str,
             files: list[str] = None,
-            remote_directory: str = "/run/media/mmcblk0p1/%y%m%d_%H%M%S", 
+            remote_directory: str = "/tmp/%y%m%d_%H%M%S", 
             local_directory: str = "/tmp/%y%m%d_%H%M%S",
             username: str = "root", 
             log_debug: bool = False,

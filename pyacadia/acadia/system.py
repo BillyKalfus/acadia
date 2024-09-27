@@ -118,13 +118,13 @@ class DMASynchronizer(Synchronizer):
                     total_channel_lengths[channel] = 0
                     for length in lengths:
                         logger.debug(f"\t{length}")
-                        total_channel_lengths[channel] += length
+                        total_channel_lengths[channel] = total_channel_lengths[channel] + length
 
                 # Reset channel lengths so that when we hit the next barrier 
                 # (if any) it only adds delays after this one
                 channel_lengths = {}
                 logger.debug(f"Total channel lengths at barrier insertion time: {total_channel_lengths}")
-                barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
+                barrier_time = Operation(builtins.max, list(total_channel_lengths.values()))
                                                 
                 # Then, for every channel that has some action after the 
                 # barrier, we need to add a blank so that the next action 
@@ -530,8 +530,8 @@ class Acadia:
         self._active_sequencer = None
 
         # Create a synchronizer for channel actions
-        self.channel_synchronizer = DMASynchronizer(allow_standalone=True)
-        self.tile_synchronizer = RFDCSynchronizer(allow_standalone=True)
+        self.channel_synchronizer = DMASynchronizer(name="channel_synchronizer", allow_standalone=True)
+        self.tile_synchronizer = RFDCSynchronizer(name="tile_synchronizer", allow_standalone=True)
         
         self._create_dmas()
         self._create_cache()

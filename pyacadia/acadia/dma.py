@@ -31,13 +31,14 @@ class Descriptor:
     def assemble(self):
         tmp = 0
         
-        if hasattr(self.trace_length, "value"):
-            trace_length = self.trace_length.value()
-        elif isinstance(self.trace_length, int):
-            trace_length = self.trace_length
-        else:
-            raise TypeError(f"Trace length must be an int or a Symbol"
-                            f" containing an int; received {self.trace_length}")
+        trace_length = self.trace_length
+        while isinstance(trace_length, (Symbol, Operation)):
+            trace_length = trace_length.value()
+            
+        if not isinstance(trace_length, int):
+            raise TypeError(f"Trace length must be an int or a Symbol or"
+                            f" Operation with an int value; received"
+                            f" {trace_length}")
         
         if trace_length < 0:
             raise ValueError(f"Received negative trace length for descriptor {self}")

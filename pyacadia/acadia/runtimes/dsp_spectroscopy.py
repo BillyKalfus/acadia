@@ -3,16 +3,15 @@ from dataclasses import dataclass
 from acadia.runtime import Runtime
 
 @dataclass
-class SpectroscopyRuntime(Runtime):
+class DSPSpectroscopyRuntime(Runtime):
     """
-    A :class:`Runtime` subclass for performing swept spectroscopy.
+    A :class:`Runtime` subclass for performing swept spectroscopy using the DSP
+    modules (instead of the CMACC).
     """
     # Iterable of frequencies
     frequencies: list 
-    
     stimulus: dict
     capture: dict
-
     plot: bool = False
     
     # If ``0``, automatically fit phase data to 
@@ -137,60 +136,58 @@ class SpectroscopyRuntime(Runtime):
         self.frequencies_progress_bar.update(completed_frequencies - self.frequencies_previous)
 
         # Only continue processing data if we have at least one complete iteration
-        if completed_iterations == 0:
-            return
+        if completed_iterations != 0:
+            valid_traces = completed_iterations*len(self.frequencies)
+            data = self.data["traces"].records()[:valid_traces, ...]
+
+            # Get the collection of data and reshape it so that the axes index as: 
+            # (iteration, frequency, sample time, sample quadrature)
+            samples_per_trace = data.shape[-2]
+            data_reshaped = data.reshape(-1, len(self.frequencies), samples_per_trace, 2)
+            
+            # Slice the data so that we have an array containing only the traces
+            # we didn't have the last time update() was called
+            self.new_data = data_reshaped[self.iterations_previous:, :, :, :]
+
+            # Sum the new data and then add it to the aggregated array of trace data
+            new_data_summed = np.sum(self.new_data, axis=(0,2), keepdims=False)
+            if self.data_summed is None:
+                self.data_summed = new_data_summed
+            else:
+                self.data_summed += new_data_summed
+
+            # Convert the summed sample data to a complex number and choose 
+            # the scale so that we turn the sum into a mean
+            # Simultaneously, choose the scale so that the result is independent
+            # of amplitude
+            scale = (self.stimulus["signal"]["scale"] / completed_iterations)
+            self.data_complex = Waveform.sample_to_complex(self.data_summed, scale=scale)
+
+            # Apply the electrical delay
+            self.data_complex *= self.electrical_delay_phases
+
+            # We now have a 1D array of the amplitudes as a function of frequency,
+            # so we can do whatever processing we want
+            mags = np.abs(self.data_complex)
+            phases = np.unwrap(np.angle(self.data_complex))
+
+            # Update the fit
+            def model(freqs, delay, phi0):
+                return 2*np.pi*freqs*delay + phi0
         
-        valid_traces = completed_iterations*len(self.frequencies)
-        data = self.data["traces"].records()[:valid_traces, ...]
+            popt,pcov = curve_fit(model, self.frequencies, phases)
+            self.fit_electrical_delay = popt[0]
+            self.fit_electrical_delay_error = pcov[0,0]
 
-        # Get the collection of data and reshape it so that the axes index as: 
-        # (iteration, frequency, sample time, sample quadrature)
-        samples_per_trace = data.shape[-2]
-        data_reshaped = data.reshape(-1, len(self.frequencies), samples_per_trace, 2)
-        
-        # Slice the data so that we have an array containing only the traces
-        # we didn't have the last time update() was called
-        self.new_data = data_reshaped[self.iterations_previous:, :, :, :]
+            # Update the plot itself
+            if self.plot:
+                self.line_mag.update(self.frequencies, mags)
+                self.line_phase.update(self.frequencies, phases)
+                self._delay_label.value = f"Fit electrical delay = {round(self.fit_electrical_delay*1e9,1)} ns +/- {round(self.fit_electrical_delay_error*1e12)} ps"
+                self.fig.canvas.draw_idle()
 
-        # Sum the new data and then add it to the aggregated array of trace data
-        new_data_summed = np.sum(self.new_data, axis=(0,2), keepdims=False)
-        if self.data_summed is None:
-            self.data_summed = new_data_summed
-        else:
-            self.data_summed += new_data_summed
-
-        # Convert the summed sample data to a complex number and choose 
-        # the scale so that we turn the sum into a mean
-        # Simultaneously, choose the scale so that the result is independent
-        # of amplitude
-        scale = (self.stimulus["signal"]["scale"] / completed_iterations)
-        self.data_complex = Waveform.sample_to_complex(self.data_summed, scale=scale)
-
-        # Apply the electrical delay
-        self.data_complex *= self.electrical_delay_phases
-
-        # We now have a 1D array of the amplitudes as a function of frequency,
-        # so we can do whatever processing we want
-        mags = np.abs(self.data_complex)
-        phases = np.unwrap(np.angle(self.data_complex))
-
-        # Update the fit
-        def model(freqs, delay, phi0):
-            return 2*np.pi*freqs*delay + phi0
-    
-        popt,pcov = curve_fit(model, self.frequencies, phases)
-        self.fit_electrical_delay = popt[0]
-        self.fit_electrical_delay_error = pcov[0,0]
-
-        # Update the plot itself
-        if self.plot:
-            self.line_mag.update(self.frequencies, mags)
-            self.line_phase.update(self.frequencies, phases)
-            self._delay_label.value = f"Fit electrical delay = {round(self.fit_electrical_delay*1e9,1)} ns +/- {round(self.fit_electrical_delay_error*1e12)} ps"
-            self.fig.canvas.draw_idle()
-
-        # Save the data
-        self.data.save(self.local_directory)
+            # Save the data
+            self.data.save(self.local_directory)
 
         self.iterations_previous = completed_iterations
         self.frequencies_previous = completed_frequencies

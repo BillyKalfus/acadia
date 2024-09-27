@@ -19,7 +19,7 @@ data_module = Extension("acadia.data",
                         # extra_link_args=['-O0', '-g'])
                 
 setup (name = 'pyacadia',
-       version = '5.0',
+       version = '5.1',
        description = 'Assembler, hardware interface, and firmware management for the Acadia quantum control system.',
        author = 'William Kalfus',
        author_email = 'william.kalfus@yale.edu',
