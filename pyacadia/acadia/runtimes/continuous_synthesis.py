@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from acadia.runtime import Runtime
+from acadia import Runtime
 
 @dataclass
 class ContinuousSynthesisRuntime(Runtime):
@@ -13,7 +13,7 @@ class ContinuousSynthesisRuntime(Runtime):
     length: float = 5
 
     def main(self):        
-        from acadia.system import Acadia
+        from acadia import Acadia
         import time
         
         acadia = Acadia()
@@ -62,7 +62,7 @@ def run():
     }
 
     rt = ContinuousSynthesisRuntime(stimulus)
-    rt.deploy("10.66.3.214", "continuous_synthesis", files=[__file__])    
+    rt.deploy("10.66.3.214")    
     rt.display()
 
     return rt

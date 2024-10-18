@@ -59,6 +59,8 @@
 *
 ******************************************************************************/
 
+#ifdef __aarch64__
+
 /***************************** Include Files *********************************/
 
 #include "xrfdc.h"
@@ -959,3 +961,5 @@ void XRFdc_SetStatusHandler(XRFdc *InstancePtr, void *CallBackRef, XRFdc_StatusH
 }
 
 /** @} */
+
+#endif

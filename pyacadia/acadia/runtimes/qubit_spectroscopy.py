@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from acadia.runtime import Runtime
+from acadia import Runtime
 
 @dataclass
 class QubitSpectroscopyRuntime(Runtime):
@@ -19,7 +19,7 @@ class QubitSpectroscopyRuntime(Runtime):
     iterations: int = 10
         
     def main(self):        
-        from acadia.system import Acadia
+        from acadia import Acadia, DataManager
         
         acadia = Acadia()
         qubit_channel = acadia.channel(self.qubit_stimulus["channel"])
@@ -83,39 +83,49 @@ class QubitSpectroscopyRuntime(Runtime):
 
                     acadia.run(assemble=False)
                     self.data["traces"].write(readout_capture_waveform.array)            
-                    self.data.serve()
+                    
+                    # Check whether the host wants data or whether it's requesting a hangup
+                    if self.data.serve() == DataManager.serve_hangup():
+                        # The client will not be requesting any more data, close the data manager
+                        # and exit
+                        self.data.disconnect()
+                        return
+        
+        self.final_serve()
 
     def initialize(self):
         if self.plot:
-            # Set the matplotlib backend to one which we can actually update
-            from IPython.core.getipython import get_ipython
-            get_ipython().run_line_magic("matplotlib", "widget")
-
             from acadia.processing import DynamicLine
             import matplotlib.pyplot as plt
             import matplotlib.colors as colors
             import matplotlib.cm as cm
 
-            self.fig,ax = plt.subplots(1,2, figsize=(7,3))
-            self.fig.subplots_adjust(hspace=0.35)
-            self.fig.tight_layout()
+            self.fig = plt.figure(figsize=(8,3))
+            gs = self.fig.add_gridspec(1, 2, bottom=0.2, right=0.8, width_ratios=[20, 1], wspace=0.1)
+            gs_plots = gs[0].subgridspec(1, 2, wspace=0.35)
+            ax_mag, ax_phase = gs_plots.subplots()
+            ax_colorbar = self.fig.add_subplot(gs[1])
 
             # Create a plot for the spectral magnitude
             cmap = plt.get_cmap("Spectral")
             norm = colors.Normalize(self.readout_frequencies[0], self.readout_frequencies[-1])
             sm = cm.ScalarMappable(norm, cmap)
-            self.lines_mag = [DynamicLine(ax[0], ".-", c=sm.to_rgba(a)) for a in self.readout_frequencies]
-            ax[0].set_xlabel("Qubit Frequency [MHz]")
-            ax[0].set_ylabel("Magnitude [arb. V*s]")
-            ax[0].set_title("Spectral Magnitude")
-            ax[0].grid()
+            
+            self.lines_mag = [DynamicLine(ax_mag, ".-", c=sm.to_rgba(a)) for a in self.readout_frequencies]
+            ax_mag.set_xlabel("Qubit Frequency [MHz]")
+            ax_mag.set_ylabel("Magnitude [arb. V*s]")
+            ax_mag.set_title("Spectral Magnitude")
+            ax_mag.grid()
             
             # Create a plot for the spectral phase
-            self.lines_phase = [DynamicLine(ax[1], ".-", c=sm.to_rgba(a)) for a in self.readout_frequencies]
-            ax[1].set_xlabel("Frequency [MHz]")
-            ax[1].set_ylabel("Phase [rad.]")
-            ax[1].set_title("Spectral Phase")
-            ax[1].grid()
+            self.lines_phase = [DynamicLine(ax_phase, ".-", c=sm.to_rgba(a)) for a in self.readout_frequencies]
+            ax_phase.set_xlabel("Frequency [MHz]")
+            ax_phase.set_ylabel("Phase [rad.]")
+            ax_phase.set_title("Spectral Phase")
+            ax_phase.grid()
+
+            # Create a colorbar
+            self.fig.colorbar(sm, cax=ax_colorbar, label="Readout Frequency")
 
             from tqdm.notebook import tqdm
 
@@ -266,7 +276,13 @@ def run(plot=True):
         iterations=1000,
         readout_electrical_delay=108e-9,
         plot=plot)
-    rt.deploy("192.168.2.70", "qubit_spectroscopy", files=[__file__])    
+    
+    if plot:
+        # Set the matplotlib backend to one which we can actually update
+        from IPython.core.getipython import get_ipython
+        get_ipython().run_line_magic("matplotlib", "widget")
+
+    rt.deploy("192.168.2.70")    
     rt.display()
     
     return rt

@@ -17,7 +17,8 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
     iterations: int = 10
         
     def main(self):        
-        from acadia.system import Acadia
+        from itertools import product
+        from acadia import Acadia, DataManager
         
         acadia = Acadia()
         stimulus_channel = acadia.channel(self.stimulus["channel"])
@@ -53,62 +54,61 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
 
         acadia.load(*acadia.assemble())
 
-        for i in range(self.iterations):
-            for amplitude in self.amplitudes:
-                self.stimulus["signal"]["scale"] = amplitude
-                stimulus_waveform.set(**self.stimulus["signal"])
-                for frequency in self.frequencies:
-                    # Synchronously set the modulation frequencies and reset phases
-                    acadia.update_nco_frequency(stimulus_channel, frequency=frequency)
-                    acadia.update_nco_frequency(capture_channel, frequency=-frequency)
-                    acadia.reset_nco_phase(stimulus_channel)
-                    acadia.reset_nco_phase(capture_channel)
-                    acadia.update_ncos_synchronized()
+        for i,amplitude in product(range(self.iterations), self.amplitudes):
+            self.stimulus["signal"]["scale"] = amplitude
+            stimulus_waveform.set(**self.stimulus["signal"])
+            for frequency in self.frequencies:
+                # Synchronously set the modulation frequencies and reset phases
+                acadia.update_nco_frequency(stimulus_channel, frequency=frequency)
+                acadia.update_nco_frequency(capture_channel, frequency=-frequency)
+                acadia.reset_nco_phase(stimulus_channel)
+                acadia.reset_nco_phase(capture_channel)
+                acadia.update_ncos_synchronized()
 
-                    # Run the sequencer                        
-                    acadia.run(assemble=False)
-                    self.data["traces"].write(capture_waveform.array)
-            
-                    # Check whether the host wants data
-                    self.data.serve()
+                acadia.run(assemble=False)
+                self.data["traces"].write(capture_waveform.array)
+        
+                if self.data.serve() == DataManager.serve_hangup():
+                    self.data.disconnect()
+                    return
+        
+        self.final_serve()
 
     def initialize(self):
         if self.plot:
-            # Set the matplotlib backend to one which we can actually update
-            from IPython.core.getipython import get_ipython
-            get_ipython().run_line_magic("matplotlib", "widget")
-
-            from acadia.processing import DynamicLine
+            from acadia import DynamicLine
             import matplotlib.pyplot as plt
             import matplotlib.colors as colors
             import matplotlib.cm as cm
-            from IPython.display import display
-            from ipywidgets import Label
 
-            self.fig,ax = plt.subplots(1,2, figsize=(7,3))
-            self.fig.subplots_adjust(hspace=0.35)
-            self.fig.tight_layout()
+            self.fig = plt.figure(figsize=(8,3))
+            gs = self.fig.add_gridspec(1, 2, bottom=0.2, right=0.8, width_ratios=[20, 1], wspace=0.1)
+            gs_plots = gs[0].subgridspec(1, 2, wspace=0.35)
+            ax_mag, ax_phase = gs_plots.subplots()
+            ax_colorbar = self.fig.add_subplot(gs[1])
 
-            # Create a plot for the spectral magnitude
+            # Create some colors for the various amplitudes
             cmap = plt.get_cmap("Spectral")
             norm = colors.LogNorm(self.amplitudes[0], self.amplitudes[-1])
             sm = cm.ScalarMappable(norm, cmap)
-            self.lines_mag = [DynamicLine(ax[0], ".-", c=sm.to_rgba(a)) for a in self.amplitudes]
-            ax[0].set_xlabel("Frequency [MHz]")
-            ax[0].set_ylabel("Magnitude [arb. V*s]")
-            ax[0].set_title("Spectral Magnitude")
-            ax[0].grid()
+
+            # Create a plot for the spectral magnitude
+            self.lines_mag = [DynamicLine(ax_mag, ".-", c=sm.to_rgba(a)) for a in self.amplitudes]
+            ax_mag.set_xlabel("Frequency [MHz]")
+            ax_mag.set_ylabel("Magnitude [arb. V*s]")
+            ax_mag.set_title("Spectral Magnitude")
+            ax_mag.grid()
             
             # Create a plot for the spectral phase
-            self.lines_phase = [DynamicLine(ax[1], ".-", c=sm.to_rgba(a)) for a in self.amplitudes]
-            ax[1].set_xlabel("Frequency [MHz]")
-            ax[1].set_ylabel("Phase [rad.]")
-            ax[1].set_title("Spectral Phase")
-            ax[1].grid()
+            self.lines_phase = [DynamicLine(ax_phase, ".-", c=sm.to_rgba(a)) for a in self.amplitudes]
+            ax_phase.set_xlabel("Frequency [MHz]")
+            ax_phase.set_ylabel("Phase [rad.]")
+            ax_phase.set_title("Spectral Phase")
+            ax_phase.grid()
 
-            # Create a label for displaying the electrical delay
-            self._delay_label = Label("Electrical delay: ")
-            display(self._delay_label)
+            # Create a colorbar
+            self.fig.colorbar(sm, cax=ax_colorbar, label="Amplitude")
+
             from tqdm.notebook import tqdm
 
         else:
@@ -236,7 +236,13 @@ def run(plot=True):
         iterations=1000,
         plot=plot,
         electrical_delay=108e-9)
-    rt.deploy("192.168.2.70", "variable_amplitude_spectroscopy", files=[__file__])    
+    
+    if plot:
+        # Set the matplotlib backend to one which we can actually update
+        from IPython.core.getipython import get_ipython
+        get_ipython().run_line_magic("matplotlib", "widget")
+
+    rt.deploy("192.168.2.70")    
     rt.display()
     
     return rt

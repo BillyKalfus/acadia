@@ -22,7 +22,6 @@ static int PyRecordGroup_init(PyObject* self, PyObject* args, PyObject* kwargs)
 {
     // Update defaults from arguments
     RecordGroup* self_rg;
-    size_t cache_chunk_size = 1024*1024;
     static char* kwlist[] = {"uniform", NULL};
     
     self_rg = (RecordGroup*)malloc(sizeof(RecordGroup));
@@ -325,7 +324,7 @@ static const char DATAMANAGER_SERVE_DOCSTRING[] = "Create and/or update a server
     " other client DataManagers may connect for synchronization. If the server has"
     " already been created, check for any client requests and respond accordingly.\n\n"
     ":return: 0 if data was successfully sent to a connected client,"
-    " 1 if there's no client, 2 if there's a client but they didn't request anything";
+    " 1 if there's no client, 2 if there's a client but they didn't request anything, 3 if the client requested a hangup";
 static PyObject* PyDataManager_serve(PyObject* self)
 {
     DataManager* self_dm = ((DataManagerObject*)self)->dm;
@@ -386,7 +385,6 @@ static PyObject* PyDataManager_add_group(PyObject* self, PyObject* args, PyObjec
     unsigned char clear_before_load = 1;
     unsigned char clear_after_save = 0;
     unsigned char clear_after_send = 1;
-    unsigned char flags = 0;
 
     static char* kwlist[] = {"name", "uniform", "clear_before_sync", "clear_before_load", "clear_after_save", "clear_after_send", NULL};
     if(!PyArg_ParseTupleAndKeywords(args, kwargs, "s|bbbbb", kwlist, 
@@ -652,6 +650,26 @@ static PyObject* PyDataManager_groups(PyObject* self)
     return d;
 }
 
+static PyObject* PyDataManager_serve_sent(PyObject* self) 
+{
+    return PyLong_FromLong(DATAMANAGER_SERVE_SENT);
+}
+
+static PyObject* PyDataManager_serve_no_client(PyObject* self) 
+{
+    return PyLong_FromLong(DATAMANAGER_SERVE_NO_CLIENT);
+}
+
+static PyObject* PyDataManager_serve_no_request(PyObject* self) 
+{
+    return PyLong_FromLong(DATAMANAGER_SERVE_NO_REQUEST);
+}
+
+static PyObject* PyDataManager_serve_hangup(PyObject* self) 
+{
+    return PyLong_FromLong(DATAMANAGER_SERVE_HANGUP);
+}
+
 static PyMemberDef PyDataManagerMembers[] = {
     {"num_groups", T_ULONG, offsetof(DataManagerObject, dm) + offsetof(DataManager, num_groups), 0},
     {NULL}
@@ -670,6 +688,10 @@ static PyMethodDef PyDataManagerMethods[] = {
     {"is_finalized", (PyCFunction)PyDataManager_is_finalized, METH_NOARGS, ""},
     {"is_connected", (PyCFunction)PyDataManager_is_connected, METH_NOARGS, ""},
     {"groups", (PyCFunction)PyDataManager_groups, METH_NOARGS, ""},
+    {"serve_sent", (PyCFunction)PyDataManager_serve_sent, METH_STATIC | METH_NOARGS, ""},
+    {"serve_no_client", (PyCFunction)PyDataManager_serve_no_client, METH_STATIC | METH_NOARGS, ""},
+    {"serve_no_request", (PyCFunction)PyDataManager_serve_no_request, METH_STATIC | METH_NOARGS, ""},
+    {"serve_hangup", (PyCFunction)PyDataManager_serve_hangup, METH_STATIC | METH_NOARGS, ""},
     {NULL, NULL, 0, NULL}
 };
 
@@ -751,6 +773,39 @@ PyInit_data(void)
     // Add DataManager to the module
     Py_INCREF(&DataManagerTypeObject);
     if (PyModule_AddObject(module, "DataManager", (PyObject*) &DataManagerTypeObject) < 0) 
+    {
+        Py_DECREF(&RecordGroupTypeObject);
+        Py_DECREF(&DataManagerTypeObject);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    // Add constants to the module
+    if (PyModule_AddIntConstant(module, "SERVE_SENT", DATAMANAGER_SERVE_SENT) < 0) 
+    {
+        Py_DECREF(&RecordGroupTypeObject);
+        Py_DECREF(&DataManagerTypeObject);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    if (PyModule_AddIntConstant(module, "SERVE_NO_CLIENT", DATAMANAGER_SERVE_NO_CLIENT) < 0) 
+    {
+        Py_DECREF(&RecordGroupTypeObject);
+        Py_DECREF(&DataManagerTypeObject);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    if (PyModule_AddIntConstant(module, "SERVE_NO_REQUEST", DATAMANAGER_SERVE_NO_REQUEST) < 0) 
+    {
+        Py_DECREF(&RecordGroupTypeObject);
+        Py_DECREF(&DataManagerTypeObject);
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    if (PyModule_AddIntConstant(module, "SERVE_HANGUP", DATAMANAGER_SERVE_HANGUP) < 0) 
     {
         Py_DECREF(&RecordGroupTypeObject);
         Py_DECREF(&DataManagerTypeObject);

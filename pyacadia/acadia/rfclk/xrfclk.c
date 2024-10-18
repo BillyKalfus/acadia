@@ -30,6 +30,8 @@
 *
 ******************************************************************************/
 
+#ifdef __aarch64__
+
 #include "xrfclk.h"
 
 #include <stdlib.h>
@@ -1222,3 +1224,5 @@ u32 XRFClk_ConfigOutputDividerAndMUXOnLMK(u32 PortId, u32 DCLKoutX_DIV,
 	return ret;
 }
 /** @} */
+
+#endif

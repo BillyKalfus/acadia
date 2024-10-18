@@ -85,6 +85,8 @@
 *
 ******************************************************************************/
 
+#ifdef __aarch64__
+
 /***************************** Include Files *********************************/
 #include "xrfdc.h"
 
@@ -2065,3 +2067,5 @@ static u8 XRFdc_TypeTile2DistTile(XRFdc *InstancePtr, u32 Type, u32 Tile_Id)
 	return DistTile;
 }
 /** @} */
+
+#endif

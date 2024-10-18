@@ -68,15 +68,15 @@ ssh root@$IP killall screen
 echo "Deploying acadia..."
 scp -q -r "$(dirname $SCRIPT)/../../acadia" root@$IP:/home/root
 
+echo "Cleaning remote build files..."
+ssh root@$IP rm -r /home/root/acadia/pyacadia/{build,pyacadia.egg-info}
+
 echo "Installing pyacadia..."
-ssh root@$IP pip3 install --force-reinstall acadia/pyacadia > /dev/null
+ssh root@$IP pip3 install --force-reinstall acadia/pyacadia
 
 if $INITIAL; then
-    echo "Installing drivers..."
-    ssh root@$IP python3 acadia/pyacadia/install_drivers.py > /dev/null
-
     echo "Configuring clocks and resetting RAM..."
-    ssh root@$IP 'python3 -c "from acadia.system import Acadia; a = Acadia(); a.attach(); a.configure_clocks(); a.reset_plddr0(); a.reset_plddr1();"'
+    ssh root@$IP 'python3 -c "from acadia import Acadia; a = Acadia(); a.attach(); a.configure_clocks(); a.reset_plddr0(); a.reset_plddr1();"'
 
     echo "Deploying scipy..."
     wget https://files.pythonhosted.org/packages/c0/66/9cd4f501dd5ea03e4a4572ecd874936d0da296bd04d1c45ae1a4a75d9c3a/scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
@@ -85,19 +85,19 @@ if $INITIAL; then
     ssh root@$IP "pip3 install scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
     rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
 
-    echo "Deploying LLVM..."
-    wget https://files.pythonhosted.org/packages/0a/e4/bce6de49651ade8b47ed7f0c11366d49be1bad752fbf16c1976545d389fa/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
-    scp llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
-    echo "Installing LLVM..."
-    ssh root@$IP "pip3 install llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
-    rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+    # echo "Deploying LLVM..."
+    # wget https://files.pythonhosted.org/packages/0a/e4/bce6de49651ade8b47ed7f0c11366d49be1bad752fbf16c1976545d389fa/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+    # scp llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+    # echo "Installing LLVM..."
+    # ssh root@$IP "pip3 install llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    # rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
 
-    echo "Deploying numba..."
-    wget https://github.com/numba/numba/archive/refs/tags/0.59.1.tar.gz
-    scp -r 0.59.1.tar.gz root@$IP:/home/root
-    echo "Installing numba..."
-    ssh root@$IP "tar -xzf 0.59.1.tar.gz; pip3 install ./numba-0.59.1; rm -r numba-0.59.1; rm 0.59.1.tar.gz"
-    rm 0.59.1.tar.gz
+    # echo "Deploying numba..."
+    # wget https://github.com/numba/numba/archive/refs/tags/0.59.1.tar.gz
+    # scp -r 0.59.1.tar.gz root@$IP:/home/root
+    # echo "Installing numba..."
+    # ssh root@$IP "tar -xzf 0.59.1.tar.gz; pip3 install ./numba-0.59.1; rm -r numba-0.59.1; rm 0.59.1.tar.gz"
+    # rm 0.59.1.tar.gz
 fi
 
 echo "Complete."

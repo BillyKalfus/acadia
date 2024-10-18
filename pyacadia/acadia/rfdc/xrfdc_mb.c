@@ -47,6 +47,8 @@
 *
 ******************************************************************************/
 
+#ifdef __aarch64__
+
 /***************************** Include Files *********************************/
 #include "xrfdc.h"
 
@@ -1275,3 +1277,5 @@ u32 XRFdc_GetMultibandConfig(XRFdc *InstancePtr, u32 Type, u32 Tile_Id)
 }
 
 /** @} */
+
+#endif

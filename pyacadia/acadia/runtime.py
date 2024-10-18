@@ -113,7 +113,7 @@ class Runtime:
 
     def deploy(self, 
             target_address: str, 
-            runtime_class: str,
+            runtime_module: str = None,
             files: list[str] = None,
             remote_directory: str = "/tmp/%y%m%d_%H%M%S", 
             local_directory: str = "/tmp/%y%m%d_%H%M%S",
@@ -158,10 +158,11 @@ class Runtime:
         (for Acadia hardware, this occurs when the system is power cycled). 
         :param target_address: IP address of the target
         :type target_address: str
-        :param runtime_class: Name of the :class:`Runtime` subclass This is 
+        :param runtime_module: Name of the :class:`Runtime` subclass. This is 
             directly used in an ``import``
-            statement as ``import <runtime_class> as ...``.
-        :type runtime_class: str
+            statement as ``from <runtime_module> import <this class name>``. 
+            If ``None``, the current class' module path and name is used.
+        :type runtime_module: str
         :param files: Files to be deployed to the target for use during the
             :class:`Runtime` execution. This should be a list and each element,
             which can be either a string or a tuple, will correspond to one 
@@ -252,7 +253,7 @@ class Runtime:
         self._configure_ssh(multiplex_control_path)
 
         self._set_status("Preparing and deploying files")
-        self._prepare_files(files, runtime_class, log_level, finalization_time, kwargs)
+        self._prepare_files(files, runtime_module, log_level, finalization_time, kwargs)
 
         self._set_status("Preparing remote runtime screen")
         Runtime._prepare_screen(self.login, self._multiplex_options)
@@ -286,7 +287,7 @@ class Runtime:
             self._event_loop.join(timeout=timeout)
             self._set_status("Stopped")
         except:
-            logging.error("Event loop thread did not join, manually stopping")
+            logging.error("Event loop thread did not join, killing process")
             self.kill()
             if self._remove_remote_directory:
                 self._set_status("Removing remote directory (after killing process)")
@@ -394,7 +395,7 @@ class Runtime:
         # run(f"ssh -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
         self._multiplex_options = (f"-o ControlMaster=auto -o ControlPath={self._multiplex_control_path}/%r@%h:%p -o ControlPersist=20")
     
-    def _prepare_files(self, files, runtime_filename, log_level, finalization_time, kwargs):
+    def _prepare_files(self, files, runtime_module, log_level, finalization_time, kwargs):
         logger = logging.getLogger("acadia")
 
         # Copy all of the files that we need into the local execution directory
@@ -429,24 +430,12 @@ class Runtime:
             runfile.write(f"try:\n")
             runfile.write(f"    import os\n")
             runfile.write(f"    os.chdir(\"{self.remote_directory}\")\n")
-            runfile.write(f"    from {runtime_filename} import {self.__class__.__qualname__}\n")
+            runfile.write(f"    from {runtime_module if runtime_module is not None else self.__module__} import {self.__class__.__qualname__}\n")
             runfile.write(f"    runtime = {self.__class__.__qualname__}.load(\"{self.remote_directory}\")\n")
             runfile.write(f"    runtime.data.serve()\n")
             runfile.write(f"    logging.info(\"Executing main()...\")\n")
-            runfile.write(f"    runtime.main()\n")
-            runfile.write(f"    logging.info(\"main() complete, spinning server for {finalization_time} seconds\")\n")
-            runfile.write(f"    runtime.data.finalize()\n")
-            runfile.write(f"    tstart = time.time()\n")
-            runfile.write(f"    retval = 2\n")
-            runfile.write(f"    while retval != 3 and time.time()-tstart < {finalization_time}:\n")
-            runfile.write(f"        retval = runtime.data.serve()\n")
-            runfile.write(f"    if retval == 1:\n")
-            runfile.write(f"        logging.warning(\"DataManager not connected to client.\")\n")
-            runfile.write(f"    if retval == 2:\n")
-            runfile.write(f"        logging.warning(\"DataManager failed to serve data to client during finalization.\")\n")
-            runfile.write(f"    logging.debug(f\"DataManager serve loop finished with retval {{retval}}.\")\n")
+            runfile.write(f"    runtime.main()\n")            
             runfile.write(f"    logging.info(\"Runtime complete.\")\n")
-            runfile.write(f"    runtime.data.disconnect()\n")
             runfile.write(f"except:\n")
             runfile.write(f"    logging.error(f'Runtime exception:\\n{{traceback.format_exc()}}')\n\n")
             runfile.write(f"sys.stdout.flush()\n")
@@ -475,6 +464,23 @@ class Runtime:
         cmd = f"rsync -r --mkpath -e \"ssh {self._multiplex_options}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
         logger.debug(f"Executing command {cmd}")
         run(cmd, shell=True, check=True)
+
+    def final_serve(self, timeout=5):
+        """
+        Finalize the internal DataManager and spin the data server for a given amount of time to allow a remote host to
+        retrieve data. If no client is connected, if data is sent, or if the client
+        requests a hangup, the loop will exit.
+        """
+        self.data.finalize()
+
+        import time
+        tstart = time.time()
+        retval = DataManager.serve_no_request()
+        while retval == DataManager.serve_no_request() and time.time() - tstart < timeout:
+            retval = self.data.serve()
+            
+        logging.debug(f"DataManager serve loop finished with retval {retval}.")
+        self.data.disconnect()
     
     @staticmethod
     def _list_remote_screens(login, multiplex_options) -> tuple[str,str]:
@@ -505,11 +511,11 @@ class Runtime:
         if not screen_found:
             # Create an acadia screen to use now
             cmd += "screen -dmS acadia python3; "
-            cmd += "screen -S acadia -X stuff \"import acadia.system; import acadia.sequencer; import numpy;^M\"; "
+            cmd += "screen -S acadia -X stuff \"from acadia import *; import numpy;^M\"; "
 
         # Prepare a screen for next time
         cmd += "screen -dmS acadia-prep python3; "
-        cmd += "screen -S acadia-prep -X stuff \"import acadia.system; import acadia.sequencer; import numpy;^M\"; "
+        cmd += "screen -S acadia-prep -X stuff \"from acadia import *; import numpy;^M\"; "
 
         cmd = f"ssh {multiplex_options} {login} {cmd}"
         logger.debug(f"Executing command {cmd}")
@@ -571,7 +577,7 @@ class Runtime:
 
                     # Exception will be thrown above if we're not connected and we can't connect
                     logger.debug("Syncing")
-                    self.data.sync()
+                    self.data.sync(timeout_ms=5000)
                     logger.debug("Synced")
 
                     if do_update:
@@ -581,7 +587,6 @@ class Runtime:
 
                     if self.data.is_finalized():
                         logger.info("Received fully finalized data; exiting event loop")
-                        self.data.hangup()
                         break
                 except ConnectionRefusedError:
                     logger.warning("Unable to connect to target DataManager")
@@ -604,6 +609,7 @@ class Runtime:
                 except:
                     logger.error(f"Exception during finalization: {traceback.format_exc()}")
 
+            self.data.hangup()
             self._retrieve_logs()
 
             if self._displayed:

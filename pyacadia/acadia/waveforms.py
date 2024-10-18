@@ -4,7 +4,7 @@ from operator import mul
 import logging
 
 import numpy as np
-from .channel import Channel
+from acadia.rfdc import Channel
 from .compiler import Symbol, Operation
 
 __all__ = ["Waveform", 
@@ -323,13 +323,7 @@ class ChannelWaveform(Waveform):
         self.channel = channel
 
         if resource_allocator is None:
-            if channel.is_dac:
-                if not hasattr(channel, "memory_type"):
-                    raise ValueError("Must provide an attached channel when"
-                                    " creating a DACWaveform with no allocator.")
-                resource_allocator = channel.memory_type
-            else:
-                raise ValueError(f"Region must be provided for ChannelWaveform"
+            raise ValueError(f"Region must be provided for ChannelWaveform"
                                  f" associated with channel {channel}")
 
         super().__init__(shape, dtype, resource_allocator)

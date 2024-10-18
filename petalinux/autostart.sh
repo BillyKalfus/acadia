@@ -44,10 +44,3 @@ fi
 # Change SSH settings to speed things up
 sed -i -e 's/UsePAM/#UsePAM/g' /etc/ssh/sshd_config
 /etc/init.d/sshd restart
-
-# Install acadia drivers
-# cd /home/root
-# python3 /run/media/mmcblk0p1/acadia/pyacadia/install_drivers.py
-
-# Install acadia library
-# pip3 install -e /run/media/mmcblk0p1/acadia/pyacadia

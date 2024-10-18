@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from acadia.runtime import Runtime
+from acadia import Runtime
 
 @dataclass
 class DSPSpectroscopyRuntime(Runtime):
@@ -23,7 +23,7 @@ class DSPSpectroscopyRuntime(Runtime):
     iterations: int = 10
         
     def main(self):        
-        from acadia.system import Acadia
+        from acadia import Acadia, DataManager
         
         acadia = Acadia()
         stimulus_channel = acadia.channel(self.stimulus["channel"])
@@ -67,8 +67,14 @@ class DSPSpectroscopyRuntime(Runtime):
                 acadia.run(assemble=False)
                 self.data["traces"].write(capture_waveform.array)
             
-                # Check whether the host wants data
-                self.data.serve()
+                # Check whether the host wants data or whether it's requesting a hangup
+                if self.data.serve() == DataManager.serve_hangup():
+                    # The client will not be requesting any more data, close the data manager
+                    # and exit
+                    self.data.disconnect()
+                    return
+        
+        self.final_serve()
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
@@ -236,13 +242,13 @@ def run(plot=True):
     frequencies = np.linspace(9.15e9, 9.25e9, 201)
     
     # Run the program on the target
-    rt = SpectroscopyRuntime(frequencies=frequencies,
+    rt = DSPSpectroscopyRuntime(frequencies=frequencies,
                             stimulus=stimulus,
                             capture=capture,
                             iterations=1000,
                             plot=plot,
                             electrical_delay=108e-9)
-    rt.deploy("192.168.2.70", "spectroscopy", files=[__file__])    
+    rt.deploy("192.168.2.70")    
     rt.display()
 
     return rt

@@ -5,9 +5,11 @@ import logging
 import struct
 import builtins
 import re
+import json
 from dataclasses import dataclass
 from functools import wraps
 from typing import Union, Callable
+from binascii import hexlify,unhexlify
 
 import numpy as np
 
@@ -15,14 +17,13 @@ from .waveforms import Waveform, ChannelWaveform, FixedChannelWaveform, Decimate
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
-from .channel import Channel
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
 from .firmware import Firmware
+from .firmware_configurations import CONFIG_200
 
-try:
-    from acadia.ps_functions import sequencer_halt_and_reset, sequencer_run, sequencer_complete, attach
-except:
-    pass
+import acadia.utils as utils
+import acadia.rfdc as rfdc
+from acadia.rfdc import Channel
 
 __all__ = ["DMASynchronizer", 
            "RFDCSynchronizer", 
@@ -492,8 +493,8 @@ class Acadia:
             
         return _wrapped
     
-    def __init__(self, firmware=None):    
-        self._firmware = Firmware(firmware)
+    def __init__(self, firmware=None):  
+        self._firmware = Firmware(firmware if firmware is not None else CONFIG_200)
         
         def input_switch_port(res_self):
             return self._firmware.stream_inputs()[res_self.kind][res_self._resource_id]
@@ -584,8 +585,8 @@ class Acadia:
         self._attach_resource(self.PSDDRArray)
             
         # Connect to the RFDC driver and initialize
-        Channel.RFDC_init()
-        
+        rfdc.attach()
+        utils.attach()
         RFClk.init(self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["clk104_spi0"])
         
         # Connect the switches
@@ -644,8 +645,6 @@ class Acadia:
         self._sequencer_done = self._firmware["ps_gpio"]["sysfs_offset"] + 64           
         PSGPIO.sysfs_export(self._sequencer_done)
         PSGPIO.sysfs_set_direction(self._sequencer_done, "in")
-
-        attach()
         
     def detach(self):
         """
@@ -743,13 +742,13 @@ class Acadia:
         """
 
         # Initialize MTS data structures
-        Channel.MTS_init()
+        Channel.mts_init()
 
         # Enable continuous SYSREF clock
         self.pulse_sysref()
 
         # Carry out the synchronization
-        result = Channel.MTS_sync()
+        result = Channel.mts_sync()
 
         # Turn off SYSREF
         self.pulse_sysref(0)
@@ -790,11 +789,11 @@ class Acadia:
         :type frequency: float
         """     
         
-        frequency_word = channel.frequency_to_nco_tuning_word(frequency, channel.analog_sample_frequency)
+        frequency_word = channel.frequency_to_nco_word(frequency)
         
         proc = Processor.active_processor()
         if proc is None:
-            channel.update_nco_frequency_registers(frequency_word)
+            channel.set_nco_frequency_word(frequency_word)
                 
         elif isinstance(proc, Sequencer):    
             frequency_base_reg = self._firmware.rfdc_rts_regs.address().value() + channel.num*2
@@ -819,10 +818,10 @@ class Acadia:
         :param phase: Phase in radians
         :type phase: float
         """
-        phase_word = int(round((2**18)*phase/(2*np.pi)))
+        phase_word = channel.phase_to_nco_word(phase)
         proc = Processor.active_processor()
         if proc is None:
-            channel.update_nco_phase_registers(phase_word)
+            channel.set_nco_phase_word(phase_word)
                 
         elif isinstance(proc, Sequencer):
             phase_reg = self._firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
@@ -845,8 +844,7 @@ class Acadia:
 
         proc = Processor.active_processor()
         if proc is None:
-            Channel.RFDC_call_checked("ResetNCOPhase",
-                           channel.converter_type(), channel.tile, channel.block)
+            channel.reset_nco_phase()
                 
         elif isinstance(proc, Sequencer):
             # Do nothing, the synchronizer will set the bit in the register
@@ -865,6 +863,15 @@ class Acadia:
         LMK04828).
         """           
 
+        # Calculate the divider value that we need for the LMK output channels
+        # VCO is configured for 3 GHz
+        target_frequency = self._firmware["clocks"]["input_freq_hz"]
+        divider = 3e9 / target_frequency
+        if round(divider, 6) != round(divider):
+            raise ValueError(f"Required frequency {target_frequency} does not"
+                " divide the LMK VCO frequency by an integer.")
+        divider = int(round(divider))
+
         # Reset chip and load a default config
         RFClk.LMK.reset()
         RFClk.LMK.set_config()
@@ -878,6 +885,9 @@ class Acadia:
         RFClk.LMK.set_sysref_mux(0)
 
         # Set DCLK output dividers to 250 MHz and prepare for SYNC
+        # Although the regular channel (non-sync) for the sync channel SDCLK_RFDC
+        # isn't connected to anything, it needs to be set up in order for the
+        # sync signal to be generated
         for output in [RFClk.LMK.DCLK_PL, 
                        RFClk.LMK.DCLK_RFDC_DAC, 
                        RFClk.LMK.DCLK_RFDC_ADC,
@@ -885,7 +895,7 @@ class Acadia:
             # Set all output multiplexers to the input for the divider
             # with duty cycle correction and half-step
             RFClk.LMK.set_output_mux(output, 1)
-            RFClk.LMK.set_output_divider(output, 12)
+            RFClk.LMK.set_output_divider(output, divider)
         
             # Power up parts of the output chain
             RFClk.LMK.set_output_powerdown_state(output,
@@ -1102,49 +1112,32 @@ class Acadia:
 
         pass
 
-    def set_dac_sampling_rates(self, tile0=6e9, tile1=6e9, tile2=6e9, tile3=6e9):
-        """
-        Configure the sampling rates of the RFDC tiles. Each keyword argument
-        must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
-        """
-        import pyxrfdc as xrfdc
-        settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
-        Channel.RFDC_call_checked("GetClkDistribution", settings)
+    # def set_dac_sampling_rates(self, tile0=6e9, tile1=6e9, tile2=6e9, tile3=6e9):
+    #     """
+    #     Configure the sampling rates of the RFDC tiles. Each keyword argument
+    #     must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
+    #     """
+    #     import pyxrfdc as xrfdc
+    #     settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
+    #     Channel.RFDC_call_checked("GetClkDistribution", settings)
 
-        frequencies = (tile0, tile1, tile2, tile3)
-        for idx, rate in enumerate(frequencies):
-            settings.DAC[idx].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-            settings.DAC[idx].PLLEnable = True
-            settings.DAC[idx].PLLSettings.Enabled = True
-            settings.DAC[idx].PLLSettings.RefClkFreq = 250
-            settings.DAC[idx].PLLSettings.SampleRate = round(rate / 1e6) # Needs to be in MHz
+    #     frequencies = (tile0, tile1, tile2, tile3)
+    #     for idx, rate in enumerate(frequencies):
+    #         settings.DAC[idx].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
+    #         settings.DAC[idx].PLLEnable = True
+    #         settings.DAC[idx].PLLSettings.Enabled = True
+    #         settings.DAC[idx].PLLSettings.RefClkFreq = self._firmware["clocks"]["input_freq_hz"] # We set the LMK to generate this frequency, they aren't inherently equal
+    #         settings.DAC[idx].PLLSettings.SampleRate = round(rate / 1e6) # Needs to be in MHz
 
-        settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
-        settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+    #     settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+    #     settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
+    #     settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
+    #     settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
 
-        Channel.RFDC_call_checked("SetClkDistribution", settings)
+    #     Channel.RFDC_call_checked("SetClkDistribution", settings)
 
-        for idx,channel in enumerate(self._DAC_channels):
-            channel.analog_sample_frequency = frequencies[idx // 4]
-
-    def get_dac_sampling_rates(self):
-        """
-        Configure the sampling rates of the RFDC tiles. Each keyword argument
-        must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
-        """
-        import pyxrfdc as xrfdc
-        settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
-        Channel.RFDC_call_checked("GetClkDistribution", settings)
-        clock_status = self.get_clock_status()
-
-        frequencies = [clock_status[f"DAC{i}_sampling_frequency"] for i in range(4)]
-        for idx,channel in enumerate(self._DAC_channels):
-            channel.analog_sample_frequency = frequencies[idx // 4]
-
-        return frequencies
-
+    #     for idx,channel in enumerate(self._DAC_channels):
+    #         channel.analog_sample_frequency = frequencies[idx // 4]
 
     def pulse_sysref(self, count=None):
         """
@@ -1238,18 +1231,7 @@ class Acadia:
             d[f"{name}_sdclk_digital_delay"] = RFClk.LMK.get_sdclk_digital_delay(channel+1)
             
         d["clk_wiz_locked"] = PSGPIO.sysfs_read(self._clk_wiz_locked)
-        
-        rfdc_status = Channel.RFDC_status()
-        for tile,status in rfdc_status.items():
-            d[f"{tile}_PLL_locked"] = status["PLL_locked"]
-            
-        for channel in self._DAC_channels + self._ADC_channels:
-            s = channel.status()
-            d[f"{channel.name()}_clocks_enabled"] = s["all_required_clocks_enabled"]
-            d[f"{channel.name()}_sampling_frequency"] = s["sampling_frequency"]
-            
-        d["clk_distribution"] = Channel.get_clk_distribution()
-            
+                        
         return d
     
     # -------------- CHANNEL HELPERS ----------- #
@@ -1357,140 +1339,141 @@ class Acadia:
         
         return descriptor
             
-    def convert(self,
-                value: float,
-                value_units: str,
-                output_units: str,
-                element_size: Union[int, np.dtype] = None,
-                bytes_per_cycle: Union[int, float] = None,
-                cycles_per_second: int = None) -> Union[int, float]:
-        """
-        Convert between various units of time or memory space. When converting
-        from a unit that is expected not to be an integer (e.g. seconds) to 
-        one that is (e.g. samples), an exception is raised if the result is not
-        an integer.
+    # To be deprecated
+    # def convert(self,
+    #             value: float,
+    #             value_units: str,
+    #             output_units: str,
+    #             element_size: Union[int, np.dtype] = None,
+    #             bytes_per_cycle: Union[int, float] = None,
+    #             cycles_per_second: int = None) -> Union[int, float]:
+    #     """
+    #     Convert between various units of time or memory space. When converting
+    #     from a unit that is expected not to be an integer (e.g. seconds) to 
+    #     one that is (e.g. samples), an exception is raised if the result is not
+    #     an integer.
 
-        The `*_units` quantities can take on the following values:
+    #     The `*_units` quantities can take on the following values:
 
-        - `elements` or `samples` or `items`: The input value represents the
-            number of elements in an array 
-        - `bytes`: The input value represents the size of an array in bytes
-        - `cycles`: The input value represents a number of cycles of the sequencer
-        - `seconds`: The input value represents a length of time in seconds
+    #     - `elements` or `samples` or `items`: The input value represents the
+    #         number of elements in an array 
+    #     - `bytes`: The input value represents the size of an array in bytes
+    #     - `cycles`: The input value represents a number of cycles of the sequencer
+    #     - `seconds`: The input value represents a length of time in seconds
 
-        :param value: Value to convert
-        :type value: float
-        :param value_units: Units of input value
-        :type value_units: str
-        :param output_units: The desired output units
-        :type output_units: str
-        :param element_size: The size in bytes of an element. A `np.dtype` may
-            also be provided, in which case its `itemsize` property will be 
-            used. This may be omitted if it is expected that the conversion will
-            not require it, in which case an exception will be raised
-        :type element_size: int or np.dtype
-        :param bytes_per_cycle: The number of bytes corresponding to a single 
-            cycle. A `np.dtype` may also be provided, in which case its 
-            `itemsize` property will be used. If omitted, the width of the
-            stream processing path is used.
-        :type bytes_per_cycle: int or np.dtype
-        :param cycles_per_second: The number of cycles corresponding to one 
-            second. If not provided, the sequencer clock rate is used.
+    #     :param value: Value to convert
+    #     :type value: float
+    #     :param value_units: Units of input value
+    #     :type value_units: str
+    #     :param output_units: The desired output units
+    #     :type output_units: str
+    #     :param element_size: The size in bytes of an element. A `np.dtype` may
+    #         also be provided, in which case its `itemsize` property will be 
+    #         used. This may be omitted if it is expected that the conversion will
+    #         not require it, in which case an exception will be raised
+    #     :type element_size: int or np.dtype
+    #     :param bytes_per_cycle: The number of bytes corresponding to a single 
+    #         cycle. A `np.dtype` may also be provided, in which case its 
+    #         `itemsize` property will be used. If omitted, the width of the
+    #         stream processing path is used.
+    #     :type bytes_per_cycle: int or np.dtype
+    #     :param cycles_per_second: The number of cycles corresponding to one 
+    #         second. If not provided, the sequencer clock rate is used.
 
-        """
-        if value is None:
-            return None
+    #     """
+    #     if value is None:
+    #         return None
         
-        if element_size is None:
-            if output_units.startswith("raw") or value_units.startswith("raw"):
-                output_units = "elements"
-                element_size = 4
-            elif output_units.startswith("decimated"):
-                output_units = "elements"
-                element_size = 8
-        elif isinstance(element_size, np.dtype):
-            element_size = element_size.itemsize
+    #     if element_size is None:
+    #         if output_units.startswith("raw") or value_units.startswith("raw"):
+    #             output_units = "elements"
+    #             element_size = 4
+    #         elif output_units.startswith("decimated"):
+    #             output_units = "elements"
+    #             element_size = 8
+    #     elif isinstance(element_size, np.dtype):
+    #         element_size = element_size.itemsize
 
-        if bytes_per_cycle is None:
-            bytes_per_cycle = self._firmware["stream_processing_path"]["width"] // 8
-        elif isinstance(bytes_per_cycle, np.dtype):
-            bytes_per_cycle = bytes_per_cycle.itemsize
+    #     if bytes_per_cycle is None:
+    #         bytes_per_cycle = self._firmware["stream_processing_path"]["width"] // 8
+    #     elif isinstance(bytes_per_cycle, np.dtype):
+    #         bytes_per_cycle = bytes_per_cycle.itemsize
 
-        if cycles_per_second is None:
-            cycles_per_second = self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+    #     if cycles_per_second is None:
+    #         cycles_per_second = self._firmware["clocks"]["generated_clocks"]["seq_clk"]
         
-        element_units = ["elements", "samples", "items"]
+    #     element_units = ["elements", "samples", "items"]
         
-        if output_units == value_units or (value_units in element_units and output_units in element_units):
-            return value
+    #     if output_units == value_units or (value_units in element_units and output_units in element_units):
+    #         return value
 
-        if value_units in element_units:
-            if output_units == "bytes":
-                if element_size is None:
-                    raise ValueError(f"Element size required for converting"
-                                     f" {value_units} to {output_units}.")
-                return int(round(element_size * value))
-            if output_units == "cycles":
-                value_bytes = self.convert(value, "elements", "bytes", element_size, bytes_per_cycle, cycles_per_second)
-                if bytes_per_cycle is None:
-                    raise ValueError(f"Bytes per cycle required for converting"
-                                     f" {value_units} to {output_units}.")
-                if round(value_bytes / bytes_per_cycle) != round(value_bytes / bytes_per_cycle, 3):
-                    raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
-                return int(round(value_bytes / bytes_per_cycle))
-            if output_units == "seconds":
-                if cycles_per_second is None:
-                    raise ValueError(f"Cycles per second required for converting"
-                                     f" {value_units} to {output_units}.")
-                value_cycles = self.convert(value, "elements", "cycles", element_size, bytes_per_cycle, cycles_per_second)
-                return value_cycles / cycles_per_second
-            raise ValueError(f"Unrecognized output unit {output_units}")
+    #     if value_units in element_units:
+    #         if output_units == "bytes":
+    #             if element_size is None:
+    #                 raise ValueError(f"Element size required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             return int(round(element_size * value))
+    #         if output_units == "cycles":
+    #             value_bytes = self.convert(value, "elements", "bytes", element_size, bytes_per_cycle, cycles_per_second)
+    #             if bytes_per_cycle is None:
+    #                 raise ValueError(f"Bytes per cycle required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             if round(value_bytes / bytes_per_cycle) != round(value_bytes / bytes_per_cycle, 3):
+    #                 raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
+    #             return int(round(value_bytes / bytes_per_cycle))
+    #         if output_units == "seconds":
+    #             if cycles_per_second is None:
+    #                 raise ValueError(f"Cycles per second required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             value_cycles = self.convert(value, "elements", "cycles", element_size, bytes_per_cycle, cycles_per_second)
+    #             return value_cycles / cycles_per_second
+    #         raise ValueError(f"Unrecognized output unit {output_units}")
             
-        elif value_units == "bytes":
-            if output_units in element_units:
-                if element_size is None:
-                    raise ValueError(f"Element size required for converting"
-                                     f" {value_units} to {output_units}.")
-                if value % element_size != 0:
-                    raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
-                return int(value // element_size)
-            if output_units == "cycles":
-                if bytes_per_cycle is None:
-                    raise ValueError(f"Bytes per cycle required for converting"
-                                     f" {value_units} to {output_units}.")
-                value_cycles = value / bytes_per_cycle
-                if round(value_cycles) != round(value_cycles, 3):
-                    raise ValueError(f"Unable to convert byte value ({value})"
-                                     f" into cycles ({value_cycles}).")
-                return int(round(value_cycles))
-            if output_units == "seconds":
-                value_cycles = self.convert(value, "bytes", "cycles", element_size, bytes_per_cycle, cycles_per_second)
-                return self.convert(value_cycles, "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
-            raise ValueError(f"Unrecognized output unit {output_units}")
+    #     elif value_units == "bytes":
+    #         if output_units in element_units:
+    #             if element_size is None:
+    #                 raise ValueError(f"Element size required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             if value % element_size != 0:
+    #                 raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
+    #             return int(value // element_size)
+    #         if output_units == "cycles":
+    #             if bytes_per_cycle is None:
+    #                 raise ValueError(f"Bytes per cycle required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             value_cycles = value / bytes_per_cycle
+    #             if round(value_cycles) != round(value_cycles, 3):
+    #                 raise ValueError(f"Unable to convert byte value ({value})"
+    #                                  f" into cycles ({value_cycles}).")
+    #             return int(round(value_cycles))
+    #         if output_units == "seconds":
+    #             value_cycles = self.convert(value, "bytes", "cycles", element_size, bytes_per_cycle, cycles_per_second)
+    #             return self.convert(value_cycles, "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
+    #         raise ValueError(f"Unrecognized output unit {output_units}")
         
-        elif value_units == "cycles":
-            if output_units in element_units or output_units == "bytes":
-                if bytes_per_cycle is None:
-                    raise ValueError(f"Bytes per cycle required for converting"
-                                     f" {value_units} to {output_units}.")
-                value_bytes = value * bytes_per_cycle
-                return self.convert(value_bytes, "bytes", output_units, element_size, bytes_per_cycle, cycles_per_second)
-            else:
-                if cycles_per_second is None:
-                    raise ValueError(f"Cycles per second required for converting"
-                                     f" {value_units} to {output_units}.")
-                return value / cycles_per_second
+    #     elif value_units == "cycles":
+    #         if output_units in element_units or output_units == "bytes":
+    #             if bytes_per_cycle is None:
+    #                 raise ValueError(f"Bytes per cycle required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             value_bytes = value * bytes_per_cycle
+    #             return self.convert(value_bytes, "bytes", output_units, element_size, bytes_per_cycle, cycles_per_second)
+    #         else:
+    #             if cycles_per_second is None:
+    #                 raise ValueError(f"Cycles per second required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #             return value / cycles_per_second
             
-        elif value_units == "seconds":
-            if cycles_per_second is None:
-                    raise ValueError(f"Cycles per second required for converting"
-                                     f" {value_units} to {output_units}.")
-            value_cycles = value * cycles_per_second
-            if round(value_cycles) != round(value_cycles, 3):
-                raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
-            return self.convert(int(round(value_cycles)), "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
+    #     elif value_units == "seconds":
+    #         if cycles_per_second is None:
+    #                 raise ValueError(f"Cycles per second required for converting"
+    #                                  f" {value_units} to {output_units}.")
+    #         value_cycles = value * cycles_per_second
+    #         if round(value_cycles) != round(value_cycles, 3):
+    #             raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
+    #         return self.convert(int(round(value_cycles)), "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
 
-        raise ValueError(f"Unrecognized value unit {value_units}")
+    #     raise ValueError(f"Unrecognized value unit {value_units}")
     
     def memory_region(self, 
                       specifier: Union[Channel, ManagedMemory, np.ndarray, str, StreamConfiguration, None]) -> callable:
@@ -1530,7 +1513,7 @@ class Acadia:
             return specifier
         
         if isinstance(specifier, Channel) and specifier.is_dac:
-            return specifier.memory_type
+            return self.DACArray[specifier.tile*4 + specifier.block]
         
         if isinstance(specifier, StreamConfiguration) and specifier.module == "cmacc":
             return self.CMACCKernelArray[specifier.module_resource._resource_id]
@@ -1541,7 +1524,8 @@ class Acadia:
         # Check whether it's a string of a channel
         m = re.match("DAC([0-9]+)", specifier)
         if m is not None:
-            return self.DAC(m.groups()[0]).memory_type
+            channel_num = int(m.groups()[0])
+            return self.DACArray[channel_num]
         
         s = str.lower(specifier)
         
@@ -1627,7 +1611,7 @@ class Acadia:
         # All channels use 32 bits per sample at the FIFO, so we can infer this directly from the tile config        
         if region is None:
             if channel.is_dac:
-                region = channel.memory_type
+                region = self.DACArray[channel.tile*4 + channel.block]
                 channel_samples_per_cycle = self._firmware["rfdc"]["dac"]["channel_interface_width"][channel.num] // 32
             else:
                 raise TypeError(f"Allocating a waveform for ADC{channel.num}"
@@ -1741,7 +1725,7 @@ class Acadia:
         
         if fixed_length_cycles != 0:
             # we have non-zero length and fixed length
-            if region is not None and not (channel.is_dac and region is channel.memory_type):
+            if region is not None:
                 raise ValueError(f"Region may not be specified for WindowedConstantWaveform objects.")
             
             logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
@@ -2334,16 +2318,8 @@ class Acadia:
         sequencer_run()
         
         if block:
-            # while not self.sequencer_done():
-            #     pass
             sequencer_complete()
             # logger.debug("Sequencer completed")
-        
-    def sequencer_done(self) -> bool:
-        """
-        Determine whether the sequencer has completed.
-        """
-        return PSGPIO.sysfs_read(self._sequencer_done)
 
     def configure_stream(self, configuration: StreamConfiguration):
         """
@@ -2375,62 +2351,77 @@ class Acadia:
 
         return retval
 
-    def assemble(self) -> tuple:
+    def assemble(self, output_directory: str = None) -> dict[str,list[int]]:
         """
-        Assembles instruction memory for the sequencer and all DMAs.
+        Assembles instruction memory for the sequencer and all DMAs. A dictionary
+        is produced that contains the memory segments for all required memory and
+        a byte offset within the region.
         """
 
-        dac_dma_programs = []
-        for i,dma in enumerate(self._dac_dmas):
-            logger.debug(f"Assembling DAC{i} DMA program with length {len(dma._compiled_program)}")
-            dma_program = bytearray(len(dma._compiled_program)*8)
-            for idx,instr in enumerate(dma._compiled_program):
-                struct.pack_into("<Q", dma_program, idx*8, instr.assemble())
-            dac_dma_programs.append(dma_program)
-            
-        adc_dma_programs = []
-        for i,dma in enumerate(self._adc_dmas):
-            logger.debug(f"Assembling ADC{i} DMA program with length {len(dma._compiled_program)}")
-            dma_program = bytearray(len(dma._compiled_program)*8)
-            for idx,instr in enumerate(dma._compiled_program):
-                struct.pack_into("<Q", dma_program, idx*8, instr.assemble())  
-            adc_dma_programs.append(dma_program)
+        assembled = {}
+
+        for dma_type,dma_list in [("DAC", self._dac_dmas), ("ADC", self._adc_dmas)]:
+            for i,dma in enumerate(dma_list):
+                if len(dma._compiled_program) > 0:
+                    logger.debug(f"Assembling {dma_type}{i} DMA program with length {len(dma._compiled_program)}")
+                    bin = sum(*[instr.assemble() for instr in dma._compiled_program])
+                    assembled[f"{dma_type}{i}@{0:08X}"] = hexlify(bin).decode("ascii")
             
         # Assemble the sequencer last so that if any DMA descriptors are resolved to have zero length,
-        # the instruction driving them is removed
+        # the instruction driving them will be removed above
         num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
         logger.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
-        
-        sequencer_program = bytearray(num_sequencer_instructions*16)
-        
+                
         idx = 0
         for s in self._sequencer_type.instances:
-            for instr in s._compiled_program:
-                logger.debug(f"Assembling instruction at 0x{idx:04X}")
-                sequencer_program[idx*16 : idx*16 + 16] = instr.assemble()
-                idx += 1
+            bin = sum(*[instr.assemble() for instr in s._compiled_program])
+            assembled[f"seq@{idx*16:08X}"] = hexlify(bin).decode("ascii")
+            idx += len(s._compiled_program)
+
+        outfilename = os.path.join(output_directory, "assembled.json") if output_directory is not None else "assembled.json"
+        with open(outfilename, "w") as outfile:
+            json.dump(assembled, outfile, indent=0)
             
-        return sequencer_program, dac_dma_programs, adc_dma_programs
+        return assembled
     
-    def load(self, sequencer_program=None, dac_dma_programs=None, adc_dma_programs=None):
+    def load(self, inp: Union[dict[str,list[int]], str, None] = None):
         """
-        Loads assembled data into memory.
+        Loads assembled programs into memory. If the input argument is a dict,
+        it must have the format as produced by assemble(). If the input is a str,
+        an assembled JSON file is loaded from the directory specified by it. 
+        If the input is None, the data is loaded from an assembled JSON in the 
+        current working directory.
         """
-        if sequencer_program is not None:
-            logger.debug(f"Loading sequencer instruction memory ({len(sequencer_program)} bytes)")
-            self._sequencer_instruction_memory[:len(sequencer_program)] = sequencer_program
+
+        if inp is None or isinstance(inp, str):
+            filename = os.path.join(inp, "assembled.json") if inp is not None else "assembled.json"
+            if not os.path.exists(filename):
+                raise ValueError(f"Assembled JSON not found at {filename}")
+            with open(filename, "r") as file:
+                inp = json.load(file)
+        elif not isinstance(inp, dict):
+            raise TypeError(f"Invalid type of input data {type(inp)}")
+
+        for segment,data in inp.items():
+            region_str,offset_str = segment.split("@")
+            offset = int(offset_str, base=16)
+            if region_str.startswith("ADC"):
+                channel = int(region_str[len("ADC"):])
+                buffer = self._adc_dma_descriptor_memory[channel]
+                buffer_name = f"ADC{channel} descriptor"
+            elif region_str.startswith("DAC"):
+                channel = int(region_str[len("DAC"):])
+                buffer = self._dac_dma_descriptor_memory[channel]
+                buffer_name = f"DAC{channel} descriptor"
+            elif region_str.startswith("seq"):
+                buffer = self._sequencer_instruction_memory
+                buffer_name = "sequencer instruction"
+            else:
+                raise ValueError(f"Unrecognized segment {segment}")
             
-        if dac_dma_programs is not None:
-            for idx,program in enumerate(dac_dma_programs):
-                if len(program) > 0:
-                    logger.debug(f"Loading DAC{idx} descriptor memory ({len(program)} bytes)")
-                    self._dac_dma_descriptor_memory[idx][:len(program)] = program
-                
-        if adc_dma_programs is not None:
-            for idx,program in enumerate(adc_dma_programs):
-                if len(program) > 0:
-                    logger.debug(f"Loading ADC{idx} descriptor memory ({len(program)} bytes)")
-                    self._adc_dma_descriptor_memory[idx][:len(program)] = program
+            bin = unhexlify(str.encode(data, "ascii"))
+            logger.debug(f"Loading {len(bin)} bytes into {buffer_name} memory at offset {offset}")
+            buffer[offset:offset+len(bin)] = bin
                         
     def assemble_simulation(self) -> str:
         """
@@ -2468,28 +2459,6 @@ class Acadia:
             for instr in s._compiled_program:
                 print(f"{idx:04X}: {instr.pprint()}")
                 idx += 1
-
-    def sequencer_run(self):
-        """
-        Runs the sequencer by driving its run pin high. 
-        """
-        PSGPIO.sysfs_write(self._sequencer_nrst, 1)
-        PSGPIO.sysfs_write(self._sequencer_gpio, 1)
-
-    def sequencer_halt(self):
-        """
-        Halts the sequencer by driving its run pin low.
-        """
-        PSGPIO.sysfs_write(self._sequencer_gpio, 0)
-        
-    def sequencer_reset(self):
-        """
-        Resets the sequencer.
-        """
-        PSGPIO.sysfs_write(self._sequencer_nrst, 0)
-
-    def sequencer_clock_frequency(self) -> float:
-        return self._firmware["clocks"]["generated_clocks"]["seq_clk"]
 
     # -------------- SYSTEM UTILITIES ----------- #
             
@@ -2703,20 +2672,17 @@ class Acadia:
         self._ADC_channels = []
         for tile in range(4):
             for block in range(4):
-                dac_channel = Channel(tile=tile, block=block, is_dac=True)
-                dac_channel.memory_type = self.DACArray[tile*4 + block]
-                dac_channel.analog_sample_frequency = self._firmware["rfdc"]["dac"]["tile_sample_rate_hz"][tile]
-                dac_channel.interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["dac"]["tile_axis_clocks"][tile]] 
-                                                          * self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 32)
-                dac_channel.interface_width_bytes = self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 8
-                
+                # By default, the sample rate will be configured to be zero. when we attach it will be read
+                dac_channel = Channel(tile=tile, block=block, is_dac=True, 
+                    interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["dac"]["tile_axis_clocks"][tile]] 
+                                                          * self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 32),
+                    interface_width_bytes = self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 8)
                 self._DAC_channels.append(dac_channel)
                 
-                adc_channel = Channel(tile=tile, block=block, is_dac=False)
-                adc_channel.analog_sample_frequency = self._firmware["rfdc"]["adc"]["tile_sample_rate_hz"][tile]
-                adc_channel.interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["adc"]["tile_axis_clocks"][tile]] 
-                                                          * self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 32)
-                adc_channel.interface_width_bytes = self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 8
+                adc_channel = Channel(tile=tile, block=block, is_dac=False,
+                    interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["adc"]["tile_axis_clocks"][tile]] 
+                                                          * self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 32),
+                    interface_width_bytes = self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 8)
                 
                 self._ADC_channels.append(adc_channel)
                 

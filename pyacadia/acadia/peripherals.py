@@ -8,10 +8,7 @@ from dataclasses import dataclass
 from .compiler import Processor
 from .sequencer import Sequencer
 
-try:
-    import pyxrfclk as xrfclk
-except ImportError as e:
-    print(e)
+import acadia.rfclk as rfclk
     
 _DMESG_GPIO_PATTERN = "gpio@(?P<axi_address>[0-9]+)[:,\ a-z]+(?P<gpio_num>[0-9]+)"
     
@@ -37,11 +34,6 @@ class RFClk:
     """
     A wrapper for the Xilinx XRFClk driver.
     """    
-
-    @staticmethod
-    def call(name, *args, **kwargs):
-        if getattr(xrfclk.lib, f"XRFClk_{name}")(*args, **kwargs) != xrfclk.lib.XST_SUCCESS:
-            raise ValueError(f"Call to {name} failed.")
         
     @classmethod
     def init(cls, gpio):
@@ -52,7 +44,7 @@ class RFClk:
         :type gpio: int
         """
 
-        RFClk.call("Init", gpio)
+        rfclk.init(gpio)
         
     class RFClkChip(ABC):
         """
@@ -65,38 +57,32 @@ class RFClk:
             """
             The chip ID, as designated by the XRFClk driver.
             """
-
             pass
         
         @classmethod
         def reset(cls):
-            RFClk.call("ResetChip", cls.chip_id())
+            rfclk.reset_chip(cls.chip_id())
             
         @classmethod
         def set_config(cls, config_id=1):
             """
             Set a configuration present in the driver on the chip.
             """
-
-            RFClk.call("SetConfigOnOneChipFromConfigId", cls.chip_id(), config_id)
+            rfclk.set_config_on_one_chip_from_config_id(cls.chip_id(), config_id)
             
         @classmethod
         def read_reg(cls, address):
             """
             Read a register on the chip.
             """
-
-            value = xrfclk.ffi.new("unsigned int*", address << 8)
-            RFClk.call("ReadReg", cls.chip_id(), value)
-            return value[0]
+            return rfclk.read_reg(cls.chip_id(), address)
         
         @classmethod
         def write_reg(cls, address, data):
             """
             Write a register on the chip.
             """
-
-            RFClk.call("WriteReg", cls.chip_id(), (address << 8) | (data & 0xFF))
+            rfclk.write_reg(cls.chip_id(), address, data)
         
     class LMK(RFClkChip):
         DCLK_LMX_ADC = 0
@@ -111,7 +97,7 @@ class RFClk:
         
         @classmethod
         def chip_id(cls):
-            return xrfclk.lib.RFCLK_LMK
+            return rfclk.CHIP_ID_LMK
         
         @classmethod
         def read_reg16(cls, address):

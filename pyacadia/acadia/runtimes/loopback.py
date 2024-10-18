@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from acadia.runtime import Runtime
+from acadia import Runtime
 
 @dataclass
 class LoopbackRuntime(Runtime):
@@ -14,7 +14,7 @@ class LoopbackRuntime(Runtime):
     plot: bool = True
         
     def main(self):     
-        from acadia.system import Acadia
+        from acadia import Acadia, DataManager
         
         # Create an acadia object and grab a couple of its channels
         acadia = Acadia()
@@ -55,7 +55,12 @@ class LoopbackRuntime(Runtime):
         for i in range(self.iterations):
             acadia.run(assemble=False)
             self.data["traces"].write(capture_waveform.array)
-            self.data.serve()
+            
+            if self.data.serve() == DataManager.serve_hangup():
+                self.data.disconnect()
+                return
+        
+        self.final_serve()
 
 
     def initialize(self):

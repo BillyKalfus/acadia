@@ -333,7 +333,7 @@ int DataManager_serve(DataManager* self, int timeout_ms)
             if(errno == EWOULDBLOCK)
             {
                 // No client, this is ok
-                return 1;
+                return DATAMANAGER_SERVE_NO_CLIENT;
             }
 
             // A real error occurred
@@ -355,7 +355,7 @@ int DataManager_serve(DataManager* self, int timeout_ms)
         if(errno == EWOULDBLOCK || errno == EAGAIN)
         {
             // no requests
-            return 2;
+            return DATAMANAGER_SERVE_NO_REQUEST;
         }
 
         PyErr_Format(PyExc_ValueError, "Error receiving data from client: %s", strerror(errno));
@@ -370,7 +370,7 @@ int DataManager_serve(DataManager* self, int timeout_ms)
 
     if(recv_data == DATAMANAGER_SERVER_HANGUP_KEY)
     {
-        return 3;
+        return DATAMANAGER_SERVE_HANGUP;
     }
 
     // Make sure it's the special secret
@@ -417,7 +417,7 @@ int DataManager_serve(DataManager* self, int timeout_ms)
         #endif
     }
     
-    return 0;
+    return DATAMANAGER_SERVE_SENT;
 }
 
 int DataManager_connect(DataManager* self, const char* server_address, size_t attempt_limit, size_t attempt_delay)
@@ -845,7 +845,6 @@ int DataManager_sync(DataManager* self, int timeout_ms)
 // Send a hangup request to the remote side
 int DataManager_hangup(DataManager* self)
 {
-    int retval;
     const unsigned int key = DATAMANAGER_SERVER_HANGUP_KEY;
 
     // Send the special sentinel key to the server to request that it close

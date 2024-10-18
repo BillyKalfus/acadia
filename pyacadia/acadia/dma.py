@@ -1,6 +1,7 @@
 __all__ = ["DMA", "Descriptor"]
 
 import logging
+import struct
 from dataclasses import dataclass
 from typing import Union
 
@@ -91,7 +92,7 @@ class Descriptor:
                             f" type `bool` or a `Symbol` encapsulating one"
                             f" (received {self.blank})")
               
-        return tmp
+        return struct.pack("<Q", tmp)
     
 class DMA(Processor):
     """

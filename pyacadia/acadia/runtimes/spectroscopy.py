@@ -26,7 +26,7 @@ class SpectroscopyRuntime(Runtime):
         
     def main(self):       
         import numpy as np 
-        from acadia.system import Acadia
+        from acadia import Acadia, DataManager
         
         acadia = Acadia()
         stimulus_channel = acadia.channel(self.stimulus["channel"])
@@ -114,8 +114,14 @@ class SpectroscopyRuntime(Runtime):
                 # and write it into the record group we created above
                 self.data["traces"].write(capture_waveform.array)
             
-                # Check whether the host wants data and send the data if it does
-                self.data.serve()
+                # Check whether the host wants data or whether it's requesting a hangup
+                if self.data.serve() == DataManager.serve_hangup():
+                    # The client will not be requesting any more data, close the data manager
+                    # and exit
+                    self.data.disconnect()
+                    return
+        
+        self.final_serve()
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
@@ -169,7 +175,7 @@ class SpectroscopyRuntime(Runtime):
     def update(self):
         import numpy as np
         from scipy.optimize import curve_fit
-        from acadia.waveforms import Waveform
+        from acadia import Waveform
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
@@ -293,7 +299,13 @@ def run(plot=True):
         iterations=1000,
         plot=plot,
         electrical_delay=108e-9)
-    rt.deploy("192.168.2.70", "spectroscopy", files=[__file__])    
+    
+    if plot:
+        # Set the matplotlib backend to one which we can actually update
+        from IPython.core.getipython import get_ipython
+        get_ipython().run_line_magic("matplotlib", "widget")
+
+    rt.deploy("192.168.2.70")    
     rt.display()
     
     return rt

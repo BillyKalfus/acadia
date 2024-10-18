@@ -1,8 +1,8 @@
 # The Acadia Microwave Instrument
 
-William Kalfus and Jacob Curtis
+William Kalfus
 
-Yale University, 2023
+Yale University, 2024
 
 ## Description
 
@@ -45,7 +45,7 @@ Once you have entered your preferred Python environment, download and install th
 
 ```
 git clone https://git.yale.edu/RSL/acadia.git
-pip3 install -e acadia/pyacadia[host]
+pip3 install acadia/pyacadia
 ```
 
 ### Development Environment
@@ -56,37 +56,72 @@ We primarily encourage the use of this software through VS Code, which may be in
 
 ## ZCU216 Configuration
 
-### First-time Setup
+### First-time SD card preparation and firmware installation
 
-### ZCU216 firmware
+Please note that the first installation of Acadia must be carried out using a Linux-based machine to which you have root access (it is currently unknown whether this can be performed on Windows or through WSL). Some Linux machines are available in RSL, talk to Billy for connection information. You will need a microSD card onto which the boot image will be installed; this will erase all information on the card. This will install the latest firmware, so when this step is carried out you can skip the "Updating firmware" section.
 
-For ZCU216 hardware connected to the internet, the firmware can be updated with the following procedure:
+1. Download this repository somewhere onto the PC. 
 
-```
-cd /mnt/sd-mmcblk0p1
-wget https://git.yale.edu/RSL/acadia/releases/latest/image.zip
-unzip -fo image.zip
-```
+1. Use a microSD card adapter to plug the card into the PC. 
 
-The new firmware will then be loaded the next time the board is rebooted.
+1. Determine the device path of the card by running `lsblk` at the Linux command line. This will print out one line for each disk and partition in the system, which contains a path like `/dev/sdx` and a device size. Given the device sizes, determine which path corresponds to the SD card. If the disk is already partitioned, there may be a path with a number at the end such as `/dev/sdx1`; ignore this.
 
-### ZCU216 software installation
-
-1. Copy this repository onto your board.
-
-1. Install the hardware drivers.
+1. Use `fdisk` to wipe the card and create a partition for the boot image. We'll create a partition that's only 1GB in size due to bootloader limitations on the FPGA, but you may create additional partitions for data if you like. At the command line, run the following:
 
 ```
-python3 acadia/pyacadia/install_drivers.py
+sudo fdisk /dev/sdx # Replace this with the path to your card
 ```
 
-1. Install the Python libraries using `pip`.
+1. Confirm that the partition was created by running `lsblk`. Now, under the same device path, you should see an entry like `/dev/sdx1` that's listed as being 1GB in size.
+
+1. Format the partition to have a FAT32 filesystem by running `sudo mkfs -t fat /dev/sdx1`.
+
+1. Mount the filesystem on the PC by running `udisksctl mount -b /dev/sdx1`. If this completes successfully, it will tell you the path at which the filesystem was mounted. 
+
+1. Change directories to the path that `udisksctl` reported.
+
+1. Retrieve the latest firmware image by running the following (note that this must be run as one single command, not one line at a time):
 
 ```
-pip3 install -e acadia/pyacadia
+ftp -i -n barharbor.stdusr.yale.internal <<EOS
+   user anonymous none
+   cd firmware-latest
+   get BOOT.BIN
+   get image.ub
+   get boot.scr
+   bye
+EOS
 ```
 
-## Building a Linux image with integrated FPGA bitstream (Advanced)
+1. Copy the boot configuration script from the Acadia directory by running `cp acadia/petalinux/autostart.sh .`. The path will need to be modified according to where you downloaded this repository on your PC.
+
+1. The hostname and MAC address of the board's Ethernet connection need to be changed at boot. Run the following to insert your allocated hostname and MAC address into the autostart script (talk to Billy to choose these values from a list of reserved names registered with Yale ITS):
+
+```
+sed -i -e "s/customhostname/$HOSTNAME/g" -e "s/custommac/$MAC/g" autostart.sh
+```
+
+Either replace `$HOSTNAME` and `$MAC` with the appropriate values or populate these bash variables beforehand by running `export HOSTNAME=...; export MAC=...`.
+
+1. Change directories back to your home directory.
+
+1. Ensure that everything was properly committed to the disk by running `sync`.
+
+1. Unmount the card by running `udisksctl unmount -b /dev/sdx1`.
+
+1. Remove the card from the PC, insert it into the ZCU216, and power it on.
+
+### Updating firmware
+
+On the host PC, enter the acadia directory and run `./misc/remote_install.sh --firmware --ip IP` where `IP` is the domain name or IP address of the board. This will update the firmware on the SD card of the board, and then install the `acadia` software (meaning that the steps below can be skipped).
+
+### Initial software installation
+
+This will need to be carried out anytime the board is power cycled. On your host PC, enter the acadia directory and run `./misc/remote_install.sh --initial --ip IP` where `IP` is the domain name or IP address of the board. This will automatically deploy and install the `acadia` Python and C libraries, as well as configure the clocking system to its default settings.
+
+## Building firmware from source
+
+The following instructions establish a workflow for building an FPGA bitstream and Linux image from source. This is an advanced procedure only required when pre-built firmware is not available.
 
 ### Requirements
 1. Vivado 2023.2 with a valid license for the RFSoC Gen 3 devices (included with ZCU216 purchase).
@@ -103,16 +138,65 @@ cd ..
 
 ### Build Procedure
 
-1. Create and build a bitstream by following the notebook `tutorials/00_building_firmware.ipynb`
+1. Create and build an FPGA bitstream.
 
-1. Export a hardware description file from Vivado
-   1. File -> Export -> Export Hardware
-   1. Follow the steps, check the box "include bitstream"
-1. Modify `petalinux/configure_petalinux.sh` so that the directories are correct for your system
-1. Create the Petalinux project by running `petalinux/configure_petalinux.sh` 
-1. Change directories into the Petalinux project
+   1. Open a Python console and execute the following:
 
-1. Build PetaLinux and create a bootable image
+   ```
+   from acadia.firmware import Firmware
+   from acadia.firmware_configurations import CONFIG_200
+   project_dir = "acadia-build"
+   f = Firmware(CONFIG_200)
+   f.write(project_dir)
+   ```
+
+   1. Create a Vivado project by executing the command printed above.
+
+   1. The previous step will leave you at the Vivado command line. Launch the build by running `launch_runs -to_step write_bitstream -jobs 8 impl_1`.
+
+   1. After a minute or so and a lot of printed output, you'll be returned to the Vivado command line. The build is NOT complete; it's simply running in the background. Wait for it to finish by running `wait_on_run impl_1`. The build could take anywhere from 30 minutes to 2 hours to complete depending on your PC hardware.
+
+   1. When the build finishes you'll be returned to the Vivado command line. Run the following to verify that it met timing:
+
+   ```
+   set timing_report [report_timing_summary -no_header -no_detailed_paths -return_string]
+   if {! [string match -nocase {*timing constraints are met*} $timing_report]} {
+      error "ERROR: timing not met"
+      return -code error
+   }
+   ```
+
+   1. Export a hardware configuration file by running the following at the Vivado command line:
+
+   ```
+   write_hw_platform -fixed -include_bit -force -file acadia-build/acadia_bd_wrapper.xsa
+   ```
+
+   1. If you do not need to update the Petalinux image and only need to load the new bitstream into the FPGA, you can do this using the Vivado hardware manager by running:
+
+   ```
+   open_hw_manager
+   connect_hw_server -allow_non_jtag
+   open_hw_target
+   set_property PROGRAM.FILE {acadia-build/acadia.runs/impl_1/acadia_bd_wrapper.bit} [get_hw_devices xczu49dr_0]
+   set_property PROBES.FILE {acadia-build/acadia.runs/impl_1/acadia_bd_wrapper.ltx} [get_hw_devices xczu49dr_0]
+   set_property FULL_PROBES.FILE {acadia-build/acadia.runs/impl_1/acadia_bd_wrapper.ltx} [get_hw_devices xczu49dr_0]
+   current_hw_device [get_hw_devices xczu49dr_0]
+   refresh_hw_device [lindex [get_hw_devices xczu49dr_0] 0]
+   current_hw_device [get_hw_devices arm_dap_1]
+   refresh_hw_device -update_hw_probes false [lindex [get_hw_devices arm_dap_1] 0]
+   current_hw_device [get_hw_devices xczu49dr_0]
+   program_hw_device [get_hw_devices xczu49dr_0]
+   ```
+
+1. Build PetaLinux and create a bootable image.
+
+   1. Modify `petalinux/configure_petalinux.sh` so that the directories are correct for your system.
+
+   1. Create the Petalinux project by running `petalinux/configure_petalinux.sh`.
+
+   1. Change directories into the Petalinux project.
+
    1. Build the kernel, bootloader, and PMU firmware.
       ```
       petalinux-build
@@ -127,13 +211,4 @@ cd ..
       petalinux-package --boot --format BIN --fsbl zynqmp_fsbl.elf --fpga system.bit --u-boot
       ```
 
-1. Prepare SD card for boot
-
-   1. Ensure that your SD card is formatted as FAT32.
-
-   1. From within the PetaLinux project's `images/linux` directory, copy `BOOT.BIN`, `image.ub`, and `boot.scr` to the card.
-
-   1. From the `petalinux` directory of this repo, copy `autostart.sh` to the card, making any changes necessary for your network. Note that this doesn't need to be done every time, as no part of the build touches this file; if you had a copy on your card already that was working, it's unlikely that this needs to be changed!
-      
-
-1. Insert SD card into the socket on the ZCU216 and turn on the power switch.
+Once this is complete, load the SD card with the image by following the steps above in "First-time SD card preparation", but rather than pulling the firmware files from the server over FTP, copy them onto the SD card from the directory `images/linux` in the Petalinux project.

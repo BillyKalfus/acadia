@@ -18,6 +18,6 @@ echo "Copying acadia..."
 cp -r $ACADIA_DIR $SD_DIR
 
 echo "Configuring autostart..."
-cp $SD_DIR/acadia/petalinux/autostart.sh $SD_DIR/autostart.sh
+cp $ACADIA_DIR/acadia/petalinux/autostart.sh $SD_DIR/autostart.sh
 sed -i -e "s/customhostname/$HOSTNAME/g" -e "s/custommac/$MAC/g" $SD_DIR/autostart.sh
 
