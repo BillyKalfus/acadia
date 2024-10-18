@@ -66,11 +66,22 @@ Please note that the first installation of Acadia must be carried out using a Li
 
 1. Determine the device path of the card by running `lsblk` at the Linux command line. This will print out one line for each disk and partition in the system, which contains a path like `/dev/sdx` and a device size. Given the device sizes, determine which path corresponds to the SD card. If the disk is already partitioned, there may be a path with a number at the end such as `/dev/sdx1`; ignore this.
 
-1. Use `fdisk` to wipe the card and create a partition for the boot image. We'll create a partition that's only 1GB in size due to bootloader limitations on the FPGA, but you may create additional partitions for data if you like. At the command line, run the following:
+1. Use `fdisk` to wipe the card and create a partition for the boot image. We'll create a partition that's only 1GB in size due to bootloader limitations on the FPGA, but you may create additional partitions for data if you like. 
+   1. At the command line, run the following:
 
-```
-sudo fdisk /dev/sdx # Replace this with the path to your card
-```
+   ```
+   sudo fdisk /dev/sdx # Replace this with the path to your card
+   ```
+
+   1. This program will have its own command line. Use `p` to print all the partitions on the card.
+
+   1. Use `d` to delete all the partitions on the card. If there are multiple partitions on the card, continue to delete them until running `d` tells you that there are no partitions defined.
+
+   1. Create a GPT partition table by running `g`. If it tells you that the device contains a DOS signature and will be removed, this is okay and may be ignored.
+
+   1. Create a new partition by running `n`. Use the default values for the partition number and the first sector, but when it asks for the last sector, enter "+1G". If it tells you that the partition contains a signature and asks whether you want to remove it, enter `Y`.
+
+   1. Commit the changes to the disk by running `w`. The program will exit when this is complete.
 
 1. Confirm that the partition was created by running `lsblk`. Now, under the same device path, you should see an entry like `/dev/sdx1` that's listed as being 1GB in size.
 
