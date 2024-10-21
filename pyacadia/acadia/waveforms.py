@@ -419,7 +419,8 @@ class FixedChannelWaveform(ChannelWaveform):
     def __init__(self, 
                  channel: Channel, 
                  length_cycles: Union[int, Symbol, Operation],
-                 blank=False):
+                 blank=False,
+                 resource_allocator: callable = None):
         """
         :param channel: Channel for the waveform
         :type channel: :class:`Channel`
@@ -433,9 +434,11 @@ class FixedChannelWaveform(ChannelWaveform):
         self.blank = blank
         self.length_cycles = Symbol(length_cycles) if isinstance(length_cycles, int) else length_cycles
         
+        # Only DACs require allocation in a local waveform memory specific to the channel,
+        # ADCs don't have dedicated waveform memory
         if channel.is_dac:
             interface_width_samples = channel.interface_width_bytes // 4
-            super().__init__(channel, shape=interface_width_samples)
+            super().__init__(channel, shape=interface_width_samples, resource_allocator=resource_allocator)
 
     def dma_parameters(self) -> list[dict]:  
         if self.channel.is_dac:
@@ -474,7 +477,8 @@ class WindowedConstantWaveform(ChannelWaveform):
     def __init__(self, 
                  channel: Channel, 
                  window_length_samples: int,
-                 constant_length_cycles: int = None):
+                 constant_length_cycles: int = None,
+                 resource_allocator: callable = None):
         """
         :param channel: Channel on which to apply the waveform
         :type channel: :class:`Channel`
@@ -491,7 +495,7 @@ class WindowedConstantWaveform(ChannelWaveform):
         self.channel = channel
 
         if window_length_samples > 0:
-            super().__init__(channel, window_length_samples)
+            super().__init__(channel, window_length_samples, resource_allocator=resource_allocator)
             # `seconds_to_bytes` will check whether we have an integer number of cycles
             # Each cycle, one interface-width of data is streamed out, so divide the
             # memory size by the width of the interface to get the number of cycles    
@@ -502,7 +506,7 @@ class WindowedConstantWaveform(ChannelWaveform):
             self.split_cycle = None
             self.split_sample = None
         
-        self._constant = FixedChannelWaveform(channel, constant_length_cycles)
+        self._constant = FixedChannelWaveform(channel, constant_length_cycles, resource_allocator=resource_allocator)
         
     def dma_parameters(self) -> list[dict]:
         constant_parameters = self._constant.dma_parameters()

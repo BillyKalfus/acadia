@@ -61,6 +61,12 @@ static PyObject* PyChannel_str(PyObject* self)
         num);
 }
 
+static PyObject* PyChannel_num(PyObject* self)
+{
+    ChannelObject* self_channel = (ChannelObject*)self;
+    return PyLong_FromLong((self_channel->tile)*4 + (self_channel->block));
+}
+
 static const char CHANNEL_STATUS_DOCSTRING[] = "Retrieve the status of the channel.";
 static PyObject* PyChannel_status(PyObject* self)
 {
@@ -174,7 +180,29 @@ static PyObject* PyChannel_status(PyObject* self)
     #endif
 }
 
-static const char CHANNEL_SET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING[] = "Sets the source with which NCO setting updates will be triggered.\n";
+static const char CHANNEL_LOAD_SAMPLE_FREQUENCY_DOCSTRING[] = "Loads the analog sample frequency from the tile into the internal data structure.";
+static PyObject* PyChannel_load_sample_frequency(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    XRFdc_BlockStatus status;
+
+    if(XRFdc_GetBlockStatus(&xrfdc, self_channel->is_dac, self_channel->tile, self_channel->block, &status) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_SystemError, "Call to XRFdc_GetBlockStatus failed in function %s", __FUNCTION__);
+    }
+
+    self_channel->analog_sample_frequency = status.SamplingFreq*1e9;
+
+    Py_RETURN_NONE;
+    
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_SET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING[] = "Sets the source with which NCO setting updates will be triggered.\nValid options are 'immediate', 'slice', 'tile', 'marker', 'pl', and 'sysref'";
 static PyObject* PyChannel_set_nco_update_event_source(PyObject* self, PyObject* source_obj)
 {
     #ifdef __aarch64__
@@ -1029,12 +1057,37 @@ static PyObject* PyChannel_set(PyObject* self, PyObject* const* args, Py_ssize_t
     #ifdef __aarch64__
 
     int i;
-    PyObject* retval;
-    const char* kwname;
+    PyObject* retval = NULL;
+    Py_ssize_t num_kwargs;
+    PyObject* kwname_obj;
+    const char* kwname = NULL;
 
-    for(i = 0; i < nargs; i++)
+    if(nargs != 0)
     {
-        kwname = PyUnicode_AsUTF8(kwnames + i);
+        return PyErr_Format(PyExc_ValueError, "Positional arguments are not supported in set()");
+    }
+
+    if(kwnames == NULL)
+    {
+        Py_RETURN_NONE;    
+    }
+
+    // kwnames is guaranteed to be a tuple of strings
+    num_kwargs = PyTuple_GET_SIZE(kwnames);
+    for(i = 0; i < num_kwargs; i++)
+    {
+        kwname_obj = PyTuple_GET_ITEM(kwnames, i);
+        if(kwname_obj == NULL)
+        {
+            return PyErr_Format(PyExc_ValueError, "Unable to retrieve kwarg from tuple", i);
+        }
+
+        kwname = PyUnicode_AsUTF8(kwname_obj);
+        if(kwname == NULL)
+        {
+            return PyErr_Format(PyExc_ValueError, "Unable to convert kwarg name into a string for keyword arg %d", i);
+        }
+
         if(strcmp(kwname, "nco_update_event_source") == 0)
         {
             retval = PyChannel_set_nco_update_event_source(self, args[i]);
@@ -1042,6 +1095,10 @@ static PyObject* PyChannel_set(PyObject* self, PyObject* const* args, Py_ssize_t
         else if(strcmp(kwname, "delay") == 0)
         {
             retval = PyChannel_set_delay(self, args[i]);
+        }
+        else if(strcmp(kwname, "nco_update_event_source") == 0)
+        {
+            retval = PyChannel_set_nco_update_event_source(self, args[i]);
         }
         else if(strcmp(kwname, "nco_frequency_word") == 0)
         {
@@ -1140,7 +1197,9 @@ static PyMemberDef PyChannelMembers[] = {
 };
 
 static PyMethodDef PyChannelMethods[] = {
+    {"num", (PyCFunction)PyChannel_num, METH_NOARGS, ""},
     {"status", (PyCFunction)PyChannel_status, METH_NOARGS, CHANNEL_STATUS_DOCSTRING},
+    {"load_sample_frequency", (PyCFunction)PyChannel_load_sample_frequency, METH_NOARGS, CHANNEL_LOAD_SAMPLE_FREQUENCY_DOCSTRING},
     {"set_nco_update_event_source", (PyCFunction)PyChannel_set_nco_update_event_source, METH_O, CHANNEL_SET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING},
     {"get_nco_update_event_source", (PyCFunction)PyChannel_get_nco_update_event_source, METH_NOARGS, CHANNEL_GET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING},
     {"set_delay", (PyCFunction)PyChannel_set_delay, METH_O, CHANNEL_SET_DELAY_DOCSTRING},
@@ -1175,7 +1234,7 @@ static PyMethodDef PyChannelMethods[] = {
     {"get_interpolation", (PyCFunction)PyChannel_get_interpolation, METH_NOARGS, CHANNEL_GET_INTERPOLATION_DOCSTRING},
     {"set_decimation", (PyCFunction)PyChannel_set_decimation, METH_O, CHANNEL_SET_DECIMATION_DOCSTRING},
     {"get_decimation", (PyCFunction)PyChannel_get_decimation, METH_NOARGS, CHANNEL_GET_DECIMATION_DOCSTRING},
-    {"set", (PyCFunction)PyChannel_set, METH_VARARGS | METH_KEYWORDS, CHANNEL_SET_DOCSTRING},
+    {"set", (PyCFunction)PyChannel_set, METH_FASTCALL | METH_KEYWORDS, CHANNEL_SET_DOCSTRING},
     {NULL, NULL, 0, NULL}
 };
 
@@ -1658,12 +1717,12 @@ static PyObject* PyRfdc_mts_init(PyObject* self)
 {
     #ifdef __aarch64__
 
-    if(!XRFdc_MultiConverter_Init(&dac_mts_config, NULL, NULL, 0))
+    if(XRFdc_MultiConverter_Init(&dac_mts_config, NULL, NULL, 0) != XRFDC_MTS_OK)
     {
         return PyErr_Format(PyExc_ValueError, "Unable to initialize MTS for DAC in %s", __FUNCTION__);
     }
 
-    if(!XRFdc_MultiConverter_Init(&adc_mts_config, NULL, NULL, 0))
+    if(XRFdc_MultiConverter_Init(&adc_mts_config, NULL, NULL, 0) != XRFDC_MTS_OK)
     {
         return PyErr_Format(PyExc_ValueError, "Unable to initialize MTS for ADC in %s", __FUNCTION__);
     }
@@ -1682,12 +1741,12 @@ static PyObject* PyRfdc_mts_sync(PyObject* self)
 
     uint32_t retval;
     uint32_t tile;
-    int latency = 0;
+    int latency;
 
-    dac_mts_config.RefTile = 0;
-    dac_mts_config.Tiles = 0xF;
-    dac_mts_config.Target_Latency = -1;
-    dac_mts_config.SysRef_Enable = 1;
+    adc_mts_config.RefTile = 0;
+    adc_mts_config.Tiles = 0xF;
+    adc_mts_config.Target_Latency = -1;
+    adc_mts_config.SysRef_Enable = 1;
 
     // First run for the ADC
     retval = XRFdc_MultiConverter_Sync((&xrfdc), XRFDC_ADC_TILE, &adc_mts_config);
@@ -1697,6 +1756,7 @@ static PyObject* PyRfdc_mts_sync(PyObject* self)
     }
 
     // Get the maximum latency
+    latency = 0;
     for(tile = 0; tile < 4; tile++)
     {
         if(adc_mts_config.Latency[tile] > latency)
@@ -1713,6 +1773,11 @@ static PyObject* PyRfdc_mts_sync(PyObject* self)
         return PyErr_Format(PyExc_ValueError, "Unable to synchronize ADCs (post) with MTS in %s (retval %d)", __FUNCTION__, retval);
     }
 
+    dac_mts_config.RefTile = 0;
+    dac_mts_config.Tiles = 0xF;
+    dac_mts_config.Target_Latency = -1;
+    dac_mts_config.SysRef_Enable = 1;
+
     // First run for the DAC
     retval = XRFdc_MultiConverter_Sync((&xrfdc), XRFDC_DAC_TILE, &dac_mts_config);
     if(retval != XRFDC_MTS_OK)
@@ -1721,6 +1786,7 @@ static PyObject* PyRfdc_mts_sync(PyObject* self)
     }
 
     // Get the maximum latency
+    latency = 0;
     for(tile = 0; tile < 4; tile++)
     {
         if(dac_mts_config.Latency[tile] > latency)

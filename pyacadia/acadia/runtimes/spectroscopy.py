@@ -77,10 +77,8 @@ class SpectroscopyRuntime(Runtime):
 
         # Configure the channel properties according to the settings provided
         # Here we will also configure the NCOs to be synchronously updated
-        stimulus_channel.set(**self.stimulus["datapath"])
-        stimulus_channel.set_nco(update_source="sysref")
-        capture_channel.set(**self.capture["datapath"])
-        capture_channel.set_nco(update_source="sysref")
+        stimulus_channel.set(nco_update_event_source="sysref", **self.stimulus["datapath"])
+        capture_channel.set(nco_update_event_source="sysref", **self.capture["datapath"])
 
         # Load the stimulus waveform memory with a pulse profile as instructed 
         # by provided parameters
@@ -90,7 +88,8 @@ class SpectroscopyRuntime(Runtime):
         kernel.set(np.float64(0.1))
 
         # Assemble the sequence and load it into sequencer instruction memory
-        acadia.load(*acadia.assemble())
+        acadia.assemble()
+        acadia.load()
 
         for i in range(self.iterations):
             for frequency in self.frequencies:
@@ -101,11 +100,8 @@ class SpectroscopyRuntime(Runtime):
                 acadia.reset_nco_phase(capture_channel)
                 acadia.update_ncos_synchronized()
 
-                # Run the sequencer               
-                # This will block until the sequencer is done. Because we loaded the
-                # sequencer instruction memory above and the program hasn't changed,
-                # we don't need to assemble or reload it. This saves a lot of time         
-                acadia.run(assemble=False)
+                # Run the sequencer                    
+                acadia.run()
 
                 # When the sequencer was run, the integrated signal was stored into
                 # capture_waveform because it was provided to acadia.stream()
@@ -126,9 +122,6 @@ class SpectroscopyRuntime(Runtime):
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
         if self.plot:
-            from IPython.core.getipython import get_ipython
-            get_ipython().run_line_magic("matplotlib", "widget")
-
             from acadia.processing import DynamicLine
             import matplotlib.pyplot as plt
             from IPython.display import display

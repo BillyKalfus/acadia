@@ -48,7 +48,7 @@ class Descriptor:
             # Indicate that this is truly a null descriptor
             self.null = True
             logger.debug(f"Marking null DMA descriptor: {self}")
-            return 0
+            return struct.pack("<Q", 0)
         
         trace_length -= 1
             

@@ -168,7 +168,7 @@ class DMASynchronizer(Synchronizer):
             # if so, we'll need an extra cycle of trigger latency
             for call in self._calls:
                 channel = call["kwargs"]['channel']
-                idx = channel.num + (16 if not channel.is_dac else 0)
+                idx = channel.num() + (16 if not channel.is_dac else 0)
                 if self._acadia._firmware["sequencer_bus"]["dma_pipeline"][idx]:
                     required_latency += 1
                     break
@@ -274,7 +274,7 @@ class RFDCSynchronizer(Synchronizer):
                 raise TypeError(f"Unable to identify channel (received {channel}).")
             
             
-            rfdc_bit_position = 1 << (channel.num if channel.is_dac else channel.num+16)
+            rfdc_bit_position = 1 << (channel.num() if channel.is_dac else channel.num()+16)
                 
             if function == RFDCSynchronizer.NCO_FREQUENCY:
                 if isinstance(proc, Sequencer):
@@ -588,6 +588,9 @@ class Acadia:
         rfdc.attach()
         utils.attach()
         RFClk.init(self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["clk104_spi0"])
+
+        for channel in self._DAC_channels + self._ADC_channels:
+            channel.load_sample_frequency()
         
         # Connect the switches
         self._ADC_input_switch.attach(self._attach_memory(
@@ -742,16 +745,20 @@ class Acadia:
         """
 
         # Initialize MTS data structures
-        Channel.mts_init()
+        rfdc.mts_init()
 
         # Enable continuous SYSREF clock
+        logger.debug("Enabling continuous SYSREF")
         self.pulse_sysref()
 
         # Carry out the synchronization
-        result = Channel.mts_sync()
+        logger.debug("Synchronizing...")
+        result = rfdc.mts_sync()
+        logger.debug("Synchronization completed")
 
         # Turn off SYSREF
         self.pulse_sysref(0)
+        logger.debug("SYSREF disabled")
 
         time.sleep(0.2)
 
@@ -776,7 +783,6 @@ class Acadia:
         # TODO: find a way to check this. if it exists it's not documented
         time.sleep(0.001)
 
-    @Synchronizer.synchronized(RFDCSynchronizer.NCO_FREQUENCY, "tile_synchronizer")
     def update_nco_frequency(self, channel: Channel, frequency: float):
         """
         Update the NCO frequency. If called in a Sequencer context, this will
@@ -796,7 +802,7 @@ class Acadia:
             channel.set_nco_frequency_word(frequency_word)
                 
         elif isinstance(proc, Sequencer):    
-            frequency_base_reg = self._firmware.rfdc_rts_regs.address().value() + channel.num*2
+            frequency_base_reg = self._firmware.rfdc_rts_regs.address().value() + channel.num()*2
             
             if not channel.is_dac:
                 frequency_base_reg += 16*2 
@@ -806,11 +812,17 @@ class Acadia:
             proc.bus_write(address=frequency_base_reg+1, 
                             data=frequency_word & 0xFFFF,
                             comment="Write NCO frequency low bits")
+
+            self.tile_synchronizer.add({
+                "function": RFDCSynchronizer.NCO_FREQUENCY, 
+                "self": self, 
+                "args": (channel,), 
+                "kwargs": {},
+                "retval": None})
         
         else:
             raise TypeError("NCO frequency can only be set in `Sequencer` contexts or on the PS.")
     
-    @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE, "tile_synchronizer")
     def update_nco_phase(self, channel: Channel, phase: float):
         """
         Set the NCO phase offset to the given value.
@@ -824,7 +836,7 @@ class Acadia:
             channel.set_nco_phase_word(phase_word)
                 
         elif isinstance(proc, Sequencer):
-            phase_reg = self._firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num
+            phase_reg = self._firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num()
             
             if not channel.is_dac:
                 phase_reg += 16
@@ -832,11 +844,17 @@ class Acadia:
             proc.bus_write(address=phase_reg, 
                            data=phase_word & 0x0003FFFF,
                            comment=f"Write to NCO phase register for {channel}")
+
+            self.tile_synchronizer.add({
+                "function": RFDCSynchronizer.NCO_PHASE, 
+                "self": self, 
+                "args": (channel,), 
+                "kwargs": {},
+                "retval": None})
             
         else:
             raise TypeError("NCO phase can only be set in `Sequencer` contexts or on the PS.")
 
-    @Synchronizer.synchronized(RFDCSynchronizer.NCO_PHASE_RESET, "tile_synchronizer")
     def reset_nco_phase(self, channel: Channel):
         """
         Reset the value of the NCO phase accumulator.
@@ -848,7 +866,12 @@ class Acadia:
                 
         elif isinstance(proc, Sequencer):
             # Do nothing, the synchronizer will set the bit in the register
-            pass
+            self.tile_synchronizer.add({
+                "function": RFDCSynchronizer.NCO_PHASE_RESET, 
+                "self": self, 
+                "args": (channel,), 
+                "kwargs": {},
+                "retval": None})
             
         else:
             raise TypeError("NCO accumulator phase can only be reset in"
@@ -1283,7 +1306,7 @@ class Acadia:
         :type channel: :class:`Channel`
         """
         
-        return self._dac_dmas[channel.num] if channel.is_dac else self._adc_dmas[channel.num]
+        return self._dac_dmas[channel.num()] if channel.is_dac else self._adc_dmas[channel.num()]
     
     # -------------- ABSTRACTIONS FOR JOINT PS-PL ROUTINES ----------- #
     
@@ -1319,7 +1342,7 @@ class Acadia:
             
         # When we request the descriptor, we need to get the address aligned to
         # 128 bits. We need the word address
-        dma = self._dac_dmas[channel.num] if channel.is_dac else self._adc_dmas[channel.num]
+        dma = self._dac_dmas[channel.num()] if channel.is_dac else self._adc_dmas[channel.num()]
         
         descriptor = dma.request_descriptor(
             word_address, 
@@ -1328,14 +1351,14 @@ class Acadia:
             fixed=fixed,
             blank=blank)
         
-        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num}_dma'
+        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num()}_dma'
         device = self._firmware.sequencer_bus_decoder[dev_name]
         
         self._active_sequencer.bus_write(
             address=device.address().value(),
             data=descriptor, 
             comment=f"Add descriptor with parameters {descriptor.kwargs} to"
-                    f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num}")
+                    f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num()}")
         
         return descriptor
             
@@ -1513,7 +1536,7 @@ class Acadia:
             return specifier
         
         if isinstance(specifier, Channel) and specifier.is_dac:
-            return self.DACArray[specifier.tile*4 + specifier.block]
+            return self.DACArray[specifier.num()]
         
         if isinstance(specifier, StreamConfiguration) and specifier.module == "cmacc":
             return self.CMACCKernelArray[specifier.module_resource._resource_id]
@@ -1590,7 +1613,20 @@ class Acadia:
         #################################################################
 
         channel = self.channel(channel)
+
+        # The region must be determined here
         region = self.memory_region(region)
+
+        # If we couldn't determine the region from the provided parameter
+        # and the channel is a DAC, try again to get the channel's dedicated
+        # waveform memory region
+        if region is None and channel.is_dac:
+            region = self.memory_region(channel)
+
+        # By this point we need to have determined a region, so throw an
+        # error if we couldn't
+        if region is None:    
+            raise ValueError(f"Unable to determine memory allocation region.")
         
         if decimation is None:
             decimation = 1
@@ -1607,18 +1643,17 @@ class Acadia:
             raise ValueError(f"Decimation may only be 1 or a multiple of 4"
                              f" (received {decimation})")
 
+        ##############################################################################
+        # Convert provided lengths in time units into sample lengths and memory sizes
+        ##############################################################################
+
         # Figure out how many samples will be processed at the channel interface
         # All channels use 32 bits per sample at the FIFO, so we can infer this directly from the tile config        
-        if region is None:
-            if channel.is_dac:
-                region = self.DACArray[channel.tile*4 + channel.block]
-                channel_samples_per_cycle = self._firmware["rfdc"]["dac"]["channel_interface_width"][channel.num] // 32
-            else:
-                raise TypeError(f"Allocating a waveform for ADC{channel.num}"
-                                    f" requires specifying a memory region.")
+        if channel.is_dac:
+            channel_samples_per_cycle = self._firmware["rfdc"]["dac"]["channel_interface_width"][channel.num()] // 32
         else:
-            # The source is either an ADC channel or a location in memory
-            # ADC channels must have interface widths equal to the path width
+            # The source is either an ADC channel or a location in memory,
+            # both of which must have interface widths equal to the path width
             channel_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
 
         if isinstance(fixed_length, float) and fixed_length >= 0:
@@ -1697,20 +1732,30 @@ class Acadia:
             raise TypeError(f"Waveform length must be specified as a float"
                             f" or as a numpy array (received {type(length)}).")
         
-        # We now know how many cycles the waveform will take and how many
-        # samples it will consume, so create the appropriate waveform.
+        ############################################################################################
+        # We now know the waveform time in cycles and size in samples, so create the waveform array
+        ############################################################################################
+        
         if blank:
-            return FixedChannelWaveform(channel, length_cycles + fixed_length_cycles, True) 
+            return FixedChannelWaveform(
+                channel, 
+                length_cycles=length_cycles + fixed_length_cycles, 
+                blank=True,
+                resource_allocator=region) 
         
         if length_cycles == 0:
             if fixed_length_cycles == 0:
                 raise ValueError("Waveform has total length zero.")
             
+            # Only a fixed length was provided, so create a fixed waveform
             logger.debug(f"Allocating FixedWaveform for channel {channel} with"
                             f" a length of {fixed_length_cycles} cycles"
                             f" ({channel_samples_per_cycle} samples per cycle)")
             
-            return FixedChannelWaveform(channel, fixed_length_cycles)
+            return FixedChannelWaveform(
+                channel, 
+                length_cycles=fixed_length_cycles, 
+                resource_allocator=region)
             
         if decimation != 1:
             if fixed_length_cycles != 0:
@@ -1721,27 +1766,35 @@ class Acadia:
                         f" {length_cycles} cycles ({channel_samples_per_cycle}"
                         f" samples per cycle, decimation {decimation})")
             
-            return DecimatedChannelWaveform(channel, length_samples, decimation, region)
+            return DecimatedChannelWaveform(
+                channel, 
+                shape=length_samples, 
+                decimation=decimation, 
+                resource_allocator=region)
         
         if fixed_length_cycles != 0:
-            # we have non-zero length and fixed length
-            if region is not None:
-                raise ValueError(f"Region may not be specified for WindowedConstantWaveform objects.")
-            
+            # By this point, decimation is 1 and length_cycles != 0
             logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
                             f" a fixed length of {fixed_length_cycles} cycles and"
                         f" {length_samples} window samples, which corresponds to"
                         f" {length_cycles} cycles ({channel_samples_per_cycle}"
                         f" samples per cycle)")
             
-            return WindowedConstantWaveform(channel, length_samples, fixed_length_cycles)
+            return WindowedConstantWaveform(
+                channel, 
+                window_length_samples=length_samples, 
+                constant_length_cycles=fixed_length_cycles, 
+                resource_allocator=region)
 
         logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
                         f" {length_samples} samples, which corresponds to"
                         f" {length_cycles} cycles ({channel_samples_per_cycle}"
                         f" samples per cycle)")
         
-        return ChannelWaveform(channel, length_samples, resource_allocator=region)
+        return ChannelWaveform(
+            channel, 
+            shape=length_samples, 
+            resource_allocator=region)
         
     @requires_sequencer
     def schedule_waveform(self, waveform: ChannelWaveform):
@@ -2249,7 +2302,7 @@ class Acadia:
         """
         Reset the DMAs associated with the provided channel
         """
-        dma_name = f"{'dac' if channel.is_dac else 'adc'}{channel.num}_dma"
+        dma_name = f"{'dac' if channel.is_dac else 'adc'}{channel.num()}_dma"
         dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value() + 1
         self.sequencer().bus_write(address=dma_regs_address,
                                  data=0x00000001,
@@ -2264,7 +2317,7 @@ class Acadia:
         :type channel: :class:`Channel`
         """
 
-        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num}_dma'
+        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num()}_dma'
         device = self._firmware.sequencer_bus_decoder[dev_name]
 
         bus_op = self.sequencer().bus_read(device.address().value(), 
@@ -2293,7 +2346,7 @@ class Acadia:
 
     # -------------- RUNTIME UTILITIES ----------- #
     
-    def run(self, assemble=True, configure_streams=True, block=True):
+    def run(self, configure_streams=True, block=True):
         """
         Assemble, load, and run a sequence on Acadia hardware.
         Significant speedups may be achieved if reassembly is not
@@ -2302,9 +2355,7 @@ class Acadia:
         :param block: If `True`, execution will block until the sequencer
             signals completion.
         """
-        if assemble:
-            # logger.debug("Assembling")
-            self.load(*self.assemble())
+
         if configure_streams:
             for cfg in self._stream_configurations:
                 # logger.debug(f"Applying stream configuration {cfg}")
@@ -2314,11 +2365,11 @@ class Acadia:
         
         # self.sequencer_reset()
         # self.sequencer_run()
-        sequencer_halt_and_reset()
-        sequencer_run()
+        utils.sequencer_halt_and_reset()
+        utils.sequencer_run()
         
         if block:
-            sequencer_complete()
+            utils.sequencer_complete()
             # logger.debug("Sequencer completed")
 
     def configure_stream(self, configuration: StreamConfiguration):
@@ -2335,7 +2386,7 @@ class Acadia:
             self._ADC_input_switch.connect(configuration.adc_switch_slave, 
                                            configuration.adc_switch_master)
         
-    def compile(self, sequence, overwrite=False):
+    def compile(self, sequence, overwrite=False, output_directory: str = None):
         """
         Compiles the programs for all internally-stored :class:`Processor` 
         objects.
@@ -2349,6 +2400,10 @@ class Acadia:
         for dma in self._adc_dmas:
             dma.compile_all(overwrite)
 
+        outfilename = os.path.join(output_directory, "compiled.txt") if output_directory is not None else "compiled.txt"
+        with open(outfilename, "w") as outfile:
+            outfile.write(self.sequencer_pprint())    
+
         return retval
 
     def assemble(self, output_directory: str = None) -> dict[str,list[int]]:
@@ -2361,22 +2416,29 @@ class Acadia:
         assembled = {}
 
         for dma_type,dma_list in [("DAC", self._dac_dmas), ("ADC", self._adc_dmas)]:
-            for i,dma in enumerate(dma_list):
+            for idx_dma,dma in enumerate(dma_list):
                 if len(dma._compiled_program) > 0:
-                    logger.debug(f"Assembling {dma_type}{i} DMA program with length {len(dma._compiled_program)}")
-                    bin = sum(*[instr.assemble() for instr in dma._compiled_program])
-                    assembled[f"{dma_type}{i}@{0:08X}"] = hexlify(bin).decode("ascii")
+                    logger.debug(f"Assembling {dma_type}{idx_dma} DMA program with length {len(dma._compiled_program)}")
+                    assembled_bin = bytearray(len(dma._compiled_program) * 8)
+                    for idx_instr,instr in enumerate(dma._compiled_program):
+                        assembled_bin[idx_instr*8 : (idx_instr+1)*8] = instr.assemble()
+                    
+                    assembled[f"{dma_type}{idx_dma}@{0:08X}"] = hexlify(assembled_bin).decode("ascii")
             
         # Assemble the sequencer last so that if any DMA descriptors are resolved to have zero length,
         # the instruction driving them will be removed above
         num_sequencer_instructions = sum([len(s._compiled_program) for s in self._sequencer_type.instances])
         logger.debug(f"Assembling sequencer program with {num_sequencer_instructions} instructions")
                 
-        idx = 0
+        address = 0
         for s in self._sequencer_type.instances:
-            bin = sum(*[instr.assemble() for instr in s._compiled_program])
-            assembled[f"seq@{idx*16:08X}"] = hexlify(bin).decode("ascii")
-            idx += len(s._compiled_program)
+            assembled_bin = bytearray(len(s._compiled_program) * 16)
+            key = f"seq@{address:08X}"
+            for instr in s._compiled_program:
+                assembled_bin[address : address+16] = instr.assemble()
+                address += 16
+            
+            assembled[key] = hexlify(assembled_bin).decode("ascii")
 
         outfilename = os.path.join(output_directory, "assembled.json") if output_directory is not None else "assembled.json"
         with open(outfilename, "w") as outfile:
@@ -2384,7 +2446,7 @@ class Acadia:
             
         return assembled
     
-    def load(self, inp: Union[dict[str,list[int]], str, None] = None):
+    def load(self, inp: Union[dict[str,list[int]], str, None] = None) -> None:
         """
         Loads assembled programs into memory. If the input argument is a dict,
         it must have the format as produced by assemble(). If the input is a str,
@@ -2419,9 +2481,9 @@ class Acadia:
             else:
                 raise ValueError(f"Unrecognized segment {segment}")
             
-            bin = unhexlify(str.encode(data, "ascii"))
-            logger.debug(f"Loading {len(bin)} bytes into {buffer_name} memory at offset {offset}")
-            buffer[offset:offset+len(bin)] = bin
+            assembled_bin = unhexlify(str.encode(data, "ascii"))
+            logger.debug(f"Loading {len(assembled_bin)} bytes into {buffer_name} memory at offset {offset}")
+            buffer[offset:offset+len(assembled_bin)] = assembled_bin
                         
     def assemble_simulation(self) -> str:
         """
@@ -2447,18 +2509,21 @@ class Acadia:
             
         return sim_string
 
-    def sequencer_pprint(self):
+    def sequencer_pprint(self) -> str:
         """
         :return: a "pretty" representation of the programs compiled
             for the sequencer
         :rtype: str
         """
         idx = 0
+        output = ""
         for idx_seq,s in enumerate(self._sequencer_type.instances):
-            print(f"---- Program {idx_seq} ----")
+            output += f"---- Program {idx_seq} ----"
             for instr in s._compiled_program:
-                print(f"{idx:04X}: {instr.pprint()}")
+                output += f"{idx:04X}: {instr.pprint()}"
                 idx += 1
+
+        return output
 
     # -------------- SYSTEM UTILITIES ----------- #
             
@@ -2895,7 +2960,7 @@ class Acadia:
             
             # We now need to determine which switch input port to use
             # First, check if the ADC is directly connected to the input switch
-            name = f"ADC{input_source.num}"
+            name = f"ADC{input_source.num()}"
             if name in self._stream_input_resources:
                 input_resource = self._stream_input_resources[name]()
             else:
@@ -2909,7 +2974,7 @@ class Acadia:
                         adc_switch_inputs.remove(inp["channel"])
                 
                 # This will raise an exception if it's not in the list
-                adc_switch_master = adc_switch_inputs.index(input_source.num)
+                adc_switch_master = adc_switch_inputs.index(input_source.num())
             
         elif isinstance(self.input_source, str):
             input_resource = self._stream_input_resources[input_source]()

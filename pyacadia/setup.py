@@ -3,8 +3,12 @@ from setuptools import setup, find_packages, Extension
 import subprocess
 import numpy as np
 
-utils_module = Extension("acadia.utils",
-                                sources=["acadia/utils/utils_py.c"])
+utils_sources = []
+for filename in os.listdir("acadia/utils"):
+    if filename.endswith(".c"):
+        utils_sources += [os.path.join("acadia/utils", filename)]
+
+utils_module = Extension("acadia.utils", sources=utils_sources)
 
 result = subprocess.run("lscpu | grep Cortex-A53", shell=True)
 on_rfsoc = result.returncode == 0
