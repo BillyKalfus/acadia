@@ -4,6 +4,8 @@ from operator import mul
 import logging
 
 import numpy as np
+from scipy.signal.windows import get_window
+
 from acadia.rfdc import Channel
 from .compiler import Symbol, Operation
 
@@ -179,11 +181,6 @@ class Waveform:
                                  f" {data}")
             
             if data[0] == "scipy":
-                from scipy.signal.windows import get_window
-
-                logger.warning(f"Attempted to set data of non-attached"
-                                   f" memory with scipy window `{data[1]}`.")
-
                 return self.set(get_window(data[1], self.size), scale=scale)
             else:
                 raise ValueError(f"Unrecognized signature specifier for"

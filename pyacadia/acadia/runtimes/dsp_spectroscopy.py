@@ -45,14 +45,13 @@ class DSPSpectroscopyRuntime(Runtime):
         acadia.align_tile_latencies()
 
         # When we set the channel properties, configure the NCO for synchronization
-        stimulus_channel.set(**self.stimulus["datapath"])
-        stimulus_channel.set_nco(update_source="sysref")
-        capture_channel.set(**self.capture["datapath"])
-        capture_channel.set_nco(update_source="sysref")
+        stimulus_channel.set(nco_update_event_source="sysref", **self.stimulus["datapath"])
+        capture_channel.set(nco_update_event_source="sysref", **self.capture["datapath"])
 
         stimulus_waveform.set(**self.stimulus["signal"])
 
-        acadia.load(*acadia.assemble())
+        acadia.assemble()
+        acadia.load()
 
         for i in range(self.iterations):
             for frequency in self.frequencies:
@@ -64,7 +63,7 @@ class DSPSpectroscopyRuntime(Runtime):
                 acadia.update_ncos_synchronized()
 
                 # Run the sequencer                        
-                acadia.run(assemble=False)
+                acadia.run()
                 self.data["traces"].write(capture_waveform.array)
             
                 # Check whether the host wants data or whether it's requesting a hangup
@@ -211,7 +210,7 @@ def run(plot=True):
 
         "datapath": {
             "vop": 4000,
-            "nyquist_zone": 2
+            "mix_reconstruction": 2
         },
 
         "waveform": {
@@ -227,10 +226,6 @@ def run(plot=True):
     
     capture: dict = {
         "channel": "ADC4",
-
-        "datapath": {
-            "nyquist_zone": 1
-        },
 
         "waveform": {
             "length": 2.5e-6,

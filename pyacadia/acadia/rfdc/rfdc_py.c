@@ -1712,6 +1712,66 @@ static PyObject* PyRfdc_set_sysref_enabled(PyObject* self, PyObject* en)
     #endif
 }
 
+static const char RFDC_DYNAMIC_PLL_CONFIG_DOCSTRING[] = "Reconfigures the settings of the RF tile PLL.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n"
+    ":param external_clock: If True, indicates that the PLL should be disabled and that the tile should use an external sampling clock.\n"
+    ":param reference_frequency: Frequency in Hz of the reference clock input to the tile.\n"
+    ":param sample_frequency: Desired sample frequency in Hz for the tile.\n";
+static PyObject* PyRfdc_dynamic_pll_config(PyObject* self, PyObject* args, PyObject* kwargs)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    int external_clock;
+    double reference_frequency;
+    double sample_frequency;
+
+    unsigned int tile_type;
+    unsigned int tile_id;
+
+    static char* kwlist[] = {"tile", "external_clock", "reference_frequency", "sample_frequency", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "spdd", kwlist, 
+        &tile, 
+        &external_clock, 
+        &reference_frequency,
+        &sample_frequency))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if((strcmp(tile, "ADCTile0") == 0) || (strcmp(tile, "ADCTile1") == 0) || (strcmp(tile, "ADCTile2") == 0) || (strcmp(tile, "ADCTile3") == 0))
+    {
+        tile_type = XRFDC_ADC_TILE;
+    }
+    else if((strcmp(tile, "DACTile0") == 0) || (strcmp(tile, "DACTile1") == 0) || (strcmp(tile, "DACTile2") == 0) || (strcmp(tile, "DACTile3") == 0))
+    {
+        tile_type = XRFDC_DAC_TILE;
+    }
+    else 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+    tile_id = tile[7] - '0';
+
+    if(XRFdc_DynamicPLLConfig(
+        (&xrfdc), 
+        tile_type, 
+        tile_id, 
+        (external_clock ? XRFDC_EXTERNAL_CLK : XRFDC_INTERNAL_PLL_CLK),
+        reference_frequency / 1e6,
+        sample_frequency / 1e6) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Call to XRFdc_DynamicPLLConfig failed in %s", __FUNCTION__);
+    }
+
+    Py_RETURN_NONE;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
 static const char RFDC_MTS_INIT_DOCSTRING[] = "Initializes multi-tile synchronization (MTS).";
 static PyObject* PyRfdc_mts_init(PyObject* self)
 {
@@ -1818,6 +1878,7 @@ static PyMethodDef PyRfdcMethods[] = {
     {"get_clock_distribution", (PyCFunction)PyRfdc_get_clock_distribution, METH_NOARGS, RFDC_GET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_clock_distribution", (PyCFunction)PyRfdc_set_clock_distribution, METH_KEYWORDS | METH_VARARGS, RFDC_SET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_sysref_enabled", (PyCFunction)PyRfdc_set_sysref_enabled, METH_O, RFDC_SET_SYSREF_ENABLED_DOCSTRING},
+    {"dynamic_pll_config", (PyCFunction)PyRfdc_dynamic_pll_config, METH_KEYWORDS | METH_VARARGS, RFDC_DYNAMIC_PLL_CONFIG_DOCSTRING},
     {"mts_init", (PyCFunction)PyRfdc_mts_init, METH_NOARGS, RFDC_MTS_INIT_DOCSTRING},
     {"mts_sync", (PyCFunction)PyRfdc_mts_sync, METH_NOARGS, RFDC_MTS_SYNC_DOCSTRING},
     {NULL, NULL, 0, NULL}

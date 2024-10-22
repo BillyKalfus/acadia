@@ -43,17 +43,20 @@ class LoopbackRuntime(Runtime):
         acadia.attach()
 
         # Configure channel analog parameters
-        stimulus_channel.set(**self.stimulus["datapath"])
-        capture_channel.set(**self.capture["datapath"])
+        stimulus_channel.set(nco_update_event_source="immediate", **self.stimulus["datapath"])
+        capture_channel.set(nco_update_event_source="immediate", **self.capture["datapath"])
+        stimulus_channel.trigger_nco_update_event()
+        capture_channel.trigger_nco_update_event()
 
         # Populate the stimulus with data
         stimulus_waveform.set(**self.stimulus["signal"])
 
         # Assemble and load the program
-        acadia.load(*acadia.assemble())
+        acadia.assemble()
+        acadia.load()
 
         for i in range(self.iterations):
-            acadia.run(assemble=False)
+            acadia.run()
             self.data["traces"].write(capture_waveform.array)
             
             if self.data.serve() == DataManager.serve_hangup():
@@ -133,15 +136,12 @@ def run(plot=True):
 
         "datapath": {
             "vop": 12000,
-            "nyquist_zone": 2,
-            "nco": {
-                "frequency": 4.6e9
-            }
+            "mix_reconstruction": True,
+            "nco_frequency": 4.6e9
         },
 
         "waveform": {
             "length": 1e-6,
-            # "flat_top_length": 1e-6
         },
         
         "signal": {
@@ -154,15 +154,12 @@ def run(plot=True):
         "channel": "ADC1",
 
         "datapath": {
-            "nyquist_zone": 2,
-            "nco": {
-                "frequency": 4.6e9
-            }
+            "nco_frequency": 4.6e9
         },
 
         "waveform": {
             "length": 4.096e-6,
-            "decimation": 4,
+            "decimation": 1,
             "region": "plddr"
         }
     }

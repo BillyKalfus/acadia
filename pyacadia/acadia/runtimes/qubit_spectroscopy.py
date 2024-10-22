@@ -48,12 +48,9 @@ class QubitSpectroscopyRuntime(Runtime):
         acadia.attach()
         acadia.align_tile_latencies()
 
-        qubit_channel.set(**self.qubit_stimulus["datapath"])
-        qubit_channel.set_nco(update_source="sysref")
-        readout_stimulus_channel.set(**self.readout_stimulus["datapath"])
-        readout_stimulus_channel.set_nco(update_source="sysref")
-        readout_capture_channel.set(**self.readout_capture["datapath"])  
-        readout_capture_channel.set_nco(update_source="sysref")      
+        qubit_channel.set(nco_update_event_source="sysref", **self.qubit_stimulus["datapath"])
+        readout_stimulus_channel.set(nco_update_event_source="sysref", **self.readout_stimulus["datapath"])
+        readout_capture_channel.set(nco_update_event_source="sysref", **self.readout_capture["datapath"])  
 
         # Load the stimulus waveforms
         qubit_stimulus_waveform.set(**self.qubit_stimulus["signal"])
@@ -62,7 +59,8 @@ class QubitSpectroscopyRuntime(Runtime):
         import numpy as np
         kernel.set(np.float64(0.5))
 
-        acadia.load(*acadia.assemble())
+        acadia.assemble()
+        acadia.load()
 
         for i in range(self.iterations):
             for readout_frequency in self.readout_frequencies:
@@ -81,7 +79,7 @@ class QubitSpectroscopyRuntime(Runtime):
                     # synchronously update everything
                     acadia.update_ncos_synchronized()
 
-                    acadia.run(assemble=False)
+                    acadia.run()
                     self.data["traces"].write(readout_capture_waveform.array)            
                     
                     # Check whether the host wants data or whether it's requesting a hangup

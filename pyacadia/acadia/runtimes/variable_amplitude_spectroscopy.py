@@ -44,15 +44,14 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         acadia.align_tile_latencies()
 
         # When we set the channel properties, configure the NCO for synchronization
-        stimulus_channel.set(**self.stimulus["datapath"])
-        stimulus_channel.set_nco(update_source="sysref")
-        capture_channel.set(**self.capture["datapath"])
-        capture_channel.set_nco(update_source="sysref")
+        stimulus_channel.set(nco_update_event_source="sysref", **self.stimulus["datapath"])
+        capture_channel.set(nco_update_event_source="sysref", **self.capture["datapath"])
 
         import numpy as np
         kernel.set(np.float64(0.1))
 
-        acadia.load(*acadia.assemble())
+        acadia.assemble()
+        acadia.load()
 
         for i,amplitude in product(range(self.iterations), self.amplitudes):
             self.stimulus["signal"]["scale"] = amplitude
@@ -65,7 +64,7 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
                 acadia.reset_nco_phase(capture_channel)
                 acadia.update_ncos_synchronized()
 
-                acadia.run(assemble=False)
+                acadia.run()
                 self.data["traces"].write(capture_waveform.array)
         
                 if self.data.serve() == DataManager.serve_hangup():

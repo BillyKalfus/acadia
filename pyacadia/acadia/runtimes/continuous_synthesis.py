@@ -34,6 +34,9 @@ class ContinuousSynthesisRuntime(Runtime):
         channel.set(**self.stimulus["datapath"])
         pulse.set(**self.stimulus["signal"])
         
+        acadia.assemble()
+        acadia.load()
+
         acadia.run(block=False)
         time.sleep(self.length)
         acadia.sequencer_halt()
@@ -44,20 +47,18 @@ def run():
 
         "datapath": {
             "vop": 12000,
-            "nyquist_zone": 2,
-            "nco": {
-                "frequency": 4.6e9
-            }
+            "mix_reconstruction": True,
+            "nco_frequency": 4.6e9
         },
 
         "waveform": {
             "length": 1e-6,
-            "flat_top_length": 1e-6
+            "fixed_length": 1e-6
         },
         
         "signal": {
             "data": ("scipy", "hann"),
-            "scale": 1.0
+            "scale": 0.99
         }
     }
 
