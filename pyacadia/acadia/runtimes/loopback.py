@@ -12,6 +12,7 @@ class LoopbackRuntime(Runtime):
     capture: dict
     iterations: int
     plot: bool = True
+    figsize: tuple[int] = (4,3)
         
     def main(self):     
         from acadia import Acadia, DataManager
@@ -65,18 +66,15 @@ class LoopbackRuntime(Runtime):
         
         self.final_serve()
 
-
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
         if self.plot:
-            from IPython.core.getipython import get_ipython
-            get_ipython().run_line_magic("matplotlib", "widget")
-
             from acadia.processing import DynamicLine
             import matplotlib.pyplot as plt
 
-            self.fig,self.ax = plt.subplots(1,1, figsize=(3,3))
+            self.fig, self.ax = plt.subplots(1, 1, figsize=self.figsize)
             self.fig.tight_layout()
+            self.fig.subplots_adjust(left=0.25, bottom=0.25)
 
             self.line_re = DynamicLine(self.ax, ".-")
             self.line_im = DynamicLine(self.ax, ".-")
@@ -89,9 +87,6 @@ class LoopbackRuntime(Runtime):
         from tqdm.notebook import tqdm
         self.progress_bar = tqdm(desc="Iterations", dynamic_ncols=True, total=self.iterations)
         self.previous_completed_iterations = 0
-
-        
-        # self.fig.show()
 
     def update(self):
         import numpy as np
@@ -129,15 +124,17 @@ class LoopbackRuntime(Runtime):
     def finalize(self):
         super().finalize()
         self.progress_bar.close()
+        if self.plot:
+            self.savefig(self.fig)  
 
 def run(plot=True):   
     stimulus: dict = {
         "channel": "DAC1",
 
         "datapath": {
-            "vop": 12000,
+            "vop": 4000,
             "mix_reconstruction": True,
-            "nco_frequency": 4.6e9
+            "nco_frequency": 4.4e9
         },
 
         "waveform": {
@@ -154,18 +151,23 @@ def run(plot=True):
         "channel": "ADC1",
 
         "datapath": {
-            "nco_frequency": 4.6e9
+            "nco_frequency": -4.4e9
         },
 
         "waveform": {
-            "length": 4.096e-6,
+            "length": 4e-6,
             "decimation": 1,
             "region": "plddr"
         }
     }
 
+    if plot:
+        # Set the matplotlib backend to one which we can actually update
+        from IPython.core.getipython import get_ipython
+        get_ipython().run_line_magic("matplotlib", "widget")
+
     rt = LoopbackRuntime(stimulus, capture, plot=plot, iterations=100000)
-    rt.deploy("192.168.2.69", "loopback", files=[__file__], log_debug=True, remove_remote_directory=False, remote_directory="/home/root/%y%m%d_%H%M%S")    
+    rt.deploy("192.168.2.69")    
     rt.display()
 
     return rt

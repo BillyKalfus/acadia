@@ -243,6 +243,8 @@ class SpectroscopyRuntime(Runtime):
         super().finalize()
         self.iterations_progress_bar.close()
         self.frequencies_progress_bar.close()
+        if self.plot:
+            self.savefig(self.fig)  
 
 def run(plot=True):
     import numpy as np
@@ -252,7 +254,7 @@ def run(plot=True):
 
         "datapath": {
             "vop": 4000,
-            "nyquist_zone": 2
+            "mix_reconstruction": True
         },
 
         "waveform": {
@@ -270,7 +272,7 @@ def run(plot=True):
         "channel": "ADC4",
 
         "datapath": {
-            "nyquist_zone": 2
+            "mix_reconstruction": True
         },
 
         # Because we're using the CMACC to do the integration, the length here 

@@ -201,53 +201,5 @@ class DSPSpectroscopyRuntime(Runtime):
         super().finalize()
         self.iterations_progress_bar.close()
         self.frequencies_progress_bar.close()
-
-def run(plot=True):
-    import numpy as np
-
-    stimulus: dict = {
-        "channel": "DAC4",
-
-        "datapath": {
-            "vop": 4000,
-            "mix_reconstruction": 2
-        },
-
-        "waveform": {
-            "length": 128e-9,
-            "fixed_length": 2e-6
-        },
-        
-        "signal": {
-            "data": ("scipy", "hann"),
-            "scale": 0.8
-        }
-    }
-    
-    capture: dict = {
-        "channel": "ADC4",
-
-        "waveform": {
-            "length": 2.5e-6,
-            "decimation": 0,
-            "region": "plddr"
-        }
-    }
-
-    frequencies = np.linspace(9.15e9, 9.25e9, 201)
-    
-    # Run the program on the target
-    rt = DSPSpectroscopyRuntime(frequencies=frequencies,
-                            stimulus=stimulus,
-                            capture=capture,
-                            iterations=1000,
-                            plot=plot,
-                            electrical_delay=108e-9)
-    rt.deploy("192.168.2.70")    
-    rt.display()
-
-    return rt
-
-if __name__ == "__main__":
-    rt = run()
-    
+        if self.plot:
+            self.savefig(self.fig)  

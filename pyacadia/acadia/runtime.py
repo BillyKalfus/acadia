@@ -3,6 +3,7 @@ import traceback
 import logging
 import json
 import shutil
+import pickle
 
 from datetime import datetime
 from threading import Thread, Event
@@ -343,6 +344,25 @@ class Runtime:
     
     def is_done(self):
         return self._event_loop is not None and not self._event_loop.is_alive()
+
+    def savefig(self, figure, name: str = None) -> None:
+        if name is None:
+            idx = 0
+            while os.path.exists(os.path.join(self.local_directory, f"fig{idx}.png")):
+                idx += 1
+            name = f"fig{idx}"
+        # Pickle the figure for later use
+        with open(os.path.join(self.local_directory, f"{name}.pkl"), "wb") as f:
+            pickle.dump(figure, f)
+
+        # Save an image file
+        figure.canvas.close()
+        image_filename = os.path.join(self.local_directory, f"{name}.png")
+        figure.savefig(image_filename, dpi=500)
+        
+        # Replace the interactive canvas with a static image
+        from IPython.display import Image, display
+        display(Image(image_filename))
     
     # ----------------------- Internal utility functions --------------------- #
 
@@ -475,9 +495,12 @@ class Runtime:
 
         import time
         tstart = time.time()
-        retval = DataManager.serve_no_request()
-        while retval == DataManager.serve_no_request() and time.time() - tstart < timeout:
+        retval = None
+        while time.time() - tstart < timeout:
+            # Only exit the serve loop if the client told us to
             retval = self.data.serve()
+            if retval == DataManager.serve_hangup():
+                break
             
         logging.debug(f"DataManager serve loop finished with retval {retval}.")
         self.data.disconnect()
