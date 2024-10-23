@@ -45,8 +45,8 @@ class LoopbackRuntime(Runtime):
         # Configure channel analog parameters
         stimulus_channel.set(nco_update_event_source="immediate", **self.stimulus["datapath"])
         capture_channel.set(nco_update_event_source="immediate", **self.capture["datapath"])
-        stimulus_channel.trigger_nco_update_event()
-        capture_channel.trigger_nco_update_event()
+        stimulus_channel.nco_immediate_update_event()
+        capture_channel.nco_immediate_update_event()
 
         # Populate the stimulus with data
         stimulus_waveform.set(**self.stimulus["signal"])

@@ -31,7 +31,9 @@ class ContinuousSynthesisRuntime(Runtime):
         acadia.compile(sequence)
         acadia.attach()
         
-        channel.set(**self.stimulus["datapath"])
+        channel.set(nco_update_event_source="immediate", **self.stimulus["datapath"])
+        channel.nco_immediate_update_event()
+        
         pulse.set(**self.stimulus["signal"])
         
         acadia.assemble()

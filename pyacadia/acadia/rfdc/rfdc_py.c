@@ -522,16 +522,41 @@ static PyObject* PyChannel_reset_nco_phase(PyObject* self)
     #endif
 }
 
-static const char CHANNEL_TRIGGER_NCO_UPDATE_EVENT_DOCSTRING[] = "Apply an NCO update event to the channel.";
-static PyObject* PyChannel_trigger_nco_update_event(PyObject* self)
+static const char CHANNEL_NCO_SLICE_UPDATE_EVENT_DOCSTRING[] = "Apply an NCO update event with 'slice' source to the channel.";
+static PyObject* PyChannel_nco_slice_update_event(PyObject* self)
 {
     #ifdef __aarch64__
 
     ChannelObject* self_channel = (ChannelObject*)self;
-    if(XRFdc_UpdateEvent((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, XRFDC_EVENT_MIXER) != XRFDC_SUCCESS)
-    {
-        return PyErr_Format(PyExc_ValueError, "Call to XRFdc_UpdateEvent in %s failed.", __FUNCTION__);
-    }
+    // if(XRFdc_UpdateEvent((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, XRFDC_EVENT_MIXER) != XRFDC_SUCCESS)
+    // {
+    //     return PyErr_Format(PyExc_ValueError, "Call to XRFdc_UpdateEvent in %s failed.", __FUNCTION__);
+    // }
+
+    uint32_t address_base = XRFDC_BLOCK_BASE(self_channel->is_dac, 
+                                             self_channel->tile, 
+                                             self_channel->block);
+    uint32_t offset = self_channel->is_dac ? XRFDC_DAC_UPDATE_DYN_OFFSET : XRFDC_ADC_UPDATE_DYN_OFFSET;
+    XRFdc_WriteReg16((&xrfdc), address_base, offset, 0x1);
+    Py_RETURN_NONE;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_NCO_IMMEDIATE_UPDATE_EVENT_DOCSTRING[] = "Apply an NCO update event with 'immediate' source to the channel.";
+static PyObject* PyChannel_nco_immediate_update_event(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    uint32_t address_base = XRFDC_BLOCK_BASE(self_channel->is_dac, 
+                                             self_channel->tile, 
+                                             self_channel->block);
+
+    uint32_t offset = self_channel->is_dac ? XRFDC_DAC_UPDATE_DYN_OFFSET : XRFDC_ADC_UPDATE_DYN_OFFSET;
+    XRFdc_ClrSetReg((&xrfdc), address_base, offset, XRFDC_UPDT_EVNT_MASK, XRFDC_UPDT_EVNT_NCO_MASK);
 
     Py_RETURN_NONE;
 
@@ -1213,7 +1238,8 @@ static PyMethodDef PyChannelMethods[] = {
     {"set_nco_phase", (PyCFunction)PyChannel_set_nco_phase, METH_O, CHANNEL_SET_NCO_PHASE_DOCSTRING},
     {"get_nco_phase_word", (PyCFunction)PyChannel_get_nco_phase_word, METH_NOARGS, CHANNEL_GET_NCO_PHASE_WORD_DOCSTRING},
     {"reset_nco_phase", (PyCFunction)PyChannel_reset_nco_phase, METH_NOARGS, CHANNEL_RESET_NCO_PHASE_DOCSTRING},
-    {"trigger_nco_update_event", (PyCFunction)PyChannel_trigger_nco_update_event, METH_NOARGS, CHANNEL_TRIGGER_NCO_UPDATE_EVENT_DOCSTRING},
+    {"nco_slice_update_event", (PyCFunction)PyChannel_nco_slice_update_event, METH_NOARGS, CHANNEL_NCO_SLICE_UPDATE_EVENT_DOCSTRING},
+    {"nco_immediate_update_event", (PyCFunction)PyChannel_nco_immediate_update_event, METH_NOARGS, CHANNEL_NCO_IMMEDIATE_UPDATE_EVENT_DOCSTRING},
     {"set_vop", (PyCFunction)PyChannel_set_vop, METH_O, CHANNEL_SET_VOP_DOCSTRING},
     {"get_vop", (PyCFunction)PyChannel_get_vop, METH_NOARGS, CHANNEL_GET_VOP_DOCSTRING},
     {"set_dsa", (PyCFunction)PyChannel_set_dsa, METH_O, CHANNEL_SET_DSA_DOCSTRING},
