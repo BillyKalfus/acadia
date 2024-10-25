@@ -27,23 +27,20 @@ typedef struct {
     unsigned char is_dac;
     unsigned char interface_width_bytes;
     double interface_sample_frequency;
-    double analog_sample_frequency;
 } ChannelObject;
 
 static int PyChannel_init(PyObject* self, PyObject* args, PyObject* kwargs)
 {
     ChannelObject* self_channel = (ChannelObject*)self;
-    self_channel->analog_sample_frequency = 0;
     self_channel->interface_sample_frequency = 0;
 
-    static char* kwlist[] = {"tile", "block", "is_dac", "interface_width_bytes", "interface_sample_frequency", "analog_sample_frequency", NULL};
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "BBBBd|d", kwlist, 
+    static char* kwlist[] = {"tile", "block", "is_dac", "interface_width_bytes", "interface_sample_frequency", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "BBBBd", kwlist, 
         &(self_channel->tile), 
         &(self_channel->block), 
         &(self_channel->is_dac),
         &(self_channel->interface_width_bytes),
-        &(self_channel->interface_sample_frequency),
-        &(self_channel->analog_sample_frequency)))
+        &(self_channel->interface_sample_frequency)))
     {
         PyErr_SetString(PyExc_ValueError, "Unable to parse arguments in Channel.__init__");
         return -1;
@@ -180,28 +177,6 @@ static PyObject* PyChannel_status(PyObject* self)
     #endif
 }
 
-static const char CHANNEL_LOAD_SAMPLE_FREQUENCY_DOCSTRING[] = "Loads the analog sample frequency from the tile into the internal data structure.";
-static PyObject* PyChannel_load_sample_frequency(PyObject* self)
-{
-    #ifdef __aarch64__
-
-    ChannelObject* self_channel = (ChannelObject*)self;
-    XRFdc_BlockStatus status;
-
-    if(XRFdc_GetBlockStatus(&xrfdc, self_channel->is_dac, self_channel->tile, self_channel->block, &status) != XRFDC_SUCCESS)
-    {
-        return PyErr_Format(PyExc_SystemError, "Call to XRFdc_GetBlockStatus failed in function %s", __FUNCTION__);
-    }
-
-    self_channel->analog_sample_frequency = status.SamplingFreq*1e9;
-
-    Py_RETURN_NONE;
-    
-    #else
-    return RFDC_WRONG_HARDWARE_EXCEPTION;
-    #endif
-}
-
 static const char CHANNEL_SET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING[] = "Sets the source with which NCO setting updates will be triggered.\nValid options are 'immediate', 'slice', 'tile', 'marker', 'pl', and 'sysref'";
 static PyObject* PyChannel_set_nco_update_event_source(PyObject* self, PyObject* source_obj)
 {
@@ -324,21 +299,175 @@ static PyObject* PyChannel_get_delay(PyObject* self)
     #endif
 }
 
+static const char CHANNEL_GET_ANALOG_SAMPLE_RATE_DOCSTRING[] = "Retrieves the sample rate of the converter core in Hz.";
+static PyObject* PyChannel_get_analog_sample_rate(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    XRFdc_PLL_Settings pll_settings;
+
+    if(XRFdc_GetPLLConfig((&xrfdc), self_channel->is_dac, self_channel->tile, &pll_settings) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve PLL settings in %s", __FUNCTION__);
+    }
+
+    return PyFloat_FromDouble(pll_settings.SampleRate*1e9);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_GET_ALLOWED_ANALOG_SAMPLE_RATES_DOCSTRING[] = "Retrieves allowed sample rates for the converter core in Hz.";
+static PyObject* PyChannel_get_allowed_analog_sample_rates(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    PyObject* rates;
+    uint32_t fabric_words;
+    uint32_t i;
+    uint32_t rates_idx;
+    uint32_t num_rates;
+    double max_rate;
+    double fabric_freq;
+    double interface_sample_rate;
+
+    // Get the fabric clock
+    fabric_freq = XRFdc_GetFabClkFreq((&xrfdc), self_channel->is_dac, self_channel->tile) * 1e6;
+
+    if(self_channel->is_dac)
+    {
+        if(XRFdc_GetFabWrVldWords((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, &fabric_words) != XRFDC_SUCCESS)
+        {
+            return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric write valid words in %s", __FUNCTION__);
+        }
+
+        max_rate = 9.8e9;
+    }
+    else
+    {
+        if(XRFdc_GetFabRdVldWords((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, &fabric_words) != XRFDC_SUCCESS)
+        {
+            return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric read valid words in %s", __FUNCTION__);
+        }
+
+        max_rate = 2.5e9;
+    }
+    
+    interface_sample_rate = fabric_freq * fabric_words / 2; // divide by two because two words per complex sample
+
+    num_rates = 0;
+    for(i = 1; i*interface_sample_rate < max_rate; i++)
+    {
+        if(i == 1 || i == 2 || i == 3 || i == 4 || i == 5 || i == 6 || i == 8 || i == 10 || i == 12)
+        {
+            num_rates++;
+        }
+    }
+
+    rates = PyTuple_New(num_rates);
+    rates_idx = 0;
+    for(i = 1; i*interface_sample_rate < max_rate; i++)
+    {
+        if(i == 1 || i == 2 || i == 3 || i == 4 || i == 5 || i == 6 || i == 8 || i == 10 || i == 12)
+        {
+            if(PyTuple_SetItem(rates, rates_idx, PyFloat_FromDouble(i*interface_sample_rate)) == -1)
+            {
+                return PyErr_Format(PyExc_ValueError, "Failed to update rates tuple at position %d in %s", i, __FUNCTION__);
+            }
+
+            rates_idx++;
+        }
+    }
+
+    return rates;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_GET_FABRIC_CLOCK_FREQUENCY_DOCSTRING[] = "Retrieves the frequency of the fabric interface.";
+static PyObject* PyChannel_get_fabric_clock_frequency(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    return PyFloat_FromDouble(XRFdc_GetFabClkFreq((&xrfdc), self_channel->is_dac, self_channel->tile));
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_GET_VALID_FABRIC_WRITE_WORDS_DOCSTRING[] = "Retrieves number of valid write words at the fabric interface of the channel.";
+static PyObject* PyChannel_get_valid_fabric_write_words(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    uint32_t fabric_words;
+
+    // Get the fabric clock
+    if(XRFdc_GetFabWrVldWords((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, &fabric_words) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric valid words in %s", __FUNCTION__);
+    }
+
+    return PyLong_FromLong(fabric_words);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_GET_VALID_FABRIC_READ_WORDS_DOCSTRING[] = "Retrieves number of valid read words at the fabric interface of the channel.";
+static PyObject* PyChannel_get_valid_fabric_read_words(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    uint32_t fabric_words;
+
+    // Get the fabric clock
+    if(XRFdc_GetFabRdVldWords((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, &fabric_words) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric valid words in %s", __FUNCTION__);
+    }
+
+    return PyLong_FromLong(fabric_words);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
 static const char CHANNEL_FREQUENCY_TO_NCO_WORD_DOCSTRING[] = "Converts a floating-point frequency in Hz into an NCO tuning word for the channel using its internally-stored analog sampling frequency.";
 static PyObject* PyChannel_frequency_to_nco_word(PyObject* self, PyObject* frequency_obj)
 {
+    #ifdef __aarch64__
+
     ChannelObject* self_channel = (ChannelObject*)self;
     double nco_sample_frequency;
     double frequency;
     double word_double;
     int64_t word;
+    XRFdc_PLL_Settings pll_settings;
 
     if(!PyArg_Parse(frequency_obj, "d", &frequency))
     {
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
 
-    nco_sample_frequency = self_channel->analog_sample_frequency;
+    // Get the sample frequency so that we can properly compute the tuning word
+    if(XRFdc_GetPLLConfig((&xrfdc), self_channel->is_dac, self_channel->tile, &pll_settings) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve PLL settings in %s", __FUNCTION__);
+    }
+
+    nco_sample_frequency = pll_settings.SampleRate*1e9;
     if(nco_sample_frequency == 0)
     {
         return PyErr_Format(PyExc_ValueError, "Analog sample rate not yet assigned to %s%d_%d, which is required for function %s", 
@@ -357,6 +486,10 @@ static PyObject* PyChannel_frequency_to_nco_word(PyObject* self, PyObject* frequ
     // in order to put it into the correct nyquist zone  
     word = ((int64_t)word_double) & (((int64_t)1 << 48)-1);
     return PyLong_FromLongLong(word);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
 }
 
 static const char CHANNEL_SET_NCO_FREQUENCY_WORD_DOCSTRING[] = "Updates the frequency of the NCO by directly writing to the registers in the tile. The argument is the integer word value of the NCO increment.";
@@ -1208,27 +1341,28 @@ static const char CHANNEL_BLOCK_DOCSTRING[] = "Block index; valid values are 0-3
 static const char CHANNEL_IS_DAC_DOCSTRING[] = "Whether or not the channel is a DAC; valid values are ``True`` or ``False``.";
 static const char CHANNEL_INTERFACE_WIDTH_BYTES_DOCSTRING[] = "The width in bytes of the interface to the DAC channel presented to the fabric.";
 static const char CHANNEL_INTERFACE_SAMPLE_FREQUENCY_DOCSTRING[] = "Interface sample frequency of the channel in Hz.";
-static const char CHANNEL_ANALOG_SAMPLE_FREQUENCY_DOCSTRING[] = "Analog sample frequency of the channel in Hz. If the channel is not attached to hardware, this will be 0.";
 
 static PyMemberDef PyChannelMembers[] = {
     {"tile", T_UBYTE, offsetof(ChannelObject, tile), 0, CHANNEL_TILE_DOCSTRING},
     {"block", T_UBYTE, offsetof(ChannelObject, block), 0, CHANNEL_BLOCK_DOCSTRING},
     {"is_dac", T_BOOL, offsetof(ChannelObject, is_dac), 0, CHANNEL_IS_DAC_DOCSTRING},
     {"interface_width_bytes", T_UBYTE, offsetof(ChannelObject, interface_width_bytes), 0, CHANNEL_INTERFACE_WIDTH_BYTES_DOCSTRING},
-    {"interface_sample_frequency", T_DOUBLE, offsetof(ChannelObject, interface_sample_frequency), 0, CHANNEL_INTERFACE_SAMPLE_FREQUENCY_DOCSTRING},
-    {"analog_sample_frequency", T_DOUBLE, offsetof(ChannelObject, analog_sample_frequency), 0, CHANNEL_ANALOG_SAMPLE_FREQUENCY_DOCSTRING},
-    
+    {"interface_sample_frequency", T_DOUBLE, offsetof(ChannelObject, interface_sample_frequency), 0, CHANNEL_INTERFACE_SAMPLE_FREQUENCY_DOCSTRING},    
     {NULL}
 };
 
 static PyMethodDef PyChannelMethods[] = {
     {"num", (PyCFunction)PyChannel_num, METH_NOARGS, ""},
     {"status", (PyCFunction)PyChannel_status, METH_NOARGS, CHANNEL_STATUS_DOCSTRING},
-    {"load_sample_frequency", (PyCFunction)PyChannel_load_sample_frequency, METH_NOARGS, CHANNEL_LOAD_SAMPLE_FREQUENCY_DOCSTRING},
     {"set_nco_update_event_source", (PyCFunction)PyChannel_set_nco_update_event_source, METH_O, CHANNEL_SET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING},
     {"get_nco_update_event_source", (PyCFunction)PyChannel_get_nco_update_event_source, METH_NOARGS, CHANNEL_GET_NCO_UPDATE_EVENT_SOURCE_DOCSTRING},
     {"set_delay", (PyCFunction)PyChannel_set_delay, METH_O, CHANNEL_SET_DELAY_DOCSTRING},
     {"get_delay", (PyCFunction)PyChannel_get_delay, METH_NOARGS, CHANNEL_GET_DELAY_DOCSTRING},
+    {"get_analog_sample_rate", (PyCFunction)PyChannel_get_analog_sample_rate, METH_NOARGS, CHANNEL_GET_ANALOG_SAMPLE_RATE_DOCSTRING},
+    {"get_allowed_analog_sample_rates", (PyCFunction)PyChannel_get_allowed_analog_sample_rates, METH_NOARGS, CHANNEL_GET_ALLOWED_ANALOG_SAMPLE_RATES_DOCSTRING},
+    {"get_fabric_clock_frequency", (PyCFunction)PyChannel_get_fabric_clock_frequency, METH_NOARGS, CHANNEL_GET_FABRIC_CLOCK_FREQUENCY_DOCSTRING},
+    {"get_valid_fabric_read_words", (PyCFunction)PyChannel_get_valid_fabric_read_words, METH_NOARGS, CHANNEL_GET_VALID_FABRIC_READ_WORDS_DOCSTRING},
+    {"get_valid_fabric_write_words", (PyCFunction)PyChannel_get_valid_fabric_write_words, METH_NOARGS, CHANNEL_GET_VALID_FABRIC_WRITE_WORDS_DOCSTRING},
     {"frequency_to_nco_word", (PyCFunction)PyChannel_frequency_to_nco_word, METH_O, CHANNEL_FREQUENCY_TO_NCO_WORD_DOCSTRING},
     {"set_nco_frequency_word", (PyCFunction)PyChannel_set_nco_frequency_word, METH_O, CHANNEL_SET_NCO_FREQUENCY_WORD_DOCSTRING},
     {"set_nco_frequency", (PyCFunction)PyChannel_set_nco_frequency, METH_O, CHANNEL_SET_NCO_FREQUENCY_DOCSTRING},
@@ -1738,27 +1872,33 @@ static PyObject* PyRfdc_set_sysref_enabled(PyObject* self, PyObject* en)
     #endif
 }
 
-static const char RFDC_DYNAMIC_PLL_CONFIG_DOCSTRING[] = "Reconfigures the settings of the RF tile PLL.\n"
+static const char RFDC_SET_ANALOG_SAMPLE_RATE_DOCSTRING[] = "Reconfigures the settings of the RF tile PLL to set a new analog sample rate.\n"
     ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n"
-    ":param external_clock: If True, indicates that the PLL should be disabled and that the tile should use an external sampling clock.\n"
+    ":param bypass_pll: If True, indicates that the PLL should be disabled and that the tile should use an externally-provided high-frequency sampling clock.\n"
     ":param reference_frequency: Frequency in Hz of the reference clock input to the tile.\n"
     ":param sample_frequency: Desired sample frequency in Hz for the tile.\n";
-static PyObject* PyRfdc_dynamic_pll_config(PyObject* self, PyObject* args, PyObject* kwargs)
+static PyObject* PyRfdc_set_analog_sample_rate(PyObject* self, PyObject* args, PyObject* kwargs)
 {
     #ifdef __aarch64__
 
     const char* tile;
-    int external_clock;
+    int bypass_pll;
     double reference_frequency;
     double sample_frequency;
 
     unsigned int tile_type;
     unsigned int tile_id;
+    uint32_t i;
+    uint32_t fabric_words;
+    double fabric_freq;
+    double interface_sample_rate;
+    uint32_t conversion_factor;
+    uint32_t datapath_mode;
 
-    static char* kwlist[] = {"tile", "external_clock", "reference_frequency", "sample_frequency", NULL};
+    static char* kwlist[] = {"tile", "bypass_pll", "reference_frequency", "sample_frequency", NULL};
     if(!PyArg_ParseTupleAndKeywords(args, kwargs, "spdd", kwlist, 
         &tile, 
-        &external_clock, 
+        &bypass_pll, 
         &reference_frequency,
         &sample_frequency))
     {
@@ -1780,11 +1920,82 @@ static PyObject* PyRfdc_dynamic_pll_config(PyObject* self, PyObject* args, PyObj
 
     tile_id = tile[7] - '0';
 
+    // Determine the interpolation/decimation factor
+    // To do this we first need the interface sample rate
+    fabric_freq = XRFdc_GetFabClkFreq((&xrfdc), tile_type, tile_id) * 1e6;
+
+    if(tile_type == XRFDC_DAC_TILE)
+    {
+        if(XRFdc_GetFabWrVldWords((&xrfdc), XRFDC_DAC_TILE, tile_id, 0, &fabric_words) != XRFDC_SUCCESS)
+        {
+            return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric write valid words in %s", __FUNCTION__);
+        }
+    }
+    else
+    {
+        if(XRFdc_GetFabRdVldWords((&xrfdc), XRFDC_ADC_TILE, tile_id, 0, &fabric_words) != XRFDC_SUCCESS)
+        {
+            return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric read valid words in %s", __FUNCTION__);
+        }
+    }
+    
+    interface_sample_rate = fabric_freq * fabric_words / 2; // divide by two because two words per complex sample
+    conversion_factor = round(sample_frequency / interface_sample_rate);
+    if(conversion_factor != 1 
+        && conversion_factor != 2 
+        && conversion_factor != 3 
+        && conversion_factor != 4 
+        && conversion_factor != 5 
+        && conversion_factor != 6 
+        && conversion_factor != 8 
+        && conversion_factor != 10 
+        && conversion_factor != 12)
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid sample rate %f for interface sample rate %f", sample_frequency, interface_sample_rate);
+    }
+
+    // For high sample rates, we need to change the datapath mode of the channels 
+    if(sample_frequency >= 7e9)
+    {
+        datapath_mode = XRFDC_DATAPATH_MODE_DUC_0_FSDIVFOUR;
+        conversion_factor /= 2;
+    }
+    else
+    {
+        datapath_mode = XRFDC_DATAPATH_MODE_DUC_0_FSDIVTWO;
+    }
+
+    if(tile_type == XRFDC_DAC_TILE)
+    {       
+        for(i = 0; i < 4; i++)
+        {
+            if(XRFdc_SetDataPathMode((&xrfdc), tile_id, i, datapath_mode) != XRFDC_SUCCESS)
+            {
+                return PyErr_Format(PyExc_ValueError, "Call to XRFdc_SetDataPathMode in %s failed.", __FUNCTION__);
+            }
+            
+            if(XRFdc_SetInterpolationFactor((&xrfdc), tile_id, i, conversion_factor) != XRFDC_SUCCESS)
+            {
+                return PyErr_Format(PyExc_ValueError, "Call to XRFdc_SetInterpolationFactor in %s failed.", __FUNCTION__);
+            }
+        }
+    }
+    else
+    {
+        for(i = 0; i < 4; i++)
+        {
+            if(XRFdc_SetDecimationFactor((&xrfdc), tile_id, i, conversion_factor) != XRFDC_SUCCESS)
+            {
+                return PyErr_Format(PyExc_ValueError, "Call to XRFdc_SetDecimationFactor in %s failed.", __FUNCTION__);
+            }
+        }
+    }
+
     if(XRFdc_DynamicPLLConfig(
         (&xrfdc), 
         tile_type, 
         tile_id, 
-        (external_clock ? XRFDC_EXTERNAL_CLK : XRFDC_INTERNAL_PLL_CLK),
+        (bypass_pll ? XRFDC_EXTERNAL_CLK : XRFDC_INTERNAL_PLL_CLK),
         reference_frequency / 1e6,
         sample_frequency / 1e6) != XRFDC_SUCCESS)
     {
@@ -1904,7 +2115,7 @@ static PyMethodDef PyRfdcMethods[] = {
     {"get_clock_distribution", (PyCFunction)PyRfdc_get_clock_distribution, METH_NOARGS, RFDC_GET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_clock_distribution", (PyCFunction)PyRfdc_set_clock_distribution, METH_KEYWORDS | METH_VARARGS, RFDC_SET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_sysref_enabled", (PyCFunction)PyRfdc_set_sysref_enabled, METH_O, RFDC_SET_SYSREF_ENABLED_DOCSTRING},
-    {"dynamic_pll_config", (PyCFunction)PyRfdc_dynamic_pll_config, METH_KEYWORDS | METH_VARARGS, RFDC_DYNAMIC_PLL_CONFIG_DOCSTRING},
+    {"set_analog_sample_rate", (PyCFunction)PyRfdc_set_analog_sample_rate, METH_KEYWORDS | METH_VARARGS, RFDC_SET_ANALOG_SAMPLE_RATE_DOCSTRING},
     {"mts_init", (PyCFunction)PyRfdc_mts_init, METH_NOARGS, RFDC_MTS_INIT_DOCSTRING},
     {"mts_sync", (PyCFunction)PyRfdc_mts_sync, METH_NOARGS, RFDC_MTS_SYNC_DOCSTRING},
     {NULL, NULL, 0, NULL}

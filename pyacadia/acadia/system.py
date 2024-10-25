@@ -588,9 +588,6 @@ class Acadia:
         rfdc.attach()
         utils.attach()
         RFClk.init(self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["clk104_spi0"])
-
-        for channel in self._DAC_channels + self._ADC_channels:
-            channel.load_sample_frequency()
         
         # Connect the switches
         self._ADC_input_switch.attach(self._attach_memory(
