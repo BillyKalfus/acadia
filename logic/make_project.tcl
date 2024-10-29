@@ -171,6 +171,7 @@ set files [list \
  [file normalize "${origin_dir}/acadia_dma.vhd" ]\
  [file normalize "${origin_dir}/acadia_rfdc_rts_regs.vhd" ]\
  [file normalize "${origin_dir}/acadia_sequencer.vhd" ]\
+ [file normalize "${origin_dir}/acadia_spi_io.vhd" ]\
  [file normalize "${origin_dir}/acadia_stream_complex32_adder.vhd" ]\
  [file normalize "${origin_dir}/acadia_stream_complex32_dsp.vhd" ]\
  [file normalize "${origin_dir}/acadia_stream_complex32_macc.vhd" ]\
@@ -258,6 +259,17 @@ set_property -name "used_in_simulation" -value "1" -objects $file_obj
 set_property -name "used_in_synthesis" -value "1" -objects $file_obj
 
 set file "acadia_sequencer.vhd"
+set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
+set_property -name "file_type" -value "VHDL" -objects $file_obj
+set_property -name "is_enabled" -value "1" -objects $file_obj
+set_property -name "is_global_include" -value "0" -objects $file_obj
+set_property -name "library" -value "xil_defaultlib" -objects $file_obj
+set_property -name "path_mode" -value "RelativeFirst" -objects $file_obj
+set_property -name "used_in" -value "synthesis simulation" -objects $file_obj
+set_property -name "used_in_simulation" -value "1" -objects $file_obj
+set_property -name "used_in_synthesis" -value "1" -objects $file_obj
+
+set file "acadia_spi_io.vhd"
 set file_obj [get_files -of_objects [get_filesets sources_1] [list "*$file"]]
 set_property -name "file_type" -value "VHDL" -objects $file_obj
 set_property -name "is_enabled" -value "1" -objects $file_obj
@@ -928,6 +940,26 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   set CLK104_SYNC_IN [ create_bd_port -dir O CLK104_SYNC_IN ]
   set GPIO_SPI [ create_bd_port -dir O -from 1 -to 0 GPIO_SPI ]
 
+  # PMOD0 pins
+  create_bd_port -dir IO PMOD0_0
+  create_bd_port -dir IO PMOD0_1
+  create_bd_port -dir IO PMOD0_2
+  create_bd_port -dir IO PMOD0_3
+  create_bd_port -dir IO PMOD0_4
+  create_bd_port -dir IO PMOD0_5
+  create_bd_port -dir IO PMOD0_6
+  create_bd_port -dir IO PMOD0_7
+
+  # PMOD1 pins
+  create_bd_port -dir IO PMOD1_0
+  create_bd_port -dir IO PMOD1_1
+  create_bd_port -dir IO PMOD1_2
+  create_bd_port -dir IO PMOD1_3
+  create_bd_port -dir IO PMOD1_4
+  create_bd_port -dir IO PMOD1_5
+  create_bd_port -dir IO PMOD1_6
+  create_bd_port -dir IO PMOD1_7
+
   # Create instance: DDR4_C0_MIG, and set properties
   set DDR4_C0_MIG [ create_bd_cell -type ip -vlnv xilinx.com:ip:ddr4:2.2 DDR4_C0_MIG ]
   set_property -dict [ list \
@@ -1035,6 +1067,9 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.IN3_WIDTH {1} \
    CONFIG.IN4_WIDTH {8} \
  ] $xlconcat_ps_gpio_in
+
+ create_bd_cell -type module -reference acadia_spi_io acadia_spi_io_0
+ create_bd_cell -type module -reference acadia_spi_io acadia_spi_io_1
 
   # Create instance: hedgehog
   create_hier_cell_hedgehog [current_bd_instance .] hedgehog
@@ -1402,6 +1437,7 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__CRL_APB__PCAP_CTRL__FREQMHZ {200} \
    CONFIG.PSU__CRL_APB__PCAP_CTRL__SRCSEL {IOPLL} \
    CONFIG.PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ {300} \
+   CONFIG.PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ {333} \
    CONFIG.PSU__CRL_APB__PL0_REF_CTRL__SRCSEL {IOPLL} \
    CONFIG.PSU__CRL_APB__QSPI_REF_CTRL__ACT_FREQMHZ {124.998749} \
    CONFIG.PSU__CRL_APB__QSPI_REF_CTRL__DIVISOR0 {12} \
@@ -1688,6 +1724,12 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
    CONFIG.PSU__USE__S_AXI_GP2 {1} \
    CONFIG.PSU__USE__S_AXI_GP3 {1} \
    CONFIG.SUBPRESET1 {Custom} \
+   CONFIG.PSU__SPI0__GRP_SS1__ENABLE {1} \
+   CONFIG.PSU__SPI0__PERIPHERAL__ENABLE {1} \
+   CONFIG.PSU__SPI0__PERIPHERAL__IO {EMIO} \
+   CONFIG.PSU__SPI1__GRP_SS1__ENABLE {1} \
+   CONFIG.PSU__SPI1__PERIPHERAL__ENABLE {1} \
+   CONFIG.PSU__SPI1__PERIPHERAL__IO {EMIO} \
  ] $ps
 
 
@@ -1766,6 +1808,9 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_intf_net -intf_net vin32_1 [get_bd_intf_ports vin32] [get_bd_intf_pins hedgehog/vin32]
   connect_bd_intf_net -intf_net vin33_1 [get_bd_intf_ports vin33] [get_bd_intf_pins hedgehog/vin33]
 
+  connect_bd_intf_net [get_bd_intf_pins acadia_spi_io_0/zynq_spi] [get_bd_intf_pins ps/SPI_0]
+  connect_bd_intf_net [get_bd_intf_pins acadia_spi_io_1/zynq_spi] [get_bd_intf_pins ps/SPI_1]
+
   # Create port connections
   connect_bd_net -net ADCIO_1 [get_bd_ports ADCIO] [get_bd_pins hedgehog/ADCIO]
   connect_bd_net -net hedgehog_DACIO [get_bd_ports DACIO] [get_bd_pins hedgehog/DACIO]
@@ -1825,6 +1870,20 @@ proc create_hier_cell_hedgehog { parentCell nameHier } {
   connect_bd_net [get_bd_pins xpm_cdc_DDR4_C1_sys_rst/dest_rst_out] [get_bd_pins DDR4_C1_MIG/sys_rst]
 
   connect_bd_net [get_bd_pins DDR4_C1_MIG/c0_init_calib_complete] [get_bd_pins xlconcat_ps_gpio_in/In2]
+
+  # Connect SPI breakout module to PMOD pins
+  # Pinout derived from front pcb schematic
+  connect_bd_net [get_bd_ports PMOD0_0] [get_bd_pins acadia_spi_io_0/spi_sck]
+  connect_bd_net [get_bd_ports PMOD0_1] [get_bd_pins acadia_spi_io_0/spi_mosi]
+  connect_bd_net [get_bd_ports PMOD0_4] [get_bd_pins acadia_spi_io_0/spi_miso]
+  connect_bd_net [get_bd_ports PMOD0_2] [get_bd_pins acadia_spi_io_0/spi_ss]
+  connect_bd_net [get_bd_ports PMOD0_3] [get_bd_pins acadia_spi_io_0/spi_ss1]
+
+  connect_bd_net [get_bd_ports PMOD1_0] [get_bd_pins acadia_spi_io_1/spi_sck]
+  connect_bd_net [get_bd_ports PMOD1_1] [get_bd_pins acadia_spi_io_1/spi_mosi]
+  connect_bd_net [get_bd_ports PMOD1_4] [get_bd_pins acadia_spi_io_1/spi_miso]
+  connect_bd_net [get_bd_ports PMOD1_2] [get_bd_pins acadia_spi_io_1/spi_ss]
+  connect_bd_net [get_bd_ports PMOD1_3] [get_bd_pins acadia_spi_io_1/spi_ss1]
   
   # Create the HEDGEHOG logic before we make the wrapper
   source [file normalize "${hedgehogTclDir}/hedgehog.tcl" ]

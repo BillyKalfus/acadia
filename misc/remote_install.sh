@@ -75,15 +75,16 @@ echo "Installing pyacadia..."
 ssh root@$IP pip3 install --force-reinstall acadia/pyacadia
 
 if $INITIAL; then
-    echo "Configuring clocks and resetting RAM..."
-    ssh root@$IP 'python3 -c "from acadia import Acadia; a = Acadia(); a.attach(); a.configure_clocks(); a.reset_plddr0(); a.reset_plddr1();"'
-
+    # scipy will be needed to import Acadia (waveforms uses get_window), so deploy that first
     echo "Deploying scipy..."
     wget https://files.pythonhosted.org/packages/c0/66/9cd4f501dd5ea03e4a4572ecd874936d0da296bd04d1c45ae1a4a75d9c3a/scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
     scp scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root
     echo "Installing scipy..."
     ssh root@$IP "pip3 install scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
     rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+
+    echo "Configuring clocks and resetting RAM..."
+    ssh root@$IP 'python3 -c "from acadia import Acadia; a = Acadia(); a.attach(); a.configure_clocks(); a.reset_plddr0(); a.reset_plddr1(); a.reset_logic()"'
 
     # echo "Deploying LLVM..."
     # wget https://files.pythonhosted.org/packages/0a/e4/bce6de49651ade8b47ed7f0c11366d49be1bad752fbf16c1976545d389fa/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl

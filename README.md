@@ -208,6 +208,8 @@ cd ..
 
    1. Change directories into the Petalinux project.
 
+   1. Load all the necessary environment variables by running `source $PETALINUX_TOOLS/settings.sh`, where `$PETALINUX_TOOLS` takes on the same value as it did in `configure_petalinux.sh`.
+
    1. Build the kernel, bootloader, and PMU firmware.
       ```
       petalinux-build

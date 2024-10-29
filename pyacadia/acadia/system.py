@@ -885,7 +885,7 @@ class Acadia:
 
         # Calculate the divider value that we need for the LMK output channels
         # VCO is configured for 3 GHz
-        target_frequency = self._firmware["clocks"]["input_freq_hz"]
+        target_frequency = self._firmware["clk104_pl_clk"]["freq_hz"]
         divider = 3e9 / target_frequency
         if round(divider, 6) != round(divider):
             raise ValueError(f"Required frequency {target_frequency} does not"
@@ -983,181 +983,6 @@ class Acadia:
 
         # Wait a bit for everything to lock
         time.sleep(0.5)
-
-    def configure_tile_clocks(self, **kwargs):
-        """
-        Configure the clock sources and distribution for the RFDC tiles.
-        """
-        # Using their own PLLs, distributing a reference:
-        # import pyxrfdc as xrfdc
-
-        # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
-        # Channel.RFDC_call_checked("GetClkDistribution", settings)
-
-        # settings.DAC[0].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[1].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[2].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[3].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-
-        # settings.DAC[0].PLLEnable = True
-        # settings.DAC[1].PLLEnable = True
-        # settings.DAC[2].PLLEnable = True
-        # settings.DAC[3].PLLEnable = True
-
-        # settings.DAC[0].PLLSettings.Enabled = True
-        # settings.DAC[1].PLLSettings.Enabled = True
-        # settings.DAC[2].PLLSettings.Enabled = True
-        # settings.DAC[3].PLLSettings.Enabled = True
-
-        # settings.DAC[0].PLLSettings.RefClkFreq = 250
-        # settings.DAC[1].PLLSettings.RefClkFreq = 250
-        # settings.DAC[2].PLLSettings.RefClkFreq = 250
-        # settings.DAC[3].PLLSettings.RefClkFreq = 250
-
-        # settings.DAC[0].PLLSettings.SampleRate = 6000
-        # settings.DAC[1].PLLSettings.SampleRate = 6000
-        # settings.DAC[2].PLLSettings.SampleRate = 6000
-        # settings.DAC[3].PLLSettings.SampleRate = 6000
-
-        # settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        # settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        # settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
-        # settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-
-        # settings.ADC[0].PLLSettings.SampleRate = 2000
-        # settings.ADC[1].PLLSettings.SampleRate = 2000
-        # settings.ADC[2].PLLSettings.SampleRate = 2000
-        # settings.ADC[3].PLLSettings.SampleRate = 2000
-
-        # Channel.RFDC_call_checked("SetClkDistribution", settings)
-
-        # Distributing a PLL output
-        # import pyxrfdc as xrfdc
-
-        # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
-        # Channel.RFDC_call_checked("GetClkDistribution", settings)
-
-        # settings.DAC[0].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[1].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[2].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[3].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-
-        # settings.DAC[0].PLLEnable = False
-        # settings.DAC[1].PLLEnable = False
-        # settings.DAC[2].PLLEnable = True
-        # settings.DAC[3].PLLEnable = False
-
-        # settings.DAC[0].PLLSettings.Enabled = False
-        # settings.DAC[1].PLLSettings.Enabled = False
-        # settings.DAC[2].PLLSettings.Enabled = True
-        # settings.DAC[3].PLLSettings.Enabled = False
-
-        # settings.DAC[0].PLLSettings.RefClkFreq = 6000
-        # settings.DAC[1].PLLSettings.RefClkFreq = 6000
-        # settings.DAC[2].PLLSettings.RefClkFreq = 250
-        # settings.DAC[3].PLLSettings.RefClkFreq = 6000
-
-        # settings.DAC[0].PLLSettings.SampleRate = 6000
-        # settings.DAC[1].PLLSettings.SampleRate = 6000
-        # settings.DAC[2].PLLSettings.SampleRate = 6000
-        # settings.DAC[3].PLLSettings.SampleRate = 6000
-
-        # settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        # settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        # settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_OUTDIV")
-        # settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-
-        # settings.DAC[0].DivisionFactor = 1
-        # settings.DAC[1].DivisionFactor = 1
-        # settings.DAC[3].DivisionFactor = 1
-
-
-        # settings.ADC[0].PLLSettings.SampleRate = 2000
-        # settings.ADC[1].PLLSettings.SampleRate = 2000
-        # settings.ADC[2].PLLSettings.SampleRate = 2000
-        # settings.ADC[3].PLLSettings.SampleRate = 2000
-
-        # Channel.RFDC_call_checked("SetClkDistribution", settings)
-
-        # Higher sampling rates
-        # for i in range(4):
-        #     a.DAC(i).set_interpolation(5)
-            
-        # for i in range(4,8):
-        #     a.DAC(i).set_interpolation(4)
-        #     a.DAC(i).set_datapath_mode("Half-bandwidth NCO (lowpass)")
-        #     a.DAC(i).set_imr_passband("lowpass")
-
-        # import pyxrfdc as xrfdc
-
-        # settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
-        # Channel.RFDC_call_checked("GetClkDistribution", settings)
-
-        # settings.DAC[0].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[1].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[2].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-        # settings.DAC[3].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-
-        # settings.DAC[0].PLLEnable = True
-        # settings.DAC[1].PLLEnable = True
-        # settings.DAC[2].PLLEnable = True
-        # settings.DAC[3].PLLEnable = True
-
-        # settings.DAC[0].PLLSettings.Enabled = True
-        # settings.DAC[1].PLLSettings.Enabled = True
-        # settings.DAC[2].PLLSettings.Enabled = True
-        # settings.DAC[3].PLLSettings.Enabled = True
-
-        # settings.DAC[0].PLLSettings.RefClkFreq = 250
-        # settings.DAC[1].PLLSettings.RefClkFreq = 250
-        # settings.DAC[2].PLLSettings.RefClkFreq = 250
-        # settings.DAC[3].PLLSettings.RefClkFreq = 250
-
-        # settings.DAC[0].PLLSettings.SampleRate = 6000
-        # settings.DAC[1].PLLSettings.SampleRate = 8000
-        # settings.DAC[2].PLLSettings.SampleRate = 6000
-        # settings.DAC[3].PLLSettings.SampleRate = 6000
-
-        # settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        # settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-        # settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
-        # settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-
-        # settings.ADC[0].PLLSettings.SampleRate = 2000
-        # settings.ADC[1].PLLSettings.SampleRate = 2000
-        # settings.ADC[2].PLLSettings.SampleRate = 2000
-        # settings.ADC[3].PLLSettings.SampleRate = 2000
-
-        # Channel.RFDC_call_checked("SetClkDistribution", settings)
-
-        pass
-
-    # def set_dac_sampling_rates(self, tile0=6e9, tile1=6e9, tile2=6e9, tile3=6e9):
-    #     """
-    #     Configure the sampling rates of the RFDC tiles. Each keyword argument
-    #     must be of the form ``[DAC/ADC]_tile[tile number] = [frequency in Hz]``.
-    #     """
-    #     import pyxrfdc as xrfdc
-    #     settings = xrfdc.ffi.new("XRFdc_Distribution_Settings*")
-    #     Channel.RFDC_call_checked("GetClkDistribution", settings)
-
-    #     frequencies = (tile0, tile1, tile2, tile3)
-    #     for idx, rate in enumerate(frequencies):
-    #         settings.DAC[idx].SourceTile = Channel.RFDC_def("XRFDC_CLK_DST_TILE_230")
-    #         settings.DAC[idx].PLLEnable = True
-    #         settings.DAC[idx].PLLSettings.Enabled = True
-    #         settings.DAC[idx].PLLSettings.RefClkFreq = self._firmware["clocks"]["input_freq_hz"] # We set the LMK to generate this frequency, they aren't inherently equal
-    #         settings.DAC[idx].PLLSettings.SampleRate = round(rate / 1e6) # Needs to be in MHz
-
-    #     settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-    #     settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-    #     settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
-    #     settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
-
-    #     Channel.RFDC_call_checked("SetClkDistribution", settings)
-
-    #     for idx,channel in enumerate(self._DAC_channels):
-    #         channel.analog_sample_frequency = frequencies[idx // 4]
 
     def pulse_sysref(self, count=None):
         """
@@ -1358,142 +1183,6 @@ class Acadia:
                     f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num()}")
         
         return descriptor
-            
-    # To be deprecated
-    # def convert(self,
-    #             value: float,
-    #             value_units: str,
-    #             output_units: str,
-    #             element_size: Union[int, np.dtype] = None,
-    #             bytes_per_cycle: Union[int, float] = None,
-    #             cycles_per_second: int = None) -> Union[int, float]:
-    #     """
-    #     Convert between various units of time or memory space. When converting
-    #     from a unit that is expected not to be an integer (e.g. seconds) to 
-    #     one that is (e.g. samples), an exception is raised if the result is not
-    #     an integer.
-
-    #     The `*_units` quantities can take on the following values:
-
-    #     - `elements` or `samples` or `items`: The input value represents the
-    #         number of elements in an array 
-    #     - `bytes`: The input value represents the size of an array in bytes
-    #     - `cycles`: The input value represents a number of cycles of the sequencer
-    #     - `seconds`: The input value represents a length of time in seconds
-
-    #     :param value: Value to convert
-    #     :type value: float
-    #     :param value_units: Units of input value
-    #     :type value_units: str
-    #     :param output_units: The desired output units
-    #     :type output_units: str
-    #     :param element_size: The size in bytes of an element. A `np.dtype` may
-    #         also be provided, in which case its `itemsize` property will be 
-    #         used. This may be omitted if it is expected that the conversion will
-    #         not require it, in which case an exception will be raised
-    #     :type element_size: int or np.dtype
-    #     :param bytes_per_cycle: The number of bytes corresponding to a single 
-    #         cycle. A `np.dtype` may also be provided, in which case its 
-    #         `itemsize` property will be used. If omitted, the width of the
-    #         stream processing path is used.
-    #     :type bytes_per_cycle: int or np.dtype
-    #     :param cycles_per_second: The number of cycles corresponding to one 
-    #         second. If not provided, the sequencer clock rate is used.
-
-    #     """
-    #     if value is None:
-    #         return None
-        
-    #     if element_size is None:
-    #         if output_units.startswith("raw") or value_units.startswith("raw"):
-    #             output_units = "elements"
-    #             element_size = 4
-    #         elif output_units.startswith("decimated"):
-    #             output_units = "elements"
-    #             element_size = 8
-    #     elif isinstance(element_size, np.dtype):
-    #         element_size = element_size.itemsize
-
-    #     if bytes_per_cycle is None:
-    #         bytes_per_cycle = self._firmware["stream_processing_path"]["width"] // 8
-    #     elif isinstance(bytes_per_cycle, np.dtype):
-    #         bytes_per_cycle = bytes_per_cycle.itemsize
-
-    #     if cycles_per_second is None:
-    #         cycles_per_second = self._firmware["clocks"]["generated_clocks"]["seq_clk"]
-        
-    #     element_units = ["elements", "samples", "items"]
-        
-    #     if output_units == value_units or (value_units in element_units and output_units in element_units):
-    #         return value
-
-    #     if value_units in element_units:
-    #         if output_units == "bytes":
-    #             if element_size is None:
-    #                 raise ValueError(f"Element size required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             return int(round(element_size * value))
-    #         if output_units == "cycles":
-    #             value_bytes = self.convert(value, "elements", "bytes", element_size, bytes_per_cycle, cycles_per_second)
-    #             if bytes_per_cycle is None:
-    #                 raise ValueError(f"Bytes per cycle required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             if round(value_bytes / bytes_per_cycle) != round(value_bytes / bytes_per_cycle, 3):
-    #                 raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
-    #             return int(round(value_bytes / bytes_per_cycle))
-    #         if output_units == "seconds":
-    #             if cycles_per_second is None:
-    #                 raise ValueError(f"Cycles per second required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             value_cycles = self.convert(value, "elements", "cycles", element_size, bytes_per_cycle, cycles_per_second)
-    #             return value_cycles / cycles_per_second
-    #         raise ValueError(f"Unrecognized output unit {output_units}")
-            
-    #     elif value_units == "bytes":
-    #         if output_units in element_units:
-    #             if element_size is None:
-    #                 raise ValueError(f"Element size required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             if value % element_size != 0:
-    #                 raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
-    #             return int(value // element_size)
-    #         if output_units == "cycles":
-    #             if bytes_per_cycle is None:
-    #                 raise ValueError(f"Bytes per cycle required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             value_cycles = value / bytes_per_cycle
-    #             if round(value_cycles) != round(value_cycles, 3):
-    #                 raise ValueError(f"Unable to convert byte value ({value})"
-    #                                  f" into cycles ({value_cycles}).")
-    #             return int(round(value_cycles))
-    #         if output_units == "seconds":
-    #             value_cycles = self.convert(value, "bytes", "cycles", element_size, bytes_per_cycle, cycles_per_second)
-    #             return self.convert(value_cycles, "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
-    #         raise ValueError(f"Unrecognized output unit {output_units}")
-        
-    #     elif value_units == "cycles":
-    #         if output_units in element_units or output_units == "bytes":
-    #             if bytes_per_cycle is None:
-    #                 raise ValueError(f"Bytes per cycle required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             value_bytes = value * bytes_per_cycle
-    #             return self.convert(value_bytes, "bytes", output_units, element_size, bytes_per_cycle, cycles_per_second)
-    #         else:
-    #             if cycles_per_second is None:
-    #                 raise ValueError(f"Cycles per second required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #             return value / cycles_per_second
-            
-    #     elif value_units == "seconds":
-    #         if cycles_per_second is None:
-    #                 raise ValueError(f"Cycles per second required for converting"
-    #                                  f" {value_units} to {output_units}.")
-    #         value_cycles = value * cycles_per_second
-    #         if round(value_cycles) != round(value_cycles, 3):
-    #             raise ValueError(f"Value results in fraction: {value} {value_units} -> {output_units}")
-    #         return self.convert(int(round(value_cycles)), "cycles", output_units, element_size, bytes_per_cycle, cycles_per_second)
-
-    #     raise ValueError(f"Unrecognized value unit {value_units}")
     
     def memory_region(self, 
                       specifier: Union[Channel, ManagedMemory, np.ndarray, str, StreamConfiguration, None]) -> callable:
@@ -1654,7 +1343,7 @@ class Acadia:
             channel_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
 
         if isinstance(fixed_length, float) and fixed_length >= 0:
-            fixed_length_cycles_float = fixed_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            fixed_length_cycles_float = fixed_length * self._firmware["clk104_pl_clk"]["freq_hz"]
             fixed_length_cycles = round(fixed_length_cycles_float)
             if fixed_length_cycles != round(fixed_length_cycles_float, 1):
                 raise ValueError(f"Fixed length {fixed_length} seconds"
@@ -1664,7 +1353,7 @@ class Acadia:
             logger.warning(f"Unable to validate symbolic fixed length;"
                            " please ensure that the value provided is an"
                            " integer number of cycles after being rounded.")
-            fixed_length_cycles_float = fixed_length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            fixed_length_cycles_float = fixed_length * self._firmware["clk104_pl_clk"]["freq_hz"]
             fixed_length_cycles = Operation(round, fixed_length_cycles_float)
         else:
             raise TypeError(f"Unable to use fixed length {fixed_length}")
@@ -1676,7 +1365,7 @@ class Acadia:
         # constant is dependent on the decimation and the type of channel
         if isinstance(length, float):
             # Length of waveforms in seconds
-            length_cycles_float = length * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            length_cycles_float = length * self._firmware["clk104_pl_clk"]["freq_hz"]
             length_cycles = round(length_cycles_float)
             if length_cycles != round(length_cycles_float, 1):
                 raise ValueError(f"Waveform length {length} seconds does not"
@@ -2013,7 +1702,7 @@ class Acadia:
             kernel = Waveform(shape=1, dtype="<i2", resource_allocator=kernel_type) 
         if isinstance(kernel, float):
             # Allocate a new kernel with a length in seconds given by kernel
-            kernel_length_elements = kernel * self._firmware["clocks"]["generated_clocks"]["seq_clk"]
+            kernel_length_elements = kernel * self._firmware["clk104_pl_clk"]["freq_hz"]
             logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
             kernel = Waveform(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type) 
         if isinstance(kernel, Waveform):
@@ -2736,13 +2425,13 @@ class Acadia:
             for block in range(4):
                 # By default, the sample rate will be configured to be zero. when we attach it will be read
                 dac_channel = Channel(tile=tile, block=block, is_dac=True, 
-                    interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["dac"]["tile_axis_clocks"][tile]] 
+                    interface_sample_frequency = (self._firmware["clk104_pl_clk"]["freq_hz"]
                                                           * self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 32),
                     interface_width_bytes = self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 8)
                 self._DAC_channels.append(dac_channel)
                 
                 adc_channel = Channel(tile=tile, block=block, is_dac=False,
-                    interface_sample_frequency = (self._firmware["clocks"]["generated_clocks"][self._firmware["rfdc"]["adc"]["tile_axis_clocks"][tile]] 
+                    interface_sample_frequency = (self._firmware["clk104_pl_clk"]["freq_hz"]
                                                           * self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 32),
                     interface_width_bytes = self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 8)
                 

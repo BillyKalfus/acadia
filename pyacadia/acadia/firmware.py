@@ -372,7 +372,7 @@ class Firmware:
             # ------------------- Clock Management -------------------- #
 
             # The PL clock from the CLK104 is brought in through an HDIO bank, so we need to buffer
-            # it with an IBUFDS before feeding it to the MMCM
+            # it with an IBUFDS before feeding it to the rest of the clocking network
             create_ip(f, name="hedgehog/pl_clk_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.2")
             set_property(f, name="hedgehog/pl_clk_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
             
@@ -381,98 +381,75 @@ class Firmware:
             
             connect_bd_intf_net(f, "hedgehog/CLK104_PL_CLK", "hedgehog/pl_clk_ibufds/CLK_IN_D")
             connect_bd_net(f, "hedgehog/pl_clk_ibufds/IBUF_OUT", "hedgehog/pl_clk_bufg/BUFG_I")
-            
+
+            f.write(f"set_property -dict [list CONFIG.FREQ_HZ {{{self.config['clk104_pl_clk']['freq_hz']}}}] [get_bd_intf_ports CLK104_PL_CLK]\n")
+            seq_clk_pin = "hedgehog/pl_clk_bufg/BUFG_O"
+            seq_clk_freq = self.config['clk104_pl_clk']['freq_hz']
+
+            # Create a clock on the output net of the buffer and apply timing constraints
+            constraints.write(f"create_clock -period {round(1e9/seq_clk_freq, 4)} -name clk104_pl_clk [get_ports CLK104_PL_CLK_clk_p]\n")
+
             # Connect a second input clock to the clocking wizard for the 8A34001
             create_ip(f, name="hedgehog/clk_8A34001_out3_ibufds", vlnv="xilinx.com:ip:util_ds_buf:2.2")
             set_property(f, name="hedgehog/clk_8A34001_out3_ibufds", properties={"C_SIZE": 1, "C_BUF_TYPE": "IBUFDS"})
             connect_bd_intf_net(f, "hedgehog/CLK_8A34001_Q3_OUT", "hedgehog/clk_8A34001_out3_ibufds/CLK_IN_D")
-            
-            # We'll create an MMCM that will generate all the PL clocks
-            create_ip(f, name="hedgehog/clk_wiz", vlnv="xilinx.com:ip:clk_wiz:6.0")
-            set_property(f, name="hedgehog/clk_wiz", properties={"PRIM_IN_FREQ.VALUE_SRC": "USER"})
-            
-            clock_properties = (
-                "CONFIG.PRIMITIVE {MMCM} "
-                "CONFIG.USE_DYN_RECONFIG {false} "
-                "CONFIG.USE_PHASE_ALIGNMENT {true} "
-                f"CONFIG.PRIM_SOURCE {{{self.config['clocks']['input_source_type']}}} "
-                f"CONFIG.PRIM_IN_FREQ {{{self.config['clocks']['input_freq_hz']*1e-6}}} "
-                "CONFIG.FEEDBACK_SOURCE {FDBK_AUTO} "
-                "CONFIG.MMCM_DIVCLK_DIVIDE {1} "
-                "CONFIG.MMCM_BANDWIDTH {OPTIMIZED} "
-                "CONFIG.MMCM_COMPENSATION {AUTO} "
-                f"CONFIG.CLKIN1_JITTER_PS {{{self.config['clocks']['input_jitter_ps']}}} "
-                "CONFIG.USE_INCLK_SWITCHOVER {false} ")
-            
-            clock_properties += f"CONFIG.NUM_OUT_CLKS {{{len(self.config['clocks']['generated_clocks'])}}} "
-            
-            for i,(clk,freq) in enumerate(self.config["clocks"]["generated_clocks"].items()):
-                clock_properties += (
-                    f"CONFIG.CLKOUT{i+1}_USED {{true}} "
-                    f"CONFIG.CLKOUT{i+1}_REQUESTED_OUT_FREQ {{{freq*1e-6}}} "
-                    f"CONFIG.CLK_OUT{i+1}_PORT {{{clk}}} "
-                    f"CONFIG.CLKOUT{i+1}_DRIVES {{Buffer}} "
-                )
 
-            set_property(f, name="hedgehog/clk_wiz", properties=clock_properties)
-            
-            # Connect the reset
-            create_ip(f, name="hedgehog/clk_wiz_reset_inverter", vlnv="xilinx.com:ip:util_vector_logic:2.0")
-            set_property(f, name="hedgehog/clk_wiz_reset_inverter", 
-                         properties={"C_SIZE": 1, 
-                                     "C_OPERATION": "not", 
-                                     "LOGO_FILE": "data/sym_notgate.png"})
-            connect_bd_net(f, "hedgehog/PS_resetn", "hedgehog/clk_wiz_reset_inverter/Op1")
-            connect_bd_net(f, "hedgehog/clk_wiz_reset_inverter/Res", "hedgehog/clk_wiz/reset")
-
-            # Connect the CLK104 PL clock buffer output to the clock wizard and apply a constraint
-            connect_bd_net(f, f"hedgehog/pl_clk_bufg/BUFG_O", f"hedgehog/clk_wiz/clk_in1")
-            constraints.write("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets -of_objects [get_pins acadia_bd_i/hedgehog/pl_clk_bufg/BUFG_O]]\n")
-            constraints.write("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets -of_objects [get_pins acadia_bd_i/hedgehog/clk_wiz/inst/mmcme4_adv_inst/CLKIN1]]\n")
-
-            # constraints.write("set_property CLOCK_DEDICATED_ROUTE ANY_CMT_COLUMN [get_nets acadia_bd_i/hedgehog/clk_wiz/inst/CLK_CORE_DRP_I/clk_inst/clk_in1_acadia_bd_clk_wiz_0]\n")
-            f.write(f"set_property -dict [list CONFIG.FREQ_HZ {{{self.config['clk104_pl_clk']['freq_hz']}}}] [get_bd_intf_ports CLK104_PL_CLK]\n")
-
-            # Create clocks on the clock wizard pins and apply timing constraints
-            constraints.write(f"create_clock -period {round(1e9/self.config['clk104_pl_clk']['freq_hz'], 4)} -name clk104_pl_clk [get_ports CLK104_PL_CLK_clk_p]\n")
-
-            # Set multicycle path constraints on internal signals to the RF data converter (from the example design)
+            # Set multicycle path constraints on internal signals to the RF data converter 
+            # (this comes from the example design and I'm not entirely sure why it's needed but timing seems to fail without it)
             constraints.write("set_multicycle_path -to [get_pins -filter {REF_PIN_NAME== D} -of [get_cells -hier -filter {name =~ acadia_bd_i/hedgehog/rfdc/inst/IP2Bus_Data_reg*}]] -setup 2\n")
             constraints.write("set_multicycle_path -to [get_pins -filter {REF_PIN_NAME== D} -of [get_cells -hier -filter {name =~ acadia_bd_i/hedgehog/rfdc/inst/IP2Bus_Data_reg*}]] -hold 1\n")
 
-            # Add a max delay constraint between the clock generated by the PS and those generated by the RF tile
-            hs_period = 1e9 / self.config["clocks"]["generated_clocks"]["hs_clk"]
-            constraints.write(f"set_max_delay {round(hs_period, 4)} -from [get_clocks -include_generated_clocks clk104_pl_clk] -to [get_clocks -include_generated_clocks [get_clocks -filter {{name =~ RF*_CLK}}]] -datapath_only\n")
-            constraints.write(f"set_max_delay {round(hs_period, 4)} -from [get_clocks -include_generated_clocks [get_clocks -filter {{name =~ RF*_CLK}}]] -to [get_clocks -include_generated_clocks clk104_pl_clk] -datapath_only\n")
+            # Add a max delay constraint between the PL clock and those generated by the RF tile
+            # These clocks are technically synchronous but the RF tile doesn't know this
+            PS_AXI_clk_period = 3
+            constraints.write(f"set_max_delay {PS_AXI_clk_period} -from [get_clocks -include_generated_clocks clk104_pl_clk] -to [get_clocks -include_generated_clocks [get_clocks -filter {{name =~ RF*_CLK}}]] -datapath_only\n")
+            constraints.write(f"set_max_delay {PS_AXI_clk_period} -from [get_clocks -include_generated_clocks [get_clocks -filter {{name =~ RF*_CLK}}]] -to [get_clocks -include_generated_clocks clk104_pl_clk] -datapath_only\n")
             
             # Connect the clock from the 8A34001 to the clocking wizard
-            # connect_bd_net(f, "hedgehog/clk_8A34001_out3_ibufds/IBUF_OUT", f"hedgehog/clk_wiz/clk_in2")
             f.write(f"set_property -dict [list CONFIG.FREQ_HZ {{{self.config['clk_8A34001_Q3_out']['freq_hz']}}}] [get_bd_intf_ports CLK_8A34001_Q3_OUT]\n")
 
-            # Expose the locked signal to the PS
-            connect_bd_net(f, f"hedgehog/clk_wiz_locked", f"hedgehog/clk_wiz/locked")
+            # Create reset modules for the PL clock and the PS AXI clk
+            create_ip(f, name=f"hedgehog/proc_sys_reset_seq_clk", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
+            connect_bd_net(f, f"hedgehog/proc_sys_reset_seq_clk/slowest_sync_clk", f"hedgehog/pl_clk_bufg/BUFG_O")
+            connect_bd_net(f, f"hedgehog/proc_sys_reset_seq_clk/ext_reset_in", f"hedgehog/PS_resetn")
+            # connect_bd_net(f, f"hedgehog/proc_sys_reset_seq_clk/dcm_locked", f"hedgehog/clk_wiz/locked")
+            seq_clk_peripheral_aresetn = "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn"
 
-            # Create resets modules for all of the generated clocks
-            for clk in self.config["clocks"]["generated_clocks"].keys():
-                create_ip(f, name=f"hedgehog/proc_sys_reset_{clk}", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
-                connect_bd_net(f, f"hedgehog/proc_sys_reset_{clk}/slowest_sync_clk", f"hedgehog/clk_wiz/{clk}")
-                connect_bd_net(f, f"hedgehog/proc_sys_reset_{clk}/ext_reset_in", f"hedgehog/PS_resetn")
-                connect_bd_net(f, f"hedgehog/proc_sys_reset_{clk}/dcm_locked", f"hedgehog/clk_wiz/locked")
-            
+            create_ip(f, name=f"hedgehog/proc_sys_reset_PS_AXI_clk", vlnv="xilinx.com:ip:proc_sys_reset:5.0")
+            connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_AXI_clk/slowest_sync_clk", f"hedgehog/PS_AXI_clk")
+            connect_bd_net(f, f"hedgehog/proc_sys_reset_PS_AXI_clk/ext_reset_in", f"hedgehog/PS_resetn")
+            # connect_bd_net(f, f"hedgehog/proc_sys_reset_hs_clk/dcm_locked", f"hedgehog/clk_wiz/locked")
+            PS_AXI_clk_peripheral_aresetn = "hedgehog/proc_sys_reset_PS_AXI_clk/peripheral_aresetn"
+            PS_AXI_clk_pin = f"hedgehog/PS_AXI_clk"
+
             # ------------------- PS AXI Clocks -------------------- #
-            for ps_clock, clock in self.config["ps_axi_clocks"].items():
-                connect_bd_net(f, f"hedgehog/clk_wiz/{clock}", f"hedgehog/{ps_clock}_aclk")
+            for clock in ["MAXIHPM0_FPD", 
+                            "MAXIHPM1_FPD", 
+                            "MAXIHPM0_LPD", 
+                            "SAXIHPC0_FPD", 
+                            "SAXIHP0_FPD", 
+                            "SAXIHPC1_FPD", 
+                            "SAXIHP1_FPD"]:
+                connect_bd_net(f, f"hedgehog/PS_{clock}_aclk", PS_AXI_clk_pin)
 
             # ------------------- AXI Interconnects and SmartConnects -------------------- #
 
             # Create an AXI-lite SmartConnect for simple configuration peripherals
             create_ip(f, name="hedgehog/lite_crossbar", vlnv="xilinx.com:ip:axi_crossbar:2.1")
             
+            # First slave is the RFDC IP
             slaves = 1
+
+            # One slave port for each AXIS switch
             if len([inp for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"]) > 0:
                 slaves += 1
+
+            # Kernel memory for CMACCs
             if self._num_cmaccs > 0:
-                slaves += 1
+                slaves += 1 
+
+            # One slave for the SYSREF capture block
+            slaves += 1
             
             set_property(f, 
                          name="hedgehog/lite_crossbar", 
@@ -482,10 +459,8 @@ class Firmware:
                                      "ADDR_WIDTH": 40,
                                      "CONNECTIVITY_MODE": "SAMD",
                                      "R_REGISTER": 1})
-            connect_bd_net(f, f"hedgehog/lite_crossbar/aclk", f"hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, 
-                           f"hedgehog/lite_crossbar/aresetn", 
-                           f"hedgehog/proc_sys_reset_seq_clk/interconnect_aresetn")
+            connect_bd_net(f, f"hedgehog/lite_crossbar/aclk", seq_clk_pin)
+            connect_bd_net(f, f"hedgehog/lite_crossbar/aresetn", seq_clk_peripheral_aresetn)
             lite_crossbar_slave = 0
             
             sequencer_memory_target_address_spaces = ["/ps/Data"]
@@ -499,12 +474,8 @@ class Firmware:
                                         "NUM_MI": 2,
                                         "STRATEGY": 1,
                                         "CONNECTIVITY_MODE": "SAMD"})
-                connect_bd_net(f, 
-                            "hedgehog/sequencer_memory_crossbar/aclk", 
-                            "hedgehog/clk_wiz/" + self.config["sequencer_memory_crossbar"]["clock"])
-                connect_bd_net(f, 
-                            "hedgehog/sequencer_memory_crossbar/aresetn", 
-                            f"hedgehog/proc_sys_reset_{self.config['sequencer_memory_crossbar']['clock']}/interconnect_aresetn")
+                connect_bd_net(f, "hedgehog/sequencer_memory_crossbar/aclk", seq_clk_pin)
+                connect_bd_net(f, "hedgehog/sequencer_memory_crossbar/aresetn", seq_clk_peripheral_aresetn)
                 
                 sequencer_memory_crossbar_master = 0
                 sequencer_memory_crossbar_slave = 0
@@ -525,14 +496,14 @@ class Firmware:
             #           
             create_ip(f, name="hedgehog/memory_smartconnect", vlnv="xilinx.com:ip:smartconnect:1.0")
             set_property(f, name="hedgehog/memory_smartconnect", 
-                         properties={"NUM_MI": 15, 
+                         properties={"NUM_MI": 13, 
                                      "NUM_SI": self._memory_smartconnect_masters, 
                                      "NUM_CLKS": 4})
-            connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk", f"hedgehog/clk_wiz/hs_clk")
-            connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk1", f"hedgehog/clk_wiz/seq_clk")
+            connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk", f"hedgehog/PS_AXI_clk")
+            connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk1", seq_clk_pin)
             connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk2", f"hedgehog/DDR4_C0_ui_clk")
             connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk3", f"hedgehog/DDR4_C1_ui_clk")
-            connect_bd_net(f, f"hedgehog/memory_smartconnect/aresetn", f"hedgehog/proc_sys_reset_hs_clk/interconnect_aresetn")
+            connect_bd_net(f, f"hedgehog/memory_smartconnect/aresetn", f"hedgehog/proc_sys_reset_PS_AXI_clk/interconnect_aresetn")
             memory_smartconnect_target_address_spaces = ["/ps/Data"]
 
             # Connect it to the PS and various interface ports
@@ -544,14 +515,7 @@ class Firmware:
                          "hedgehog/memory_smartconnect", 
                          properties=" CONFIG.ADVANCED_PROPERTIES { __view__ { timing { SW0 { AR_M_PIPE 1 AR_S_PIPE 1 AW_M_PIPE 1 AW_S_PIPE 1 B_M_PIPE 1 B_S_PIPE 1 R_M_PIPE 1 R_S_PIPE 1 W_M_PIPE 1 W_S_PIPE 1 } } }}")
             
-            # Connect the lite smartconnect to the memory smartconnect through an axi-lite register slice
-            # create_ip(f, "hedgehog/lite_crossbar_reg", "xilinx.com:ip:axi_register_slice:2.1")
-            # set_property(f, "hedgehog/lite_crossbar_reg", properties="CONFIG.DATA_WIDTH.VALUE_SRC USER")
-            # set_property(f, "hedgehog/lite_crossbar_reg", properties={"DATA_WIDTH": 32})
-            # connect_bd_net(f, "hedgehog/lite_crossbar_reg/aclk", "hedgehog/clk_wiz/seq_clk")
-            # connect_bd_net(f, "hedgehog/lite_crossbar_reg/aresetn", "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-            # connect_bd_intf_net(f, f"hedgehog/memory_smartconnect/M00_AXI", f"hedgehog/lite_crossbar_reg/S_AXI")
-            # connect_bd_intf_net(f, f"hedgehog/lite_crossbar_reg/M_AXI", f"hedgehog/lite_crossbar/S00_AXI")
+            # Connect the lite smartconnect to the memory smartconnect
             connect_bd_intf_net(f, f"hedgehog/memory_smartconnect/M00_AXI", f"hedgehog/lite_crossbar/S00_AXI")
             memory_smartconnect_slave = 1
             
@@ -566,19 +530,18 @@ class Firmware:
             # Auto-generated config string by Vivado
             rfdc_config_string = ("CONFIG.ADC_DSA_RTS {true} "
                                   "CONFIG.DAC_VOP_RTS {true} "
-                                  f"CONFIG.Axiclk_Freq {{{self.config['rfdc']['axi_clk_freq_hz']*1e-6}}} ")
+                                  f"CONFIG.Axiclk_Freq {{{seq_clk_freq*1e-6}}} ")
             
             for dc in ["adc", "dac"]:
                 rfdc_config_string += f"CONFIG.{dc.upper()}_NCO_RTS {{true}} "
                 rfdc_config_string += f"CONFIG.{dc.upper()}_RTS {{true}} "
                 
                 for tile in range(4):               
-                    tile_stream_clock = self.config["clocks"]["generated_clocks"][self.config['rfdc'][dc]['tile_axis_clocks'][tile]]    
                     rfdc_config_string += (
                         f"CONFIG.{dc.upper()}{tile}_Clock_Dist {{{self.config['rfdc'][dc]['tile_distribute_clk'][tile]}}} "
                         f"CONFIG.{dc.upper()}{tile}_Clock_Source {{{self.config['rfdc'][dc]['tile_clk_source'][tile]}}} "
                         f"CONFIG.{dc.upper()}{tile}_Enable {{1}} "
-                        f"CONFIG.{dc.upper()}{tile}_Fabric_Freq {{{tile_stream_clock*1e-6:.3f}}} "
+                        f"CONFIG.{dc.upper()}{tile}_Fabric_Freq {{{seq_clk_freq*1e-6:.3f}}} "
                         f"CONFIG.{dc.upper()}{tile}_Multi_Tile_Sync {{{str(self.config['rfdc'][dc]['tile_mts'][tile]).lower()}}} "
                         f"CONFIG.{dc.upper()}{tile}_Outclk_Freq {{{self.config['rfdc'][dc]['tile_sample_rate_hz'][tile]*1e-6 / 16:.3f}}} "
                         f"CONFIG.{dc.upper()}{tile}_PLL_Enable {{{str(self.config['rfdc'][dc]['tile_pll'][tile]).lower()}}} "
@@ -592,7 +555,7 @@ class Firmware:
                     for block in range(4):
                         interface_width = self.config['rfdc'][dc]['channel_interface_width'][tile*4 + block]
 
-                        scale = self.config['rfdc'][dc]['tile_sample_rate_hz'][tile] * 32 / (interface_width * tile_stream_clock)
+                        scale = self.config['rfdc'][dc]['tile_sample_rate_hz'][tile] * 32 / (interface_width * seq_clk_freq)
                         
                         if round(scale) != round(scale, 6):
                             raise ValueError(f"Invalid scale for {dc}{tile}{block}"
@@ -626,8 +589,8 @@ class Firmware:
             
             # connect_bd_net(f, f"hedgehog/rfdc/s_axi_aclk", f"hedgehog/PS_clk_250")            
             # connect_bd_net(f, f"hedgehog/rfdc/s_axi_aresetn", f"hedgehog/proc_sys_reset_PS_clk_250/peripheral_aresetn")
-            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")            
-            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aclk", seq_clk_pin)            
+            connect_bd_net(f, f"hedgehog/rfdc/s_axi_aresetn", seq_clk_peripheral_aresetn)
 
             # Connect the analog inputs and outputs to the external ports through the hedgehog logic boundary
             for d in ["out", "in"]:
@@ -641,10 +604,10 @@ class Firmware:
             
             # Connect the RFDC stream clocks and resets
             for i in range(4):
-                connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aclk", f"hedgehog/clk_wiz/{self.config['rfdc']['dac']['tile_axis_clocks'][i]}")
-                connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")        
-                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", f"hedgehog/clk_wiz/{self.config['rfdc']['adc']['tile_axis_clocks'][i]}")
-                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aresetn", f"hedgehog/clk_wiz/locked")
+                connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aclk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/rfdc/s{i}_axis_aresetn", seq_clk_peripheral_aresetn)        
+                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aclk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/rfdc/m{i}_axis_aresetn", seq_clk_peripheral_aresetn)
 
             # Connect RFDC to the config smartconnect and assign it address space
             connect_bd_intf_net(f, f"hedgehog/lite_crossbar/M{lite_crossbar_slave:02d}_AXI", "hedgehog/rfdc/s_axi")
@@ -658,10 +621,14 @@ class Firmware:
 
             # Synchronize the SYSREF signal from the CLK104 to the stream clock of DAC tile 0
             create_module(f, f"hedgehog/pl_sysref_capture", "acadia_sysref_capture")
-            connect_bd_intf_net(f, "hedgehog/CLK104_PL_SYSREF", "hedgehog/pl_sysref_capture/sysref")
-            connect_bd_net(f, "hedgehog/pl_sysref_capture/clk", f"hedgehog/clk_wiz/{self.config['rfdc']['dac']['tile_axis_clocks'][0]}")
+            connect_bd_intf_net(f, "hedgehog/CLK104_PL_SYSREF", "hedgehog/pl_sysref_capture/sysref_in")
+            connect_bd_net(f, "hedgehog/pl_sysref_capture/clk", seq_clk_pin)
             connect_bd_net(f, "hedgehog/pl_sysref_capture/sysref_out", "hedgehog/rfdc/user_sysref_dac")
             connect_bd_net(f, "hedgehog/pl_sysref_capture/sysref_out", "hedgehog/rfdc/user_sysref_adc")
+
+            # Connect the SYSREF capture counter to the AXI lite crossbar
+            connect_bd_intf_net(f, f"hedgehog/lite_crossbar/M{lite_crossbar_slave:02d}_AXI", "hedgehog/pl_sysref_capture/sysref_count")
+            lite_crossbar_slave += 1
             
             # ------------------- Sequencer ----------------------------- #
             
@@ -676,10 +643,10 @@ class Firmware:
             create_ip(f, name=f"hedgehog/xpm_cdc_sequencer_nrst", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
             set_property(f, name="hedgehog/xpm_cdc_sequencer_nrst", properties={"CDC_TYPE": "xpm_cdc_sync_rst"})
             connect_bd_net(f, f"hedgehog/xpm_cdc_sequencer_nrst/src_rst", "hedgehog/xlslice_sequencer_nrst/Dout")
-            connect_bd_net(f, f"hedgehog/xpm_cdc_sequencer_nrst/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+            connect_bd_net(f, f"hedgehog/xpm_cdc_sequencer_nrst/dest_clk", seq_clk_pin)
             
             create_module(f, f"hedgehog/sequencer", "acadia_sequencer")
-            connect_bd_net(f, "hedgehog/sequencer/clk", "hedgehog/clk_wiz/seq_clk")
+            connect_bd_net(f, "hedgehog/sequencer/clk", seq_clk_pin)
             connect_bd_net(f, f"hedgehog/sequencer/nrst", f"hedgehog/xpm_cdc_sequencer_nrst/dest_rst_out")
 
             # ------------------- Sequencer Bus and Associated Modules -------------------- #
@@ -690,11 +657,10 @@ class Firmware:
 
             # Create a RFDC real-time port register interface
             create_module(f, f"hedgehog/rfdc_rts_regs", "acadia_rfdc_rts_regs")
-            if self.config["sequencer_bus"]["rfdc_rts"]["nco_clk"] != "seq_clk":
-                set_property(f, "hedgehog/rfdc_rts_regs", properties={"SYNCHRONOUS": "false"})
+            set_property(f, "hedgehog/rfdc_rts_regs", properties={"SYNCHRONOUS": "true"})
             
-            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nco_dest_clk", f"hedgehog/clk_wiz/" + self.config["sequencer_bus"]["rfdc_rts"]["nco_clk"])
+            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nrst", seq_clk_peripheral_aresetn)
+            connect_bd_net(f, f"hedgehog/rfdc_rts_regs/nco_dest_clk", seq_clk_pin)
             connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/rfdc_rts_regs", f"hedgehog/rfdc_rts_regs/master_bus")
                              
             for tile in range(4):
@@ -713,7 +679,7 @@ class Firmware:
             # Create the interface to the PS DMA
             create_module(f, f"hedgehog/zdma_controller", "acadia_zdma_controller")
             set_property(f, name=f"hedgehog/zdma_controller", properties={"NUM_DMA": 8})
-            connect_bd_net(f, "hedgehog/zdma_controller/nrst", "hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+            connect_bd_net(f, "hedgehog/zdma_controller/nrst", seq_clk_peripheral_aresetn)
             connect_bd_intf_net(f, "hedgehog/sequencer_bus_decoder/zdma_controller", "hedgehog/zdma_controller/master_bus")
             
             # Add all the dataports
@@ -721,7 +687,7 @@ class Firmware:
                 if isinstance(module, BusDataport):
                     create_module(f, f"hedgehog/{module.name}_dataport", module.name)
                     connect_bd_intf_net(f, f"hedgehog/{module.name}_dataport/master_bus", f"hedgehog/sequencer_bus_decoder/{module.name}")
-                    connect_bd_net(f, f"hedgehog/{module.name}_dataport/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                    connect_bd_net(f, f"hedgehog/{module.name}_dataport/nrst", seq_clk_peripheral_aresetn)
                     
             # ------------------- Sequencer Cache -------------------- #
             # Add cache memory and connect it to the sequencer bus decoder
@@ -729,7 +695,7 @@ class Firmware:
             
             connect_bd_net(f, 
                            "hedgehog/cache_memory/s_axi_aclk", 
-                           "hedgehog/clk_wiz/" + self.config['sequencer_cache_memory']['clock'])
+                           eval(self.config['sequencer_cache_memory']['clock'] + "_pin"))
             connect_bd_net(f, 
                            "hedgehog/cache_memory/s_axi_aresetn", 
                            f"hedgehog/proc_sys_reset_{self.config['sequencer_cache_memory']['clock']}/peripheral_aresetn")
@@ -740,7 +706,7 @@ class Firmware:
                 create_ip(f, "hedgehog/cache_memory_reg", "xilinx.com:ip:axi_register_slice:2.1")
                 connect_bd_net(f, 
                                f"hedgehog/cache_memory_reg/aclk", 
-                               f"hedgehog/clk_wiz/{self.config['sequencer_cache_memory']['clock']}")
+                               eval(self.config['sequencer_cache_memory']['clock'] + "_pin"))
                 connect_bd_net(f, 
                                f"hedgehog/cache_memory_reg/aresetn", 
                                f"hedgehog/proc_sys_reset_{self.config['sequencer_cache_memory']['clock']}/peripheral_aresetn")
@@ -768,7 +734,7 @@ class Firmware:
             create_module(f, "hedgehog/instruction_memory", "instruction_axi_memory")
             connect_bd_net(f, 
                            "hedgehog/instruction_memory/s_axi_aclk", 
-                           f"hedgehog/clk_wiz/{self.config['sequencer_instruction_memory']['clock']}")
+                           eval(self.config['sequencer_instruction_memory']['clock'] + "_pin"))
             connect_bd_net(f, 
                            "hedgehog/instruction_memory/s_axi_aresetn", 
                            f"hedgehog/proc_sys_reset_{self.config['sequencer_instruction_memory']['clock']}/peripheral_aresetn")
@@ -778,7 +744,7 @@ class Firmware:
             create_ip(f, "hedgehog/instruction_memory_reg", "xilinx.com:ip:axi_register_slice:2.1")
             connect_bd_net(f, 
                             f"hedgehog/instruction_memory_reg/aclk", 
-                            f"hedgehog/clk_wiz/{self.config['sequencer_instruction_memory']['clock']}")
+                            eval(self.config['sequencer_instruction_memory']['clock'] + "_pin"))
             connect_bd_net(f, 
                             f"hedgehog/instruction_memory_reg/aresetn", 
                             f"hedgehog/proc_sys_reset_{self.config['sequencer_instruction_memory']['clock']}/peripheral_aresetn")
@@ -802,15 +768,15 @@ class Firmware:
             for tile in range(4):
                 create_module(f, f"hedgehog/dac_tile{tile}_memory", f"dac_tile{tile}_axi_memory")
                 connect_bd_intf_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
-                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
-                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aclk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
                 memory_smartconnect_slave += 1
             
             # ------------------- DAC DMA Descriptor Memory -------------------- #
             create_module(f, f"hedgehog/dac_dma_descriptor_memory", f"dac_dma_descriptor_axi_memory")
             connect_bd_intf_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
-            connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+            connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aclk", seq_clk_pin)
+            connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
             memory_smartconnect_slave += 1
             
             # ------------------- DAC Real-Time DMAs -------------------- #
@@ -830,8 +796,8 @@ class Firmware:
                                                     // self.config[f"rfdc"]["dac"]["channel_interface_width"][channel], 
                                                 log=True),
                                 "DESCRIPTOR_MEM_ADDR_WIDTH": next_highest_power_of_2(self.config["dac_dma_descriptor_memory"]["size_bits"] // 64, log=True)})
-                connect_bd_net(f, f"hedgehog/dac{channel}_dma/clk", f"hedgehog/clk_wiz/seq_clk")
-                connect_bd_net(f, f"hedgehog/dac{channel}_dma/nrst", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                connect_bd_net(f, f"hedgehog/dac{channel}_dma/clk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/dac{channel}_dma/nrst", seq_clk_peripheral_aresetn)
 
                 connect_bd_net(f, f"hedgehog/dac{channel}_dma/address_out_tdata", f"hedgehog/dac_tile{tile}_memory/mem{block}_addr")
                 connect_bd_net(f, f"hedgehog/dac{channel}_dma/data_address_invalid", f"hedgehog/dac_tile{tile}_memory/mem{block}_rst")
@@ -843,7 +809,7 @@ class Firmware:
                              properties={"WIDTH": self.config['rfdc']['dac']['channel_interface_width'][channel], 
                                          "STAGES": self.config['rfdc']['dac']['channel_pipeline_stages'][channel]})
                 
-                connect_bd_net(f, f"hedgehog/dac{channel}_pipeline/clk", f"hedgehog/clk_wiz/" + self.config['rfdc']['dac']['tile_axis_clocks'][tile])
+                connect_bd_net(f, f"hedgehog/dac{channel}_pipeline/clk", seq_clk_pin)
                 connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/mem{block}_dout", f"hedgehog/dac{channel}_pipeline/s_axis_tdata")
                 connect_bd_intf_net(f, f"hedgehog/dac{channel}_pipeline/m_axis", f"hedgehog/rfdc/s{tile}{block}_axis")
 
@@ -864,8 +830,8 @@ class Firmware:
             # ------------------- ADC DMA Descriptor Memory -------------------- #
             create_module(f, f"hedgehog/adc_dma_descriptor_memory", f"adc_dma_descriptor_axi_memory")
             connect_bd_intf_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
-            connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+            connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aclk", seq_clk_pin)
+            connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
             memory_smartconnect_slave += 1
             
             # ------------------- ADC Real-Time DMAs -------------------- #
@@ -880,19 +846,15 @@ class Firmware:
                                 "HAS_NARROWING": self.config[f"rfdc"]["adc"]["dma_has_narrowing"][channel],
                                 "DATA_WIDTH": self.config["stream_processing_path"]["width"],
                                 "DESCRIPTOR_MEM_ADDR_WIDTH": next_highest_power_of_2(self.config["adc_dma_descriptor_memory"]["size_bits"] // 64, log=True)})
-                connect_bd_net(f, 
-                               f"hedgehog/adc{d}_dma/clk", 
-                               f"hedgehog/clk_wiz/seq_clk")
-                connect_bd_net(f, 
-                               f"hedgehog/adc{d}_dma/nrst", 
-                               f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                connect_bd_net(f, f"hedgehog/adc{d}_dma/clk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/adc{d}_dma/nrst", seq_clk_peripheral_aresetn)
                 
                 # Connect the data input to the DMA through a pipeline
                 create_module(f, f"hedgehog/adc{d}_pipeline", "acadia_axis_pipeline")
                 set_property(f, f"hedgehog/adc{d}_pipeline", 
                             properties={"WIDTH": self.config['rfdc']['adc']['channel_interface_width'][d],
                                         "STAGES": self.config['rfdc']['adc']['channel_pipeline_stages'][d]})
-                connect_bd_net(f, f"hedgehog/adc{d}_pipeline/clk", "hedgehog/clk_wiz/" + self.config['rfdc']['adc']['tile_axis_clocks'][tile])
+                connect_bd_net(f, f"hedgehog/adc{d}_pipeline/clk", seq_clk_pin)
 
                 connect_bd_intf_net(f, f"hedgehog/rfdc/m{tile}{block}_axis", 
                                     f"hedgehog/adc{d}_pipeline/S_AXIS")
@@ -941,16 +903,10 @@ class Firmware:
                                         "CONFIG.HAS_TREADY {0} "
                                         "CONFIG.TDEST_WIDTH {0}")
             
-            connect_bd_net(f, f"hedgehog/stream_processing_input_switch/aclk", f"hedgehog/clk_wiz/seq_clk")
-            connect_bd_net(f, f"hedgehog/stream_processing_input_switch/aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-            
-            connect_bd_net(f, 
-                            "hedgehog/stream_processing_input_switch/s_axi_ctrl_aclk", 
-                            f"hedgehog/clk_wiz/{self.config['stream_processing_path']['input_switch']['axi_clk']}")
-                
-            connect_bd_net(f, 
-                            "hedgehog/stream_processing_input_switch/s_axi_ctrl_aresetn", 
-                            f"hedgehog/proc_sys_reset_{self.config['stream_processing_path']['input_switch']['axi_clk']}/peripheral_aresetn")
+            connect_bd_net(f, f"hedgehog/stream_processing_input_switch/aclk", seq_clk_pin)
+            connect_bd_net(f, f"hedgehog/stream_processing_input_switch/aresetn", seq_clk_peripheral_aresetn)
+            connect_bd_net(f, f"hedgehog/stream_processing_input_switch/s_axi_ctrl_aclk", seq_clk_pin)
+            connect_bd_net(f, f"hedgehog/stream_processing_input_switch/s_axi_ctrl_aresetn", seq_clk_peripheral_aresetn)
                 
                 
             connect_bd_intf_net(f, 
@@ -988,16 +944,10 @@ class Firmware:
                                             "CONFIG.HAS_TREADY {0} "
                                             "CONFIG.TDEST_WIDTH {0}")
 
-                connect_bd_net(f, f"hedgehog/adc_input_switch/aclk", f"hedgehog/clk_wiz/seq_clk")
-                connect_bd_net(f, f"hedgehog/adc_input_switch/aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
-                
-                connect_bd_net(f, 
-                               "hedgehog/adc_input_switch/s_axi_ctrl_aclk", 
-                               f"hedgehog/clk_wiz/{self.config['stream_processing_path']['adc_input_switch']['axi_clk']}")
-                
-                connect_bd_net(f, 
-                               "hedgehog/adc_input_switch/s_axi_ctrl_aresetn", 
-                               f"hedgehog/proc_sys_reset_{self.config['stream_processing_path']['adc_input_switch']['axi_clk']}/peripheral_aresetn")
+                connect_bd_net(f, f"hedgehog/adc_input_switch/aclk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/adc_input_switch/aresetn", seq_clk_peripheral_aresetn)
+                connect_bd_net(f, f"hedgehog/adc_input_switch/s_axi_ctrl_aclk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/adc_input_switch/s_axi_ctrl_aresetn", seq_clk_peripheral_aresetn)
                 
                 
                 connect_bd_intf_net(f, 
@@ -1033,10 +983,8 @@ class Firmware:
                     adc_input_switch_slave += 1
                 elif inp["kind"] == "memory":
                     # First, create the DataMover Controller and connect it to the bus
-                    create_module(f, 
-                                f"hedgehog/input{idx}_datamover_controller", 
-                                "acadia_datamover_controller")
-                    connect_bd_net(f, f"hedgehog/input{idx}_datamover_controller/clk", "hedgehog/clk_wiz/seq_clk")
+                    create_module(f, f"hedgehog/input{idx}_datamover_controller", "acadia_datamover_controller")
+                    connect_bd_net(f, f"hedgehog/input{idx}_datamover_controller/clk", seq_clk_pin)
                     connect_bd_intf_net(f, 
                                         f"hedgehog/sequencer_bus_decoder/input{idx}_datamover_controller", 
                                         f"hedgehog/input{idx}_datamover_controller/master_bus")
@@ -1078,17 +1026,13 @@ class Firmware:
                     # (for some reason the clock pins are different between s2mm and mm2s)
                     # These will both connect to the sequencer clock since the command and status ports
                     # are controlled by the bus through the DataMover controller
-                    connect_bd_net(f, 
-                                    f"hedgehog/input{idx}_datamover/m_axis_mm2s_cmdsts_aclk", 
-                                    f"hedgehog/clk_wiz/seq_clk")
-                    connect_bd_net(f, 
-                                    f"hedgehog/input{idx}_datamover/m_axis_mm2s_cmdsts_aresetn",
-                                    f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                    connect_bd_net(f, f"hedgehog/input{idx}_datamover/m_axis_mm2s_cmdsts_aclk", seq_clk_pin)
+                    connect_bd_net(f, f"hedgehog/input{idx}_datamover/m_axis_mm2s_cmdsts_aresetn", seq_clk_peripheral_aresetn)
 
                     # Connect AXI Master clocks and resets
                     connect_bd_net(f, 
                                     f"hedgehog/input{idx}_datamover/m_axi_mm2s_aclk", 
-                                    f"hedgehog/clk_wiz/{inp['AXI_clock']}")
+                                    eval(inp['AXI_clock'] + "_pin"))
                     connect_bd_net(f, 
                                     f"hedgehog/input{idx}_datamover/m_axi_mm2s_aresetn", 
                                     f"hedgehog/proc_sys_reset_{inp['AXI_clock']}/peripheral_aresetn")
@@ -1105,9 +1049,9 @@ class Firmware:
                     # TODO: this isn't always necessary
                     create_ip(f, name=f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
                     set_property(f, name=f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err", properties={"CDC_TYPE": "xpm_cdc_single"})
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_clk", f"hedgehog/clk_wiz/{inp['AXI_clock']}")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_clk", eval(inp['AXI_clock'] + "_pin"))
                     connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_in", f"hedgehog/input{idx}_datamover/mm2s_err")
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_clk", seq_clk_pin)
                     connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_out", f"hedgehog/input{idx}_datamover_controller/err")
                     
                     # Connect the datamover to the switch through a FIFO
@@ -1120,13 +1064,13 @@ class Firmware:
                     # Connect clocks and resets for the FIFO
                     connect_bd_net(f, 
                                    f"hedgehog/input{idx}_datamover_fifo/s_axis_aclk", 
-                                   f"hedgehog/clk_wiz/{inp['AXI_clock']}")
+                                   eval(inp['AXI_clock'] + "_pin"))
                     connect_bd_net(f, 
                                 f"hedgehog/input{idx}_datamover_fifo/s_axis_aresetn",
                                 f"hedgehog/proc_sys_reset_{inp['AXI_clock']}/peripheral_aresetn")
                     connect_bd_net(f, 
                                    f"hedgehog/input{idx}_datamover_fifo/m_axis_aclk", 
-                                   f"hedgehog/clk_wiz/{self.config['stream_processing_path']['clock']}")
+                                   seq_clk_pin)
                     
                     
                     # Connect the DataMover to the FIFO
@@ -1149,8 +1093,8 @@ class Firmware:
                 create_module(f, f"hedgehog/cmacc_kernel_memory", f"cmacc_kernel_axi_memory")
                 connect_bd_intf_net(f, f"hedgehog/cmacc_kernel_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
                 memory_smartconnect_slave += 1
-                connect_bd_net(f, f"hedgehog/cmacc_kernel_memory/s_axi_aclk", f"hedgehog/clk_wiz/seq_clk")
-                connect_bd_net(f, f"hedgehog/cmacc_kernel_memory/s_axi_aresetn", f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                connect_bd_net(f, f"hedgehog/cmacc_kernel_memory/s_axi_aclk", seq_clk_pin)
+                connect_bd_net(f, f"hedgehog/cmacc_kernel_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
             
                     
             # ------------------- Stream Processing Modules -------------------- #
@@ -1167,22 +1111,22 @@ class Firmware:
                 # are controlled by the bus through the DataMover controller
                 connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_datamover/m_axis_s2mm_cmdsts_awclk", 
-                                f"hedgehog/clk_wiz/seq_clk")
+                                seq_clk_pin)
                 connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_datamover/m_axis_s2mm_cmdsts_aresetn",
-                                f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                                seq_clk_peripheral_aresetn)
 
                 # Connect AXI Master clocks and resets
                 connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_datamover/m_axi_s2mm_aclk", 
-                                f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                                eval(module['AXI_clock'] + "_pin"))
                 connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_datamover/m_axi_s2mm_aresetn", 
                                 f"hedgehog/proc_sys_reset_{module['AXI_clock']}/peripheral_aresetn")
 
                 connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_datamover/m_axi_mm2s_aclk", 
-                                f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                                eval(module['AXI_clock'] + "_pin"))
                 connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_datamover/m_axi_mm2s_aresetn", 
                                 f"hedgehog/proc_sys_reset_{module['AXI_clock']}/peripheral_aresetn")
@@ -1191,7 +1135,7 @@ class Firmware:
                 create_module(f, 
                                 f"hedgehog/module{idx_module}_s2mm_datamover_controller", 
                                 "acadia_datamover_controller")
-                connect_bd_net(f, f"hedgehog/module{idx_module}_s2mm_datamover_controller/clk", "hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/module{idx_module}_s2mm_datamover_controller/clk", seq_clk_pin)
                 connect_bd_intf_net(f, 
                                     f"hedgehog/module{idx_module}_s2mm_datamover_controller/master_bus",
                                     f"hedgehog/sequencer_bus_decoder/module{idx_module}_s2mm_datamover_controller")
@@ -1207,9 +1151,9 @@ class Firmware:
                 # Connect the error signal through a CDC
                 create_ip(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
                 set_property(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err", properties={"CDC_TYPE": "xpm_cdc_single"})
-                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_clk", f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_clk", eval(module['AXI_clock'] + "_pin"))
                 connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_in", f"hedgehog/module{idx_module}_datamover/s2mm_err")
-                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_clk", seq_clk_pin)
                 connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_out", f"hedgehog/module{idx_module}_s2mm_datamover_controller/err")
 
                 if module["kind"] == "memory":
@@ -1254,13 +1198,13 @@ class Firmware:
                     # Connect clocks and resets for the FIFO
                     connect_bd_net(f, 
                                    f"hedgehog/module{idx_module}_s2mm_datamover_fifo/signal_in_clk", 
-                                   f"hedgehog/clk_wiz/{self.config['stream_processing_path']['clock']}")
+                                   seq_clk_pin)
                     connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_s2mm_datamover_fifo/signal_in_rst",
                                 f"hedgehog/module{idx_module}_s2mm_datamover_controller/fifo_rst")
                     connect_bd_net(f, 
                                    f"hedgehog/module{idx_module}_s2mm_datamover_fifo/monitor_clk", 
-                                   f"hedgehog/clk_wiz/{self.config['stream_processing_path']['clock']}")
+                                   seq_clk_pin)
                     connect_bd_net(f, 
                                 f"hedgehog/module{idx_module}_s2mm_datamover_fifo/monitor_rst",
                                 f"hedgehog/module{idx_module}_s2mm_datamover_controller/fifo_rst")
@@ -1269,7 +1213,7 @@ class Firmware:
                                 f"hedgehog/module{idx_module}_s2mm_datamover_controller/fifo_overflow")
                     connect_bd_net(f, 
                                    f"hedgehog/module{idx_module}_s2mm_datamover_fifo/m_axis_aclk", 
-                                   f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                                   eval(module['AXI_clock'] + "_pin"))
                     
                     # Connect the FIFO interfaces
                     connect_bd_intf_net(f, 
@@ -1313,10 +1257,10 @@ class Firmware:
 
                     connect_bd_net(f, 
                                     f"hedgehog/module{idx_module}_datamover/m_axis_mm2s_cmdsts_aclk", 
-                                    f"hedgehog/clk_wiz/seq_clk")
+                                    seq_clk_pin)
                     connect_bd_net(f, 
                                     f"hedgehog/module{idx_module}_datamover/m_axis_mm2s_cmdsts_aresetn",
-                                    f"hedgehog/proc_sys_reset_seq_clk/peripheral_aresetn")
+                                    seq_clk_peripheral_aresetn)
                     
                     # Connect the output AXI masters
                     for direction in ["MM2S", "S2MM"]:
@@ -1330,7 +1274,7 @@ class Firmware:
                     create_module(f, 
                                     f"hedgehog/module{idx_module}_mm2s_datamover_controller", 
                                     "acadia_datamover_controller")
-                    connect_bd_net(f, f"hedgehog/module{idx_module}_mm2s_datamover_controller/clk", "hedgehog/clk_wiz/seq_clk")
+                    connect_bd_net(f, f"hedgehog/module{idx_module}_mm2s_datamover_controller/clk", seq_clk_pin)
                     connect_bd_intf_net(f, 
                                         f"hedgehog/module{idx_module}_mm2s_datamover_controller/master_bus",
                                         f"hedgehog/sequencer_bus_decoder/module{idx_module}_mm2s_datamover_controller")
@@ -1346,21 +1290,17 @@ class Firmware:
                     # Connect the error signal through a CDC
                     create_ip(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
                     set_property(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err", properties={"CDC_TYPE": "xpm_cdc_single"})
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_clk", f"hedgehog/clk_wiz/{module['AXI_clock']}")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_clk", eval(module['AXI_clock'] + "_pin"))
                     connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_in", f"hedgehog/module{idx_module}_datamover/mm2s_err")
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_clk", f"hedgehog/clk_wiz/seq_clk")
+                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_clk", seq_clk_pin)
                     connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_out", f"hedgehog/module{idx_module}_mm2s_datamover_controller/err")                    
                     
                     # Create the adder
                     create_module(f, f"hedgehog/module{idx_module}_adder", "acadia_stream_complex32_adder")
-                    connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_adder/stats_clk", 
-                                   f"hedgehog/clk_wiz/{module['AXI_clock']}")
-                    connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_adder/samples_clk", 
-                                   f"hedgehog/clk_wiz/{self.config['stream_processing_path']['clock']}")
+                    connect_bd_net(f, f"hedgehog/module{idx_module}_adder/stats_clk", eval(module['AXI_clock'] + "_pin"))
+                    connect_bd_net(f, f"hedgehog/module{idx_module}_adder/samples_clk", seq_clk_pin)
                     
-                    asynchronous = "true" if module["AXI_clock"] == self.config['stream_processing_path']['clock'] else 'false'
+                    asynchronous = "false" if module["AXI_clock"] == "seq_clk" else 'true'
                     set_property(f, 
                                  f"hedgehog/module{idx_module}_adder",
                                  properties={"INPUT_WORDS": self.config["stream_processing_path"]["width"] // 32,
@@ -1428,11 +1368,9 @@ class Firmware:
                                             "DATA_OUTPUT_FIFO_PRIMITIVE": module["FIFO_primitive"],
                                             "DATA_OUTPUT_FIFO_ASYNCHRONOUS": "false" if module["AXI_clock"] == "seq_clk" else "true"})
                     
-                    connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_cmacc/clk", 
-                                   f"hedgehog/clk_wiz/{self.config['stream_processing_path']['clock']}")
+                    connect_bd_net(f, f"hedgehog/module{idx_module}_cmacc/clk", seq_clk_pin)
                     
-                    # Connect the register interface
+                    # Connect the register interface to the bus
                     connect_bd_intf_net(f, 
                                         f"hedgehog/sequencer_bus_decoder/module{idx_module}_registers",
                                         f"hedgehog/module{idx_module}_cmacc/registers")
@@ -1446,7 +1384,7 @@ class Firmware:
                     # (the output is buffered with a FIFO internally)
                     connect_bd_net(f, 
                                    f"hedgehog/module{idx_module}_cmacc/data_out_aclk", 
-                                   f"hedgehog/clk_wiz/{module['AXI_clock']}")                    
+                                   eval(module['AXI_clock'] + "_pin"))                    
                     connect_bd_intf_net(f, 
                                         f"hedgehog/module{idx_module}_cmacc/data_out", 
                                         f"hedgehog/module{idx_module}_datamover/S_AXIS_S2MM")
@@ -1496,9 +1434,7 @@ class Firmware:
                                             "DATA_OUTPUT_FIFO_PRIMITIVE": module["FIFO_primitive"],
                                             "DATA_OUTPUT_FIFO_ASYNCHRONOUS": "false" if module["AXI_clock"] == "seq_clk" else "true"})
                     
-                    connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_dsp/clk", 
-                                   f"hedgehog/clk_wiz/{self.config['stream_processing_path']['clock']}")
+                    connect_bd_net(f, f"hedgehog/module{idx_module}_dsp/clk", seq_clk_pin)
                     
                     # Connect the register interface
                     connect_bd_intf_net(f, 
@@ -1514,7 +1450,7 @@ class Firmware:
                     # (the output is buffered with a FIFO internally)
                     connect_bd_net(f, 
                                    f"hedgehog/module{idx_module}_dsp/data_out_aclk", 
-                                   f"hedgehog/clk_wiz/{module['AXI_clock']}")                    
+                                   eval(module['AXI_clock'] + "_pin"))                    
                     connect_bd_intf_net(f, 
                                         f"hedgehog/module{idx_module}_dsp/data_out", 
                                         f"hedgehog/module{idx_module}_datamover/S_AXIS_S2MM")  
@@ -1566,7 +1502,7 @@ class Firmware:
             create_concatenator(f, "hedgehog/xlconcat_ps_gdma_clk", [1]*8)
             connect_bd_net(f, f"hedgehog/xlconcat_ps_gdma_clk/dout", f"hedgehog/ps_gdma_clk")
             for i in range(8):
-                connect_bd_net(f, f"hedgehog/xlconcat_ps_gdma_clk/In{i}", f"hedgehog/clk_wiz/seq_clk")
+                connect_bd_net(f, f"hedgehog/xlconcat_ps_gdma_clk/In{i}", seq_clk_pin)
                 
             # ------------------- ADCIO and DACIO -------------------- #
             connect_bd_net(f, "hedgehog/io_dataport/ADCIO", "hedgehog/ADCIO")
@@ -1640,6 +1576,12 @@ class Firmware:
                     addr_seg=f"hedgehog/adc_input_switch/" + self.config["stream_processing_path"][f"adc_input_switch"]["axi_segment"], 
                     offset=self.config["stream_processing_path"][f"adc_input_switch"]["axi_address"], 
                     range=self.config["stream_processing_path"][f"adc_input_switch"]["axi_size_bits"] // 8)
+
+                assign_bd_address(f, 
+                    target_address_space=target_address_space, 
+                    addr_seg=f"hedgehog/pl_sysref_capture/" + self.config[f"pl_sysref_capture"]["axi_segment"], 
+                    offset=self.config[f"pl_sysref_capture"]["axi_address"], 
+                    range=self.config[f"pl_sysref_capture"]["axi_size_bits"] // 8)
                     
                 assign_bd_address(f, 
                     target_address_space=target_address_space, 
@@ -1711,16 +1653,4 @@ class Firmware:
                 
         return modules
     
-    @staticmethod
-    def pull(server: str = "barharbor.stdusr.yale.internal",
-             filename: str = "firmware-default.zip",
-             firmware_location: str = "/run/media/mmcblk0p1"):
-        """
-        Download the latest firmware from the internal Yale server.
-        """
-        from ftplib import FTP
-        ftp = FTP(server)
-        ftp.login()
-        with open("firmware.zip", "wb") as f:
-            ftp.retrbinary("RETR firmware-default.zip", f.write)
         
