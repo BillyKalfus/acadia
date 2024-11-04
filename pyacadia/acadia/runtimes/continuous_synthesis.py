@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from acadia import Runtime
+import acadia.utils as utils
+import logging
 
 @dataclass
 class ContinuousSynthesisRuntime(Runtime):
@@ -10,16 +12,17 @@ class ContinuousSynthesisRuntime(Runtime):
     stimulus: dict
 
     # Amount of time in seconds to run for
-    length: float = 5
+    timeout: float = 5
 
     def main(self):        
         from acadia import Acadia
         import time
+        logger = logging.getLogger("acadia")
         
         acadia = Acadia()
 
         channel = acadia.channel(self.stimulus["channel"])
-        pulse = acadia.create_waveform(channel, length_seconds=1e-6)
+        pulse = acadia.create_waveform(channel, **self.stimulus["waveform"])
         
         def sequence(a: Acadia):
             with a.sequencer().loop():
@@ -38,23 +41,24 @@ class ContinuousSynthesisRuntime(Runtime):
         
         acadia.assemble()
         acadia.load()
-
+        
         acadia.run(block=False)
-        time.sleep(self.length)
-        acadia.sequencer_halt()
+        time.sleep(self.timeout)
+        
+        # utils.sequencer_halt_and_reset()
 
 def run():
     stimulus: dict = {
-        "channel": "DAC1",
+        "channel": "DAC4",
 
         "datapath": {
-            "vop": 12000,
-            "mix_reconstruction": True,
-            "nco_frequency": 4.6e9
+            "vop": 30000,
+            "mix_reconstruction": False,
+            "nco_frequency": 0.05e9
         },
 
         "waveform": {
-            "length": 1e-6,
+            "length": 0.0,
             "fixed_length": 1e-6
         },
         
@@ -65,7 +69,7 @@ def run():
     }
 
     rt = ContinuousSynthesisRuntime(stimulus)
-    rt.deploy("10.66.3.214")    
+    rt.deploy("10.66.3.198", "continuous_synthesis", files=[__file__])    
     rt.display()
 
     return rt
