@@ -62,11 +62,13 @@ architecture rtl of acadia_spi_io is
     ATTRIBUTE X_INTERFACE_INFO of zynq_spi_sck_o : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi SCK_O";
     ATTRIBUTE X_INTERFACE_INFO of zynq_spi_sck_t : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi SCK_T";
 
-    ATTRIBUTE X_INTERFACE_INFO of zynq_spi_m_i  : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO0_I";
+    -- MOSI is IO0
     ATTRIBUTE X_INTERFACE_INFO of zynq_spi_m_o  : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO0_O";
+    ATTRIBUTE X_INTERFACE_INFO of zynq_spi_s_i  : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO0_I";
     ATTRIBUTE X_INTERFACE_INFO of zynq_spi_mo_t : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO0_T";
 
-    ATTRIBUTE X_INTERFACE_INFO of zynq_spi_s_i  : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO1_I";
+    -- MISO is IO1
+    ATTRIBUTE X_INTERFACE_INFO of zynq_spi_m_i  : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO1_I";
     ATTRIBUTE X_INTERFACE_INFO of zynq_spi_s_o  : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO1_O";
     ATTRIBUTE X_INTERFACE_INFO of zynq_spi_so_t : SIGNAL is "xilinx.com:interface:spi_rtl:1.0 zynq_spi IO1_T";
 

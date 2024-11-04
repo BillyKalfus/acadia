@@ -21,6 +21,13 @@ cd $BSP_NAME
 # Configure the project with the hardware description
 petalinux-config --get-hw-description=$VIVADO_PROJ_DIR --silentconfig
 
+# Configure the kernel so that we can add the SPI driver
+petalinux-config -c kernel --silentconfig
+
+# Update the config files so that the SPI driver is built into the kernel
+echo CONFIG_SPI_SPIDEV=y > project-spec/meta-user/recipes-kernel/linux/linux-xlnx/spi.cfg
+echo 'SRC_URI += "file://spi.cfg"' >> project-spec/meta-user/recipes-kernel/linux/linux-xlnx_%.bbappend
+
 # Remove the extra demo files that come with the BSP
 rm -rf pre-built
 rm -rf hardware

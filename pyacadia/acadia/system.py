@@ -1599,7 +1599,8 @@ class Acadia:
     @requires_sequencer
     def configure_dsp(self, 
                     src: Union[Channel, Waveform], 
-                    decimation: int = 1) -> StreamConfiguration:
+                    decimation: int = 1,
+                    reset=True) -> StreamConfiguration:
         """
         Stream data from a source to a destination Waveform array. 
         
@@ -1639,6 +1640,12 @@ class Acadia:
             # At packet start and counter start, we'll load in the input value
             # Otherwise, when we receive valid data, we'll add it to P
             dsp_address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
+            logger.debug(f"Configuring DSP module {configuration.input_switch_slave} at bus address 0x{dsp_address:08X}")
+
+            if reset:
+                self.sequencer().bus_write(address=dsp_address, data=(1 << 4))
+                self.sequencer().nop()
+                self.sequencer().nop()
             
             # P = multiplier: CIN = 0, W = 00, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
             self.sequencer().bus_write(address=dsp_address + 9, data=int("00000001010000", 2)) # packet start config
@@ -1662,10 +1669,11 @@ class Acadia:
             # Counter period low and high
             input_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
             counter_value = (decimation // input_samples_per_cycle) - 1
+            logger.debug(f"Assigning counter value {counter_value} ({input_samples_per_cycle} input samples per cycle, decimation {decimation})")
+
             self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
             self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
         
-        logger.debug(f"Created {configuration.module} stream for decimation {decimation}")
         return configuration
         
 
@@ -2685,6 +2693,14 @@ class Acadia:
                                    adc_switch_slave, 
                                    input_switch_master, 
                                    input_switch_slave)
+
+        logger.debug(f"Allocated stream of type {module}, routing incoming data"
+                    f" on input switch master {input_switch_master} to"
+                    f" slave {input_switch_slave}.")
+        if isinstance(input_source, Channel):
+            logger.debug(f"ADC switch set to route incoming data on ADC"
+                        f" master {adc_switch_master} (ADC {input_source.num()})"
+                        f" to switch output {adc_switch_slave}")
         
         self._stream_configurations.append(cfg)
         
