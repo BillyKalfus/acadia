@@ -1679,12 +1679,25 @@ class Acadia:
 
     @requires_sequencer
     def configure_cmacc(self, 
-                        src,
-                        kernel: Union[Waveform, float, None] = None,
+                        src: Union[Channel, Waveform],
+                        kernel: Union[np.ndarray, float, None] = None,
                         write_mode: Union[str, None] = "upper", 
                         last_only: bool = True, 
                         reset_fifo: bool = False,
                         accumulator_done: bool = False) -> tuple[StreamConfiguration, Waveform]:
+        """
+        Configure the CMACC.
+
+        :param src: The source of data to be accumulated by the CMACC
+        :type src: Channel or Waveform
+        :param kernel: The accumulation kernel, or an object that specified its
+            size. If this is a numpy array, its values are ignored, and only its 
+            shape information is used in order to determine the size of the 
+            kernel allocated in kernel memory. If this is a float, this should be
+            the length in seconds of the kernel. If None, a single-element kernel
+            is allocated to allow for boxcar accumulation.
+        :type kernel: np.ndarray, float, None
+        """
         
         if isinstance(src, StreamConfiguration):
             if src.module != "cmacc":
@@ -1703,31 +1716,27 @@ class Acadia:
         kernel_type = self.CMACCKernelArray[configuration.module_resource._resource_id]
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
 
-        # Figure out what kind of kernel to use
+        # Figure out how much memory to allocate for the kernel
         if kernel is None:
+            # Boxcar kernel
             kernel_length_elements = 1
-            logger.debug(f"Allocating single-element kernel Waveform")
-            kernel = Waveform(shape=1, dtype="<i2", resource_allocator=kernel_type) 
         if isinstance(kernel, float):
-            # Allocate a new kernel with a length in seconds given by kernel
+            # Use a length in seconds given by kernel
             kernel_length_elements = kernel * self._firmware["clk104_pl_clk"]["freq_hz"]
-            logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
-            kernel = Waveform(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type) 
-        if isinstance(kernel, Waveform):
-            if not isinstance(kernel._resource, kernel_type):
-                raise TypeError(f"Waveform kernels must be of the appropriate"
-                                f" type for the CMACC represented by the"
-                                f" configuration; received type"
-                                f" {kernel._resource}")
-            logger.debug(f"Using Waveform of size {kernel.shape} for CMACC kernel")
+        if isinstance(kernel, np.ndarray):
+            # Allocate enough space to store the numpy array (after converting to samples)
+            kernel_length_elements = len(kernel)
         else:
             raise TypeError(f"Invalid CMACC kernel (received {kernel})")
         
-        kernel_index = kernel._resource._resource_id // kernel._resource.itemsize
+        logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
+        kernel = Waveform(shape=(kernel_length_elements,2), dtype="<i2", resource_allocator=kernel_type)
+        # resource id is the byte offset of the memory segment within its region 
+        kernel_index = kernel._resource._resource_id // (2*2) 
 
         # Set the kernel start and end addresses
-        # The kernel uses one element per cycle
-        kernel_reg = kernel_index | ((kernel_index + kernel.size - 1) << 16)
+        # The kernel uses one 32-bit element per cycle
+        kernel_reg = kernel_index | ((kernel_index + kernel_length_elements - 1) << 16)
         kernel_reg &= 0xFFFFFFFF
         self.sequencer().bus_write(address=registers+3, data=kernel_reg)
             
@@ -1757,7 +1766,7 @@ class Acadia:
             control_reg |= 1 << 24
             
         logger.debug(f"Configured CMACC for kernel at address 0x{kernel_index:04X}"
-                     f" of length {kernel.size} and set control register to"
+                     f" of length {kernel_length_elements} and set control register to"
                      f" 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
 
