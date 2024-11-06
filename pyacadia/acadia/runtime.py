@@ -382,6 +382,9 @@ class Runtime:
         if isinstance(v, dict):
             return {key: Runtime._transform_arg(value) for key,value in v.items()}
         
+        if isinstance(v, complex):
+            return f"complex;{v.real};{v.imag}"
+        
         return v
     
     @staticmethod
@@ -398,6 +401,10 @@ class Runtime:
         if isinstance(v, str) and v.startswith("ndarray;"):
             buf = BytesIO(unhexlify(v[len("ndarray;"):]))
             return read_array(buf)
+        
+        if isinstance(v, str) and v.startswith("complex;"):
+            _, real, imag = v.split(";")
+            return complex(float(real), float(imag))
         
         return v
     
