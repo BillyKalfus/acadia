@@ -1720,17 +1720,17 @@ class Acadia:
         if kernel is None:
             # Boxcar kernel
             kernel_length_elements = 1
-        if isinstance(kernel, float):
+        elif isinstance(kernel, float):
             # Use a length in seconds given by kernel
             kernel_length_elements = kernel * self._firmware["clk104_pl_clk"]["freq_hz"]
-        if isinstance(kernel, np.ndarray):
+        elif isinstance(kernel, np.ndarray):
             # Allocate enough space to store the numpy array (after converting to samples)
             kernel_length_elements = len(kernel)
         else:
             raise TypeError(f"Invalid CMACC kernel (received {kernel})")
         
         logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
-        kernel = Waveform(shape=(kernel_length_elements,2), dtype="<i2", resource_allocator=kernel_type)
+        kernel = Waveform(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type)
         # resource id is the byte offset of the memory segment within its region 
         kernel_index = kernel._resource._resource_id // (2*2) 
 
@@ -2060,6 +2060,12 @@ class Acadia:
         """
 
         if configure_streams:
+            # Disconnect all of the switch ports so that they can be properly assigned
+            # (If we don't disconnect a previous connection, it may not be properly applied
+            # since assignment priority is determined by master number, not assignment order;
+            # see the description of the MI_MUX registers in the AXI4-Stream Switch IP)
+            self._stream_processing_path_input_switch.disconnect()
+            self._ADC_input_switch.disconnect()
             for cfg in self._stream_configurations:
                 # logger.debug(f"Applying stream configuration {cfg}")
                 self.configure_stream(cfg)
