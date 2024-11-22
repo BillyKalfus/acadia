@@ -2109,7 +2109,7 @@ class Acadia:
         for dma in self._adc_dmas:
             dma.compile_all(overwrite)
 
-        outfilename = os.path.join(output_directory, "compiled.txt") if output_directory is not None else "compiled.txt"
+        outfilename = os.path.join(output_directory, "compiled.log") if output_directory is not None else "compiled.log"
         with open(outfilename, "w") as outfile:
             outfile.write(self.sequencer_pprint())    
 
@@ -2149,7 +2149,7 @@ class Acadia:
             
             assembled[key] = hexlify(assembled_bin).decode("ascii")
 
-        outfilename = os.path.join(output_directory, "assembled.json") if output_directory is not None else "assembled.json"
+        outfilename = os.path.join(output_directory, "assembled.log") if output_directory is not None else "assembled.log"
         with open(outfilename, "w") as outfile:
             json.dump(assembled, outfile, indent=0)
             
@@ -2165,7 +2165,7 @@ class Acadia:
         """
 
         if inp is None or isinstance(inp, str):
-            filename = os.path.join(inp, "assembled.json") if inp is not None else "assembled.json"
+            filename = os.path.join(inp, "assembled.log") if inp is not None else "assembled.log"
             if not os.path.exists(filename):
                 raise ValueError(f"Assembled JSON not found at {filename}")
             with open(filename, "r") as file:
@@ -2227,10 +2227,11 @@ class Acadia:
         idx = 0
         output = ""
         for idx_seq,s in enumerate(self._sequencer_type.instances):
-            output += f"---- Program {idx_seq} ----"
+            output += f"---- Program {idx_seq} ----\n"
             for instr in s._compiled_program:
-                output += f"{idx:04X}: {instr.pprint()}"
+                output += f"{idx:04X}: {instr.pprint()}\n"
                 idx += 1
+            output += "\n"
 
         return output
 
