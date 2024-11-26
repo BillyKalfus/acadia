@@ -1714,23 +1714,33 @@ class Acadia:
             raise TypeError(f"Unable to create stream with source {src}")
         
         kernel_type = self.CMACCKernelArray[configuration.module_resource._resource_id]
+        
+        # Determine whether we need to allocate a new kernel or not
+        if isinstance(kernel, Waveform) and isinstance(kernel._resource, kernel_type):
+            # We already have a kernel and we're good to go, don't allocate a new one
+            kernel_length_elements = kernel.size
+            logger.debug(f"Using already-allocated kernel Waveform of length {kernel_length_elements} samples")
+
+        else:
+            # We don't already have a kernel, so we need to allocate one
+            # Figure out how much memory to allocate for the kernel
+            if kernel is None:
+                # Boxcar kernel
+                kernel_length_elements = 1
+            elif isinstance(kernel, float):
+                # Use a length in seconds given by kernel
+                kernel_length_elements = kernel * self._firmware["clk104_pl_clk"]["freq_hz"]
+            elif isinstance(kernel, np.ndarray):
+                # Allocate enough space to store the numpy array (after converting to samples)
+                kernel_length_elements = len(kernel)
+            else:
+                raise TypeError(f"Invalid CMACC kernel (received {kernel})")
+        
+            logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
+            kernel = Waveform(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type)
+
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
 
-        # Figure out how much memory to allocate for the kernel
-        if kernel is None:
-            # Boxcar kernel
-            kernel_length_elements = 1
-        elif isinstance(kernel, float):
-            # Use a length in seconds given by kernel
-            kernel_length_elements = kernel * self._firmware["clk104_pl_clk"]["freq_hz"]
-        elif isinstance(kernel, np.ndarray):
-            # Allocate enough space to store the numpy array (after converting to samples)
-            kernel_length_elements = len(kernel)
-        else:
-            raise TypeError(f"Invalid CMACC kernel (received {kernel})")
-        
-        logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
-        kernel = Waveform(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type)
         # resource id is the byte offset of the memory segment within its region 
         kernel_index = kernel._resource._resource_id // (2*2) 
 

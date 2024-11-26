@@ -87,10 +87,10 @@ entity acadia_stream_complex32_macc is
         DATA_OUTPUT_FIFO_ASYNCHRONOUS : boolean  := true;
 
         -- Kernel memory settings
-        KERNEL_MEMORY_DEPTH                       : positive := 2048;
+        KERNEL_MEMORY_DEPTH                       : positive := 2048; -- memory depth in samples
         LOG2_KERNEL_MEMORY_DEPTH                  : positive := 11;
-        KERNEL_MEMORY_EXTERNAL_PORT_DATA_WIDTH    : positive := 64;
-        KERNEL_MEMORY_EXTERNAL_PORT_ADDRESS_WIDTH : positive := 10;
+        KERNEL_MEMORY_EXTERNAL_PORT_DATA_WIDTH    : positive := 32;
+        KERNEL_MEMORY_EXTERNAL_PORT_ADDRESS_WIDTH : positive := 11;
         KERNEL_MEMORY_EXTERNAL_PORT_LATENCY       : positive := 2;
         KERNEL_MEMORY_CLOCK_MODE                  : string := "independent";
         KERNEL_MEMORY_PRIMITIVE                   : string := "auto"
@@ -237,7 +237,7 @@ begin
             MEMORY_INIT_PARAM   => "0", 
             MEMORY_OPTIMIZATION => "true",
             MEMORY_PRIMITIVE    => KERNEL_MEMORY_PRIMITIVE,
-            MEMORY_SIZE         => KERNEL_MEMORY_DEPTH, 
+            MEMORY_SIZE         => KERNEL_MEMORY_DEPTH*32, 
             MESSAGE_CONTROL     => 0,
             READ_DATA_WIDTH_A   => 32,
             READ_DATA_WIDTH_B   => KERNEL_MEMORY_EXTERNAL_PORT_DATA_WIDTH,
