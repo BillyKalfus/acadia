@@ -268,7 +268,7 @@ class STP:
                 s += " AND MASK"
             elif self.op == "xor":
                 s += " XOR MASK"
-            else:
+            elif self.op is not None:
                 raise ValueError(f"Unrecognized operation {self.op}")
                 
             s += f" {'' if self.condition_invert else '!'}= 0"

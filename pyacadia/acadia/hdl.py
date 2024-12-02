@@ -347,7 +347,12 @@ class BusDataport(BusDevice, HDLModule):
         return hdl
     
 class BusDecoder(BusDevice, HDLModule):
-    def __init__(self, name, bus_data_bits=32, bus_addr_bits=32, pipeline_miso=False, byte_write=False):
+    def __init__(self, 
+                name: str, 
+                bus_data_bits: int = 32, 
+                bus_addr_bits: int = 32, 
+                pipeline_miso: bool = False, 
+                byte_write: bool = False):
         """
         Generate an HDL file for a memory bus decoder.
 
@@ -370,7 +375,9 @@ class BusDecoder(BusDevice, HDLModule):
         BusDevice.__init__(self, name, 0, bus_data_bits, bus_addr_bits)
         HDLModule.__init__(self, name)
         
-    def add(self, obj, pipeline=False):
+    def add(self, 
+            obj: BusDevice, 
+            pipeline: bool = False) -> None:
         """
         Add a new device to the bus decoder. 
 
@@ -388,16 +395,16 @@ class BusDecoder(BusDevice, HDLModule):
         else:
             raise TypeError("Can only add BusDevices to a BusDecoder.")
             
-    def max_slave_size(self):
+    def max_slave_size(self) -> int:
         return next_highest_power_of_2(max(map(lambda x: x[0].size, self._bus_objects)))
     
-    def items(self):
+    def items(self) -> list[BusDevice]:
         return [obj for (obj,_) in self._bus_objects]
     
     def __iter__(self):
         return iter([obj for (obj,_) in self._bus_objects])
     
-    def keys(self):
+    def keys(self) -> list[str]:
         return [obj.name for (obj,_) in self._bus_objects]
     
     def __getitem__(self, key):
@@ -409,12 +416,29 @@ class BusDecoder(BusDevice, HDLModule):
                 return obj
         
         raise KeyError(f"No BusDevice found attached to this BusDecoder with name {key}.")
+
+    def __contains__(self, key):
+        for (obj, pipeline) in self._bus_objects:
+            if obj.name == key:
+                return True
+
+        return False
+
+    def is_pipelined(self, key: str) -> bool:
+        """
+        Return the value of the pipeline attribute for the device with the given key.
+        """
+        for (obj, pipeline) in self._bus_objects:
+            if obj.name == key:
+                return pipeline
+        
+        raise KeyError(f"No BusDevice found attached to this BusDecoder with name {key}.")
         
     @property
-    def size(self):
+    def size(self) -> int:
         return self.max_slave_size()*next_highest_power_of_2(len(self._bus_objects))
         
-    def assign_address(self, value=None):
+    def assign_address(self, value: int = None):
         """
         Assign attached devices to particular addresses.
         

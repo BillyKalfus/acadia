@@ -206,7 +206,7 @@ class DMASynchronizer(Synchronizer):
             # Wait until all the DMAs in the mask have completed
             dma_running_device = self._acadia._firmware.sequencer_bus_decoder["dma_running"]
             bus_op = proc.bus_read(dma_running_device.address().value(),
-                        latency=self._acadia._bus_latency("dma_running_dataport"))
+                        latency=self._acadia._bus_latency("dma_running"))
             with proc.repeat_until(bus_op & self.dma_mask == 0):
                 pass
 
@@ -2006,7 +2006,7 @@ class Acadia:
 
         dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
         dma_running = self.sequencer().bus_read(address=dma_running_device.address().value(),
-                                                      latency=self._bus_latency("dma_running_dataport"))
+                                                      latency=self._bus_latency("dma_running"))
         with self.sequencer().repeat_until(dma_running & mask == 0):
             pass
         
@@ -2055,7 +2055,7 @@ class Acadia:
         bus_address = self._firmware.dma_running.address().value()
 
         return self.sequencer().bus_read(bus_address, 
-                                        latency=self._bus_latency("dma_running_dataport"))
+                                        latency=self._bus_latency("dma_running"))
 
     # -------------- RUNTIME UTILITIES ----------- #
     
@@ -2363,7 +2363,7 @@ class Acadia:
                 return np.array(cache_self)[key]
             elif isinstance(proc, Sequencer):
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
-                return proc.bus_read(base_address + cache_self.index() + key, 
+                return proc.bus_read(base_address + cache_self.index + key, 
                                      latency=self._bus_latency("cache"))
             return Operation("getitem", cache_self, key)
             
@@ -2375,7 +2375,7 @@ class Acadia:
                 np.array(cache_self)[key] = value
             elif isinstance(proc, Sequencer):
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
-                proc.bus_write(address=base_address + cache_self.index() + key,
+                proc.bus_write(address=base_address + cache_self.index + key,
                                data=value,
                                comment=f"Write to cache address {key}")
             else:
@@ -2614,31 +2614,32 @@ class Acadia:
             ``cache``\.
         :type port: str
         """
+
+        if port not in self._firmware.sequencer_bus_decoder:
+            raise ValueError(f"Unrecognized bus port {port}")
+
         # One cycle to load the bus registers in the sequencer
         latency = 1
 
+        # One cycle if the bus decoder itself has a pipelined MISO
         if self._firmware["sequencer_bus"]["decoder_pipeline_miso"]:
             latency += 1
-
-        # Datamover controllers have a read latency of 1 because its MISO is driven
-        # in a synchronous process
+        
         if "datamover_controller" in port:
+            # Datamover controllers have a read latency of 1 because its MISO is driven
+            # in a synchronous process, in addition to any bus pipelining
             latency += 1
-            
-        elif "_dma" in port:
-            # adc<x>_dma or dac<x>_dma
-            port_idx = int(port[3:port.index("_")])
-            port_idx += 16 if port.startswith("adc") else 0
-            latency += 1 if self._firmware["sequencer_bus"]["dma_pipeline"][port_idx] else 0
         elif port == "cache":
             # One additional cycle minimum because the memory has a read latency of 1
             # even before any pipelining because it's a synchronous memory
             latency += 1
             latency += self._firmware["sequencer_cache_memory"]["bus_port_input_pipeline"]
             latency += self._firmware["sequencer_cache_memory"]["bus_port_output_pipeline"]
-        elif self._firmware["sequencer_bus"][port]["bus_pipeline"]:
-            latency += 1
 
+        # If the bus decoder has a pipeline stage for this device, add a stage
+        if self._firmware.sequencer_bus_decoder.is_pipelined(port):
+            latency += 1
+            
         return latency
     
     def _request_stream_configuration(self, 
