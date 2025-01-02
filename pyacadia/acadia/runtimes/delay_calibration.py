@@ -79,7 +79,7 @@ class DelayCalibrationRuntime(Runtime):
         stimulus_waveform.set(**self.stimulus["signal"])
 
         # Load the cache array with something
-        cache[0] = 100
+        cache[0] = 10
 
         # Assemble and load the program
         acadia.assemble()

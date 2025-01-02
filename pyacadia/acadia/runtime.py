@@ -6,12 +6,12 @@ import shutil
 import pickle
 
 from datetime import datetime
-from threading import Thread, Event
-from typing import Any
-from dataclasses import asdict, is_dataclass
+from threading import Thread, Event, Lock
+from typing import Any, Dict, get_type_hints
 from subprocess import PIPE, run
 from binascii import hexlify, unhexlify
 from io import BytesIO
+
 
 import numpy as np
 from numpy.lib.format import write_array, read_array
@@ -38,6 +38,10 @@ class Runtime:
     triggered. These functions, along with :meth:`main`, form a complete set of
     functions that the user may be expected to override to fully describe a
     workflow.
+
+    When a :class:`Runtime` is deployed, its fields are serialized into a JSON
+    file and sent to the target, where a "field" is defined as any class member 
+    with a type annotation.
     """
     
     # ---------------- Functions to be implemented or overridden by the user ------------- #
@@ -71,6 +75,23 @@ class Runtime:
         pass
     
     # ---------------- Core functions for interaction from the host ---------------- #
+
+    def __init__(self, **kwargs):
+        """
+        Create the runtime with the provided values for fields.
+        """
+        fields = self._get_fields()
+
+        # Make sure that all the provided keywords are valid
+        for name,arg in kwargs.items():
+            if name not in fields:
+                raise KeyError(f"Keyword argument {name} does not refer to "
+                                f"any fields of class {self.__class__.__name__}")
+            setattr(self, name, arg)
+
+        for name in fields.keys():
+            if not hasattr(self, name):
+                raise AttributeError(f"Runtime missing value for field {name}")
     
     @classmethod
     def load(cls, directory):
@@ -121,13 +142,13 @@ class Runtime:
             username: str = "root", 
             log_debug: bool = False,
             event_loop_period: float = 0.25,
+            update_lock_timeout: float = 5,
             remove_remote_directory: bool = True,
             multiplex_control_path: str = None,
             do_initialize: bool = True,
             do_update: bool = True,
             do_finalize: bool = True,
-            finalization_time: float = 10,
-            **kwargs):
+            finalization_time: float = 10):
         """
         Deploy the procedure implemented by :meth:`main` on a remote
         target. 
@@ -220,6 +241,8 @@ class Runtime:
         self._log_debug = log_debug
         self.login = f"{username}@{target_address}"
         self._displayed = False
+        self._update_lock = Lock()
+        self._update_lock_timeout = update_lock_timeout
 
         # Create a local directory to save everything in before deployment
         os.makedirs(self.local_directory)
@@ -254,7 +277,7 @@ class Runtime:
         self._configure_ssh(multiplex_control_path)
 
         self._set_status("Preparing and deploying files")
-        self._prepare_files(files, runtime_module, log_level, finalization_time, kwargs)
+        self._prepare_files(files, runtime_module, log_level, finalization_time)
 
         self._set_status("Preparing remote runtime screen")
         Runtime._prepare_screen(self.login, self._multiplex_options)
@@ -326,7 +349,8 @@ class Runtime:
                 
             self._stop_button = Button(
                 description="Stop", 
-                tooltip="Click to stop all local and remote processes.")
+                tooltip="Click to stop all local and remote processes.",
+                button_style='danger')
             
             self._stop_button.on_click(_self_stop)
             self._status = HTML(value=f"")
@@ -422,7 +446,32 @@ class Runtime:
         # run(f"ssh -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
         self._multiplex_options = (f"-o ControlMaster=auto -o ControlPath={self._multiplex_control_path}/%r@%h:%p -o ControlPersist=20")
     
-    def _prepare_files(self, files, runtime_module, log_level, finalization_time, kwargs):
+    def _get_fields(self) -> Dict[str,Any]:
+        kwargs = {}
+        for name,hint in get_type_hints(self.__class__).items():
+            kwargs[name] = hint
+        return kwargs
+
+    def _dump_fields(self, fields: dict = None):
+        logger = logging.getLogger("acadia")
+
+        # Aggregate arguments by using introspection to retrieve the values
+        # of all the class members that have annotations
+        # This allows the user to specify relevant fields in the same way 
+        # that one would for a dataclass
+        logger.debug("Aggregating arguments")
+        if fields is None:
+            fields = {name: getattr(self, name) for name in self._get_fields().keys()}
+
+        if len(fields) != 0:
+            logger.debug(f"Saving arguments")
+            filename = os.path.join(self.local_directory, "kwargs.json")
+            with open(filename, "w") as f:
+                json.dump(Runtime._transform_arg(fields), f, indent=4)
+        else:
+            logger.warning("No arguments found!")
+
+    def _prepare_files(self, files, runtime_module, log_level, finalization_time):
         logger = logging.getLogger("acadia")
 
         # Copy all of the files that we need into the local execution directory
@@ -469,23 +518,7 @@ class Runtime:
             runfile.write(f"sys.stderr.flush()\n")
             runfile.write(f"exit(0)\n")
 
-        logger.debug("Aggregating arguments")
-        if is_dataclass(self):
-            kwargs.update(asdict(self))
-        if hasattr(self, "__getstate__"):
-            tmp = self.__getstate__()
-            if not isinstance(tmp, dict):
-                raise TypeError("Runtime objects that implement `__getstate__` must"
-                                f" return a dict (received {type(tmp)})")
-            kwargs.update(tmp)
-
-        if len(kwargs) != 0:
-            logger.debug(f"Saving arguments")
-            filename = os.path.join(self.local_directory, "kwargs.json")
-            with open(filename, "w") as f:
-                json.dump(Runtime._transform_arg(kwargs), f, indent=4)
-        else:
-            logger.warning("No arguments found!")
+        self._dump_fields()
 
         # Deploy everything
         cmd = f"rsync -r --mkpath -e \"ssh {self._multiplex_options}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
@@ -612,9 +645,14 @@ class Runtime:
 
                     if do_update:
                         logger.debug("Updating...")
-                        self.update()
-                        logger.debug("Update complete")
-
+                        result = self._update_lock.acquire(timeout=self._update_lock_timeout)
+                        if result:
+                            self.update()
+                            logger.debug("Update complete")
+                            self._update_lock.release()
+                        else:
+                            logger.warning("Unable to acquire update lock")
+                        
                     if self.data.is_finalized():
                         logger.info("Received fully finalized data; exiting event loop")
                         break
@@ -633,22 +671,39 @@ class Runtime:
 
             if do_finalize:
                 self._set_status("Finalizing event loop")
-                try:
-                    self.update()
-                    self.finalize()
-                except:
-                    logger.error(f"Exception during finalization: {traceback.format_exc()}")
+                result = self._update_lock.acquire(timeout=self._update_lock_timeout)
+                if result:
+                    try:
+                        self.update()
+                        self.finalize()
+                        logger.debug("Update complete")
+                    except:
+                        logger.error(f"Exception during finalization: {traceback.format_exc()}")
+                        
+                    self._update_lock.release()
+                else:
+                    logger.error("Unable to acquire update lock, finalization incomplete")
 
-            self.data.hangup()
-            self._retrieve_logs()
+            try:
+                self.data.hangup()
+            except:
+                logger.error("Failed to hang up remote DataManager")
+            
+            try:
+                self._retrieve_logs()
+            except:
+                logger.error("Failed to receive logs from remote")
 
             if self._displayed:
                 self._stop_button.disabled = True
 
             if self._remove_remote_directory:
-                self._set_status("Removing remote directory")
-                run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
-
+                try:
+                    self._set_status("Removing remote directory")
+                    run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
+                except:
+                    logger.error("Failed to remove remote directory")
+                    
             self._set_status("Completed")
             
         thread = Thread(target=event_loop,

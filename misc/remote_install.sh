@@ -68,7 +68,7 @@ ssh root@$IP killall screen
 echo "Deploying acadia..."
 scp -q -r "$(dirname $SCRIPT)/../../acadia" root@$IP:/home/root
 
-echo "Cleaning remote build files..."
+echo "Cleaning remote build files for acadia..."
 ssh root@$IP rm -r /home/root/acadia/pyacadia/{build,pyacadia.egg-info}
 
 echo "Installing pyacadia..."

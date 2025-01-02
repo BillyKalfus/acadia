@@ -2360,7 +2360,7 @@ class Acadia:
             if proc is None:
                 if cache_self.__array_interface__ is None:
                     raise AttributeError(f"Attempted to get item from unattached memory.")
-                return np.array(cache_self)[key]
+                return cache_self._array[key]
             elif isinstance(proc, Sequencer):
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
                 return proc.bus_read(base_address + cache_self.index + key, 
@@ -2372,7 +2372,7 @@ class Acadia:
             if proc is None:
                 if cache_self.__array_interface__ is None:
                     raise AttributeError(f"Attempted to set item of unattached memory.")
-                np.array(cache_self)[key] = value
+                cache_self._array[key] = value
             elif isinstance(proc, Sequencer):
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
                 proc.bus_write(address=base_address + cache_self.index + key,
@@ -2505,6 +2505,15 @@ class Acadia:
         
         self._mem_maps.append(m)
         resource_manager.attach(m)
+
+        # Also stash some numpy arrays in the instances for easier use later
+        for inst in resource_manager.instances:
+            array_interface = inst.__array_interface__
+            inst._array = np.frombuffer(
+                array_interface["data"], 
+                dtype=np.dtype(array_interface["typestr"]),
+                count=inst.size,
+                offset=array_interface["offset"]).reshape(inst.shape)
         
     def _attach_memory(self, address, size, dtype=np.uint8, return_map=False):
         """

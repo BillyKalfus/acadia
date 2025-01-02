@@ -144,6 +144,14 @@ class Waveform:
             if len(kwargs) != 0:
                 raise ValueError(f"Keyword arguments are not allowed for"
                                  " scalar or array data.")
+
+            # Since np.isscalar will pick up native python types, convert
+            # them to numpy literals with defined dtypes
+            if isinstance(data, float):
+                data = np.float64(data)
+            elif isinstance(data, complex):
+                data = np.complex128(data)
+
             if not hasattr(data, "dtype"):
                 raise AttributeError(f"Scalar inputs must define a dtype")
 
@@ -160,16 +168,14 @@ class Waveform:
                 
                 # copyto will automatically broadcast if necessary
                 np.copyto(self.array, data)
-                return data
 
             elif data.dtype.kind == 'c':
                 # complex_to_sample will automatically take care of broadcasting a scalar
                 if self._resource is None:
-                    logger.warning(f"Attempted to set data of non-attached"
+                    raise ValueError(f"Attempted to set data of non-attached"
                                    f" memory with array of shape {data.shape}.")
-                    return Waveform.complex_to_sample(data, scale=scale)
                 
-                return Waveform.complex_to_sample(data, output=self.array, scale=scale)
+                Waveform.complex_to_sample(data, output=self.array, scale=scale)
             else:
                 raise TypeError(f"Unable to convert waveform data of dtype"
                                 f" {data.dtype} to complex.")
@@ -222,13 +228,12 @@ class Waveform:
                             f" {output.dtype.kind})")
         
         float_type = np.dtype(f"<f{output.dtype.itemsize // 2}")
+        input_complex = np.reshape(input, -1).astype(float_type).view(output.dtype)
 
         scale *= 2**(input.dtype.itemsize*8 - 1) 
-        np.multiply(np.reshape(input, -1), 
+        np.multiply(input_complex, 
                     1/scale, 
-                    out=np.reshape(output, -1).view(float_type), 
-                    dtype=float_type,
-                    casting="safe")
+                    out=np.reshape(output, -1))
             
         return output
 
