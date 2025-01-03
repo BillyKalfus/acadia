@@ -4,10 +4,12 @@ from operator import mul
 import logging
 
 import numpy as np
-from scipy.signal.windows import get_window
 
 from acadia.rfdc import Channel
 from .compiler import Symbol, Operation
+from .sample_arithmetic import sample_to_complex as s2c
+from .sample_arithmetic import complex_to_sample as c2s
+from .sample_arithmetic import get_function
 
 __all__ = ["Waveform", 
            "ChannelWaveform",
@@ -21,8 +23,7 @@ class Waveform:
     """
     A wrapper for waveforms, which are distinguished from regular arrays in 
     that their elements are pairs of integers and that they live in 
-    specific hardware memory regions dpeending the channel with which they're
-    associated.
+    specific hardware memory regions.
     """
     
     def __init__(self, 
@@ -33,6 +34,8 @@ class Waveform:
         Create a Waveform for a channel with the specified data type.
 
         :type channel: Channel
+        :param shape: The shape of the array. Note that this should NOT include
+            the dimension indexing quadrature.
         :type shape: int or tuple of ints
         :type dtype: np.dtype or str
         :param resource_allocator: A callable that will be called with the 
@@ -59,6 +62,8 @@ class Waveform:
             self._resource = None
         else:
             self._resource = resource_allocator(shape=self._shape, dtype=self._dtype)
+
+        self._array = None
     
     @property
     def __array_interface__(self) -> dict:
@@ -78,6 +83,10 @@ class Waveform:
     
     @property
     def shape(self) -> tuple:
+        """
+        The shape of the array in samples (i.e., the rightmost dimension does 
+        not correspond to quadrature and is not necessarily of length 2).
+        """
         return self._shape[:-1]
     
     @property
@@ -86,14 +95,23 @@ class Waveform:
     
     @property
     def array(self) -> np.ndarray:
+        """
+        Retrieve the underlying array of integer data. The returned array will
+        have its rightmost dimension be of length 2, corresponding to 
+        quadrature.
+        """
+        if self._array is not None:
+            return self._array
+
         if self._resource is None:
             raise MemoryError(f"Attempted access of unattached memory {self}")
         
         a = self._resource.__array_interface__
-        return np.frombuffer(a["data"], 
+        self._array = np.frombuffer(a["data"], 
                              dtype=np.dtype(a["typestr"]), 
                              offset=a["offset"],
                              count=reduce(mul, self._shape)).reshape(self._shape)
+        return self._array
     
     @property
     def data(self) -> memoryview:
@@ -101,13 +119,16 @@ class Waveform:
         
     @property
     def size(self) -> int:
+        """
+        The size of the array in number of samples.
+        """
         return reduce(mul, self._shape[:-1], 1)
 
     def __getitem__(self, k):
         return self.data[k]
     
     def set(self, 
-            data: Union[tuple[str,str], np.ndarray, float, complex], 
+            data: Union[str, np.ndarray, float, complex], 
             scale: complex = 1.0,
             **kwargs) -> None:
         """
@@ -122,16 +143,11 @@ class Waveform:
         Providing any extra keyword arguments will cause an exception to be 
         raised.
         
-        If ``data`` is a tuple of two strings, the strings will be used to 
-        specify a function for populating the waveform. Note that any extra
-        keyword arguments will be passed into the call. Valid values are:
-
-        - ``("scipy", name)``: This format is designed to populate a 
-            :class:`Waveform` using the signal window functions in 
-            ``scipy.signal.windows``; the second argument should be a valid 
-            window passed to ``scipy.signal.windows.get_window``, and the 
-            returned floating-point array will be used to populate the 
-            :class:`Waveform` as if passed in through ``data``.
+        If ``data`` is a string, it must be a valid function name for 
+        :func:`sample_arithmetic.functional_populate`. The function will be 
+        passed the output array as the first positional argument and the scale 
+        as the third. Any other provided keyword arguments will be passed 
+        through.
             
         :param waveform: Waveform to load
         :type waveform: :class:`Waveform`
@@ -140,7 +156,11 @@ class Waveform:
         :param scale: Optional scale factor for sample-data
         :type scale: complex
         """
-        if np.isscalar(data) or isinstance(data, np.ndarray):
+        if isinstance(data, str):
+            func = get_function(data)
+            func(self.array, scale, **kwargs)
+            
+        elif np.isscalar(data) or isinstance(data, np.ndarray):
             if len(kwargs) != 0:
                 raise ValueError(f"Keyword arguments are not allowed for"
                                  " scalar or array data.")
@@ -179,18 +199,6 @@ class Waveform:
             else:
                 raise TypeError(f"Unable to convert waveform data of dtype"
                                 f" {data.dtype} to complex.")
-            
-            
-        elif isinstance(data, (tuple, list)):
-            if len(data) != 2 or (not isinstance(data[0], str)) or (not isinstance(data[1], str)):
-                raise ValueError(f"Invalid tuple for setting Waveform data:"
-                                 f" {data}")
-            
-            if data[0] == "scipy":
-                return self.set(get_window(data[1], self.size), scale=scale)
-            else:
-                raise ValueError(f"Unrecognized signature specifier for"
-                                 f" waveform set: {data[0]}")
         else:
             raise TypeError(f"Unable to set Waveform using object of type {type(data)}")
         
@@ -227,16 +235,9 @@ class Waveform:
             raise TypeError(f"Output dtype must be complex (found kind"
                             f" {output.dtype.kind})")
         
-        float_type = np.dtype(f"<f{output.dtype.itemsize // 2}")
-        input_complex = np.reshape(input, -1).astype(float_type).view(output.dtype)
-
-        scale *= 2**(input.dtype.itemsize*8 - 1) 
-        np.multiply(input_complex, 
-                    1/scale, 
-                    out=np.reshape(output, -1))
-            
+        s2c(input, output, np.complex128(scale))
         return output
-
+            
     @staticmethod
     def complex_to_sample(input: Union[np.ndarray], 
                         output: Union[np.ndarray, np.dtype] = None, 
@@ -258,8 +259,6 @@ class Waveform:
             raise TypeError(f"Input dtype must be complex (found kind"
                             f" {input.dtype.kind})")
         
-        float_type = np.dtype(f"<f{input.dtype.itemsize // 2}")
-
         if output is None:
             output = np.empty((*input.shape, 2), dtype=np.int16)
 
@@ -276,20 +275,7 @@ class Waveform:
                              f" the last dimension to correspond to quadrature"
                              f" (received shape {output.shape})")
         
-
-        # If the input is a complex scalar, this will keep the outer length-1
-        # dimension and allow the rounding to broadcast correctly
-
-        # shift range from [-1,1) to [0,2)
-        shifted = np.reshape(input*scale, -1) + 1 + 1j
-
-        # scale range from [0,2) to [0, 2^16 - 1] and round
-        scaled = np.multiply(shifted, (2**16-1)/2.0).view(float_type)
-        rounded = np.rint(scaled).astype(np.int16, casting="unsafe")
-
-        # shift range from [0, 2^16-1] to [-2^15, 2^15-1]
-        rounded -= 2**15
-        np.copyto(np.reshape(output, (-1, 2)), np.reshape(rounded, (-1, 2)))
+        c2s(input, output, np.complex128(scale))
         return output
         
 class ChannelWaveform(Waveform):

@@ -142,7 +142,7 @@ def run(plot=True):
         },
         
         "signal": {
-            "data": ("scipy", "hann"),
+            "data": ("hann"),
             "scale": 0.2
         }
     }
