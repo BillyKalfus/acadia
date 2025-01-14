@@ -13,7 +13,7 @@ from binascii import hexlify,unhexlify
 
 import numpy as np
 
-from .waveforms import Waveform, ChannelWaveform, FixedChannelWaveform, DecimatedChannelWaveform, WindowedConstantWaveform
+from .waveforms import WaveformMemory, ChannelWaveformMemory, FixedChannelWaveformMemory, DecimatedChannelWaveformMemory, WindowedConstantWaveformMemory
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer
 from .dma import DMA
@@ -1255,13 +1255,13 @@ class Acadia:
         
         raise ValueError(f"Unable to parse memory region specifier string: {specifier}")
     
-    def create_waveform(self,
+    def create_waveform_memory(self,
                         channel: Channel,
                         length: Union[int, float, np.ndarray] = 0.0,
                         fixed_length: Union[float, Symbol, Operation] = 0.0,
                         blank: bool = False,
                         decimation: Union[int, None] = 1,
-                        region: Union[Channel, ManagedMemory, None, str] = None) -> ChannelWaveform:
+                        region: Union[Channel, ManagedMemory, None, str] = None) -> ChannelWaveformMemory:
         """
         Allocate a waveform. This function allows for a few different signatures; 
         the first argument is always a :class:`Channel` object. 
@@ -1292,7 +1292,7 @@ class Acadia:
         :type blank: bool
         :param decimation: Decimation for ADC waveforms
         :type decimation: int
-        :param region: The memory region in which the Waveform is stored
+        :param region: The memory region in which the WaveformMemory is stored
         """
         #################################################################
         # Start by validating the provided parameters
@@ -1368,7 +1368,7 @@ class Acadia:
             length_cycles_float = length * self._firmware["clk104_pl_clk"]["freq_hz"]
             length_cycles = round(length_cycles_float)
             if length_cycles != round(length_cycles_float, 1):
-                raise ValueError(f"Waveform length {length} seconds does not"
+                raise ValueError(f"WaveformMemory length {length} seconds does not"
                                     f" correspond to an integer number of cycles"
                                     f" ({length_cycles_float})")
             
@@ -1395,14 +1395,14 @@ class Acadia:
 
             elif length.dtype.kind == 'i':
                 if length.shape[-1] != 2:
-                    raise ValueError(f"Waveforms specified by numpy arrays must"
+                    raise ValueError(f"WaveformMemory objects specified by numpy arrays must"
                                     f" have a shape in which the last dimension"
                                     f" is of length 2 (received array with shape"
                                     f" {length.shape})")
                 length_samples = length.size // 2
             
             else:
-                raise TypeError(f"Waveforms specified by numpy arrays must have"
+                raise TypeError(f"WaveformMemory objects specified by numpy arrays must have"
                                 f" float, complex, or integer dtypes (received"
                                 f" dtype {length.dtype})")
 
@@ -1415,7 +1415,7 @@ class Acadia:
             length_cycles = length_samples // channel_samples_per_cycle
 
         else:
-            raise TypeError(f"Waveform length must be specified as a float"
+            raise TypeError(f"WaveformMemory length must be specified as a float"
                             f" or as a numpy array (received {type(length)}).")
         
         ############################################################################################
@@ -1423,7 +1423,7 @@ class Acadia:
         ############################################################################################
         
         if blank:
-            return FixedChannelWaveform(
+            return FixedChannelWaveformMemory(
                 channel, 
                 length_cycles=length_cycles + fixed_length_cycles, 
                 blank=True,
@@ -1431,14 +1431,14 @@ class Acadia:
         
         if length_cycles == 0:
             if fixed_length_cycles == 0:
-                raise ValueError("Waveform has total length zero.")
+                raise ValueError("WaveformMemory has total length zero.")
             
             # Only a fixed length was provided, so create a fixed waveform
-            logger.debug(f"Allocating FixedWaveform for channel {channel} with"
+            logger.debug(f"Allocating FixedWaveformMemory for channel {channel} with"
                             f" a length of {fixed_length_cycles} cycles"
                             f" ({channel_samples_per_cycle} samples per cycle)")
             
-            return FixedChannelWaveform(
+            return FixedChannelWaveformMemory(
                 channel, 
                 length_cycles=fixed_length_cycles, 
                 resource_allocator=region)
@@ -1447,12 +1447,12 @@ class Acadia:
             if fixed_length_cycles != 0:
                 raise ValueError("Fixed length must be zero for decimated waveforms.")
             
-            logger.debug(f"Allocating DecimatedChannelWaveform for channel {channel} with"
+            logger.debug(f"Allocating DecimatedChannelWaveformMemory for channel {channel} with"
                         f" {length_samples} samples, which corresponds to"
                         f" {length_cycles} cycles ({channel_samples_per_cycle}"
                         f" samples per cycle, decimation {decimation})")
             
-            return DecimatedChannelWaveform(
+            return DecimatedChannelWaveformMemory(
                 channel, 
                 shape=length_samples, 
                 decimation=decimation, 
@@ -1460,37 +1460,37 @@ class Acadia:
         
         if fixed_length_cycles != 0:
             # By this point, decimation is 1 and length_cycles != 0
-            logger.debug(f"Allocating WindowedConstantWaveform for channel {channel} with"
+            logger.debug(f"Allocating WindowedConstantWaveformMemory for channel {channel} with"
                             f" a fixed length of {fixed_length_cycles} cycles and"
                         f" {length_samples} window samples, which corresponds to"
                         f" {length_cycles} cycles ({channel_samples_per_cycle}"
                         f" samples per cycle)")
             
-            return WindowedConstantWaveform(
+            return WindowedConstantWaveformMemory(
                 channel, 
                 window_length_samples=length_samples, 
                 constant_length_cycles=fixed_length_cycles, 
                 resource_allocator=region)
 
-        logger.debug(f"Allocating ChannelWaveform for channel {channel} with"
+        logger.debug(f"Allocating ChannelWaveformMemory for channel {channel} with"
                         f" {length_samples} samples, which corresponds to"
                         f" {length_cycles} cycles ({channel_samples_per_cycle}"
                         f" samples per cycle)")
         
-        return ChannelWaveform(
+        return ChannelWaveformMemory(
             channel, 
             shape=length_samples, 
             resource_allocator=region)
         
     @requires_sequencer
-    def schedule_waveform(self, waveform: ChannelWaveform):
+    def schedule_waveform(self, waveform: ChannelWaveformMemory):
         """
         Schedule a waveform on a channel's DMA. 
         
         :param channel: Channel to stream
         :type channel: :class:`Channel`
         :param waveform: Signal to stream
-        :type waveform: :class:`ChannelWaveform` or any type implementing 
+        :type waveform: :class:`ChannelWaveformMemory` or any type implementing 
             `dma_parameters()` returning a list of `dict`. Each `dict` will 
             result in a sequential call to `channel_dma_stream` whose arguments
             are the key/value pairs in the `dict`. 
@@ -1507,12 +1507,12 @@ class Acadia:
     @requires_sequencer
     def stream(self, 
                 configuration: StreamConfiguration, 
-                dst: Waveform, 
+                dst: WaveformMemory, 
                 memory_input = None,
                 length: Union[int, None] = None,
                 offset: int = 0) -> None:
         """
-        Stream data from a source to a destination Waveform array. 
+        Stream data from a source to a destination WaveformMemory. 
         
         The source of data can either be a :class:`Channel` representing an 
         ADC, or it can be an array in memory captured by an :class:`Array`
@@ -1528,7 +1528,7 @@ class Acadia:
             type :class:`Channel`, the channel in the configuration must match.
         :type src: :class:`Channel` or :class:`Array`
         :param dst: Data destination
-        :type dst: :class:`ADCWaveform`
+        :type dst: :class:`ChannelWaveformMemory`
         :param length: Length of data to stream in samples. Note that this
             is the length after any decimation.
         :param offset: Offset within `dst` at which the stream will be written,
@@ -1541,8 +1541,8 @@ class Acadia:
         :rtype: :class:`StreamConfiguration`
         """
 
-        if not isinstance(dst, Waveform):
-            raise TypeError(f"Stream destination must be a Waveform;"
+        if not isinstance(dst, WaveformMemory):
+            raise TypeError(f"Stream destination must be a WaveformMemory;"
                             f" received {type(dst)}")
 
         dst_params = dst.dma_parameters()[0]
@@ -1560,7 +1560,7 @@ class Acadia:
         input_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
 
         # Use the value of length to determine parameters for the DataMover
-        if isinstance(dst, DecimatedChannelWaveform):
+        if isinstance(dst, DecimatedChannelWaveformMemory):
             dst_params["length"] = length * dst.cycles_per_output_sample
         else:
             # When not decimating, the DataMover writes one path-width of data per cycle
@@ -1575,7 +1575,7 @@ class Acadia:
         offset_bytes = offset * 2*dst.dtype.itemsize
         
         logger.debug(f"Stream length {dst_params['length']} cycles, decimation"
-                     f" {dst._decimation if isinstance(dst, DecimatedChannelWaveform) else 1},"
+                     f" {dst._decimation if isinstance(dst, DecimatedChannelWaveformMemory) else 1},"
                       f" of output size {output_length_bytes} bytes to address"
                       f" 0x{dst.byte_address:010X} + 0x{offset_bytes:X}")
 
@@ -1598,11 +1598,12 @@ class Acadia:
     
     @requires_sequencer
     def configure_dsp(self, 
-                    src: Union[Channel, Waveform], 
+                    src: Union[Channel, WaveformMemory], 
                     decimation: int = 1,
-                    reset=True) -> StreamConfiguration:
+                    reset: bool = True,
+                    configuration: StreamConfiguration = None) -> StreamConfiguration:
         """
-        Stream data from a source to a destination Waveform array. 
+        Configure a DSP for streaming data. 
         
         The source of data can either be a :class:`Channel` representing an 
         ADC, or it can be an array in memory captured by an :class:`Array`
@@ -1610,20 +1611,12 @@ class Acadia:
         determine whether the stream passed directly from the input into memory
         or whether a DSP module will be used for decimating the stream.
 
-        By default, the entirety of ``dst`` is filled. Alternatively, one may
-        optionally specify ``length`` (and also optionally ``offset``) to fill
-        only a portion of ``dst``.
-
         :param src: Data source. If a configuration is provided and this is of
             type :class:`Channel`, the channel in the configuration must match.
         :type src: :class:`Channel` or :class:`Array`
-        :param dst: Data destination
-        :type dst: :class:`ADCWaveform`
-        :param length: Length of data to stream in samples. Note that this
-            is the length after any decimation.
-        :param offset: Offset within `dst` at which the stream will be written,
-            in units of samples. Note that this offset is applied after any 
-            decimation.
+        :param decimation: The decimation to use for the DSP. This must either 
+            be 1 or a multiple of 4.
+        :type decimation: int
         :param configuration: Stream configuration to use. If `None`, a new one
             will be requested.
         :type configuration: :class:`StreamConfiguration`
@@ -1633,7 +1626,8 @@ class Acadia:
 
         config_src = src if isinstance(src, Channel) else "memory"
         module = "memory" if decimation == 1 else "dsp"
-        configuration = self._request_stream_configuration(config_src, module)
+        if configuration is None:
+            configuration = self._request_stream_configuration(config_src, module)
 
         if decimation != 1:
             # Configure the DSP for decimation
@@ -1679,17 +1673,17 @@ class Acadia:
 
     @requires_sequencer
     def configure_cmacc(self, 
-                        src: Union[Channel, Waveform],
+                        src: Union[Channel, WaveformMemory],
                         kernel: Union[np.ndarray, float, None] = None,
                         write_mode: Union[str, None] = "upper", 
                         last_only: bool = True, 
                         reset_fifo: bool = False,
-                        accumulator_done: bool = False) -> tuple[StreamConfiguration, Waveform]:
+                        accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
         """
         Configure the CMACC.
 
         :param src: The source of data to be accumulated by the CMACC
-        :type src: Channel or Waveform
+        :type src: Channel or WaveformMemory
         :param kernel: The accumulation kernel, or an object that specified its
             size. If this is a numpy array, its values are ignored, and only its 
             shape information is used in order to determine the size of the 
@@ -1708,7 +1702,7 @@ class Acadia:
             configuration = src
         elif isinstance(src, (Channel, str)):
             configuration = self._request_stream_configuration(self.channel(src), "cmacc")
-        elif isinstance(src, Waveform) or isinstance(type(src), ManagedResource):
+        elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
             configuration = self._request_stream_configuration("memory", "cmacc")
         else:
             raise TypeError(f"Unable to create stream with source {src}")
@@ -1716,10 +1710,10 @@ class Acadia:
         kernel_type = self.CMACCKernelArray[configuration.module_resource._resource_id]
         
         # Determine whether we need to allocate a new kernel or not
-        if isinstance(kernel, Waveform) and isinstance(kernel._resource, kernel_type):
+        if isinstance(kernel, WaveformMemory) and isinstance(kernel._resource, kernel_type):
             # We already have a kernel and we're good to go, don't allocate a new one
             kernel_length_elements = kernel.size
-            logger.debug(f"Using already-allocated kernel Waveform of length {kernel_length_elements} samples")
+            logger.debug(f"Using already-allocated kernel WaveformMemory of length {kernel_length_elements} samples")
 
         else:
             # We don't already have a kernel, so we need to allocate one
@@ -1736,8 +1730,8 @@ class Acadia:
             else:
                 raise TypeError(f"Invalid CMACC kernel (received {kernel})")
         
-            logger.debug(f"Allocating kernel Waveform of length {kernel_length_elements} samples")
-            kernel = Waveform(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type)
+            logger.debug(f"Allocating kernel WaveformMemory of length {kernel_length_elements} samples")
+            kernel = WaveformMemory(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type)
 
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
 

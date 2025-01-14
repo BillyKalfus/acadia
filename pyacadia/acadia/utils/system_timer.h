@@ -4,9 +4,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <time.h>
 
-void timer_enable(volatile uint32_t* mem, int en);
-uint64_t timer_value(volatile uint32_t*);
-uint32_t timer_frequency(volatile uint32_t*);
+uint64_t clock_monotonic_ns(void);
+uint64_t clock_monotonic_raw_ns(void);
+int sys_nanosleep(uint64_t);
 
 #endif

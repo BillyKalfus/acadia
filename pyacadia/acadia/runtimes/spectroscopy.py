@@ -33,11 +33,11 @@ class SpectroscopyRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create a waveform to store the stimulus signal
-        stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
 
         # For the capture waveform, we need to set decimation to zero so that
         # the output will be a single sample
-        capture_waveform = acadia.create_waveform(capture_channel, decimation=0, **self.capture["waveform"]) 
+        capture_waveform = acadia.create_waveform_memory(capture_channel, decimation=0, **self.capture["waveform"]) 
                 
         # Create a data record group for storing the data that we collect
         # we can mark it as uniform because we know that every record we collect
@@ -105,7 +105,7 @@ class SpectroscopyRuntime(Runtime):
 
                 # When the sequencer was run, the integrated signal was stored into
                 # capture_waveform because it was provided to acadia.stream()
-                # Because of how Waveform objects work, we can just grab the data in 
+                # Because of how WaveformMemory objects work, we can just grab the data in 
                 # that memory as if it were any numpy array. Here we'll get the data
                 # and write it into the record group we created above
                 self.data["traces"].write(capture_waveform.array)
@@ -168,7 +168,7 @@ class SpectroscopyRuntime(Runtime):
     def update(self):
         import numpy as np
         from scipy.optimize import curve_fit
-        from acadia import Waveform
+        from acadia import WaveformMemory
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
@@ -208,7 +208,7 @@ class SpectroscopyRuntime(Runtime):
             # Simultaneously, choose the scale so that the result is independent
             # of amplitude
             scale = (self.stimulus["signal"]["scale"] / completed_iterations)
-            self.data_complex = Waveform.sample_to_complex(self.data_summed, scale=scale)
+            self.data_complex = WaveformMemory.sample_to_complex(self.data_summed, scale=scale)
 
             # Apply the electrical delay
             self.data_complex *= self.electrical_delay_phases

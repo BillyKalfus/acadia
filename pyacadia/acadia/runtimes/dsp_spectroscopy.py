@@ -29,8 +29,8 @@ class DSPSpectroscopyRuntime(Runtime):
         stimulus_channel = acadia.channel(self.stimulus["channel"])
         capture_channel = acadia.channel(self.capture["channel"])
 
-        stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["waveform"]) 
                 
         self.data.add_group("traces", uniform=True)
                 
@@ -127,7 +127,7 @@ class DSPSpectroscopyRuntime(Runtime):
     def update(self):
         import numpy as np
         from scipy.optimize import curve_fit
-        from acadia.waveforms import Waveform
+        from acadia.waveforms import WaveformMemory
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
@@ -166,7 +166,7 @@ class DSPSpectroscopyRuntime(Runtime):
             # Simultaneously, choose the scale so that the result is independent
             # of amplitude
             scale = (self.stimulus["signal"]["scale"] / completed_iterations)
-            self.data_complex = Waveform.sample_to_complex(self.data_summed, scale=scale)
+            self.data_complex = WaveformMemory.sample_to_complex(self.data_summed, scale=scale)
 
             # Apply the electrical delay
             self.data_complex *= self.electrical_delay_phases

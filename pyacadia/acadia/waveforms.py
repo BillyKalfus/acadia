@@ -11,15 +11,15 @@ from .sample_arithmetic import sample_to_complex as s2c
 from .sample_arithmetic import complex_to_sample as c2s
 from .sample_arithmetic import get_function
 
-__all__ = ["Waveform", 
-           "ChannelWaveform",
-           "DecimatedChannelWaveform",
-           "FixedChannelWaveform", 
-           "WindowedConstantWaveform"]
+__all__ = ["WaveformMemory", 
+           "ChannelWaveformMemory",
+           "DecimatedChannelWaveformMemory",
+           "FixedChannelWaveformMemory", 
+           "WindowedConstantWaveformMemory"]
 
 logger = logging.getLogger("acadia")
 
-class Waveform:
+class WaveformMemory:
     """
     A wrapper for waveforms, which are distinguished from regular arrays in 
     that their elements are pairs of integers and that they live in 
@@ -31,7 +31,7 @@ class Waveform:
                  dtype: Union[np.dtype, str] = None, 
                  resource_allocator: callable = None):
         """
-        Create a Waveform for a channel with the specified data type.
+        Create a WaveformMemory for a channel with the specified data type.
 
         :type channel: Channel
         :param shape: The shape of the array. Note that this should NOT include
@@ -59,15 +59,19 @@ class Waveform:
             self._shape = (*shape, 2)
 
         if resource_allocator is None:
-            self._resource = None
+            # For arrays in local memory, we can set the array property immediately
+            # since there's no notion of attachment
+            self._resource = np.empty(shape=self._shape, dtype=self._dtype)
+            self._attached_array = self._resource
         else:
+            # For hardware arrays, we need to defer array assignment to when it's 
+            # actually requested, since this must happen after the array is attached
             self._resource = resource_allocator(shape=self._shape, dtype=self._dtype)
-
-        self._array = None
+            self._attached_array = None
     
     @property
     def __array_interface__(self) -> dict:
-        if self._resource is None:
+        if self._resource.__array_interface__ is None:
             raise MemoryError(f"Attempted access of unattached memory {self}")
         return self._resource.__array_interface__
     
@@ -75,6 +79,8 @@ class Waveform:
     def byte_address(self) -> int:
         if self._resource is None:
             raise MemoryError(f"Attempted access of unattached memory {self}")
+        if isinstance(self._resource, np.ndarray):
+            raise TypeError(f"Byte address not defined for resources in local memory.")
         return self._resource.byte_address
     
     @property
@@ -100,18 +106,15 @@ class Waveform:
         have its rightmost dimension be of length 2, corresponding to 
         quadrature.
         """
-        if self._array is not None:
-            return self._array
-
-        if self._resource is None:
-            raise MemoryError(f"Attempted access of unattached memory {self}")
+        if self._attached_array is not None:
+            return self._attached_array
         
-        a = self._resource.__array_interface__
-        self._array = np.frombuffer(a["data"], 
+        a = self.__array_interface__
+        self._attached_array = np.frombuffer(a["data"], 
                              dtype=np.dtype(a["typestr"]), 
                              offset=a["offset"],
                              count=reduce(mul, self._shape)).reshape(self._shape)
-        return self._array
+        return self._attached_array
     
     @property
     def data(self) -> memoryview:
@@ -125,14 +128,17 @@ class Waveform:
         return reduce(mul, self._shape[:-1], 1)
 
     def __getitem__(self, k):
-        return self.data[k]
+        return self._resource[k]
+
+    def __setitem__(self, k, v):
+        self._resource[k] = v
     
     def set(self, 
             data: Union[str, np.ndarray, float, complex], 
             scale: complex = 1.0,
             **kwargs) -> None:
         """
-        Load a :class:`Waveform` with data according to the type of the 
+        Load the memory with data according to the type of the 
         ``data`` parameter.
 
         If ``data`` is a numpy array or a scalar, the numeric data will be
@@ -149,8 +155,6 @@ class Waveform:
         as the third. Any other provided keyword arguments will be passed 
         through.
             
-        :param waveform: Waveform to load
-        :type waveform: :class:`Waveform`
         :param data: Loading specifier as described above
         :type data: tuple of str, np.ndarray, float, complex
         :param scale: Optional scale factor for sample-data
@@ -159,30 +163,26 @@ class Waveform:
         if isinstance(data, str):
             func = get_function(data)
             func(self.array, scale, **kwargs)
-            
-        elif np.isscalar(data) or isinstance(data, np.ndarray):
-            if len(kwargs) != 0:
-                raise ValueError(f"Keyword arguments are not allowed for"
-                                 " scalar or array data.")
-
-            # Since np.isscalar will pick up native python types, convert
-            # them to numpy literals with defined dtypes
-            if isinstance(data, float):
-                data = np.float64(data)
-            elif isinstance(data, complex):
-                data = np.complex128(data)
-
-            if not hasattr(data, "dtype"):
-                raise AttributeError(f"Scalar inputs must define a dtype")
-
-            # Make 1D array from scalar for proper broadcasting
-            data = np.array(data, dtype=data.dtype, ndmin=1)
+        elif isinstance(data, WaveformMemory):
+            self.set(data.array)
+       
+        # For numpy scalars, make 1D array and recurse
+        elif isinstance(data, (float, np.float64, np.float32, complex, np.complex64, np.complex128)):
+            # Make 1D array from scalar for proper broadcasting and cast to complex
+            data = np.array(data, ndmin=1)
             if data.dtype.kind == 'f':
                 data = data.astype(np.dtype(f"<c{2*data.dtype.itemsize}"))
+            
+            self.set(data)
+            
+        elif isinstance(data, np.ndarray):
+            if len(kwargs) != 0:
+                raise ValueError(f"Keyword arguments are not allowed for"
+                                 " array or scalar data.")
 
             if data.dtype.kind == 'i':
                 if data.shape[-1] != 2:
-                    raise ValueError(f"Setting a Waveform with sample data must"
+                    raise ValueError(f"Setting a WaveformMemory with sample data must"
                                      f" have a final dimension of length 2;"
                                      f" received ndarray has shape {data.shape}")
                 
@@ -190,17 +190,18 @@ class Waveform:
                 np.copyto(self.array, data)
 
             elif data.dtype.kind == 'c':
-                # complex_to_sample will automatically take care of broadcasting a scalar
+                # complex_to_sample will automatically take care of broadcasting a 1D array
                 if self._resource is None:
                     raise ValueError(f"Attempted to set data of non-attached"
                                    f" memory with array of shape {data.shape}.")
                 
-                Waveform.complex_to_sample(data, output=self.array, scale=scale)
+                WaveformMemory.complex_to_sample(data, output=self.array, scale=scale)
             else:
                 raise TypeError(f"Unable to convert waveform data of dtype"
                                 f" {data.dtype} to complex.")
+
         else:
-            raise TypeError(f"Unable to set Waveform using object of type {type(data)}")
+            raise TypeError(f"Unable to set WaveformMemory using object of type {type(data)}")
         
        
     @staticmethod
@@ -278,13 +279,13 @@ class Waveform:
         c2s(input, output, np.complex128(scale))
         return output
         
-class ChannelWaveform(Waveform):
+class ChannelWaveformMemory(WaveformMemory):
     """
-    A :class:`Waveform` intended to abstract signals to be streamed out of a
+    A :class:`WaveformMemory` intended to abstract signals to be streamed out of a
     DAC channel or in from an ADC channel. This is distinguished from a regular
-    :class:`Waveform` because a regular waveform can be stored in any region 
+    :class:`WaveformMemory` because a regular waveform can be stored in any region 
     and need not be associated with any specific channel, but instances of 
-    :class:`ChannelWaveform` are associated with a specific channel and may 
+    :class:`ChannelWaveformMemory` are associated with a specific channel and may 
     be used to calculate DMA parameters.
     """
     
@@ -305,13 +306,13 @@ class ChannelWaveform(Waveform):
         :type resource_allocator: callable
         """
         if not isinstance(channel, Channel):
-            raise TypeError(f"Must create DACWaveform objects with Channel"
+            raise TypeError(f"Must create ChannelWaveformMemory objects with Channel"
                             f" instances (received {type(channel)})")
         
         self.channel = channel
 
         if resource_allocator is None:
-            raise ValueError(f"Region must be provided for ChannelWaveform"
+            raise ValueError(f"Region must be provided for ChannelWaveformMemory"
                                  f" associated with channel {channel}")
 
         super().__init__(shape, dtype, resource_allocator)
@@ -325,7 +326,7 @@ class ChannelWaveform(Waveform):
             raise TypeError(f"Attempted to get DMA parameters of non-allocated array.")
         
         if self.nbytes % self.channel.interface_width_bytes != 0:
-            raise ValueError("Requested DMA parameters for Waveform with"
+            raise ValueError("Requested DMA parameters for WaveformMemory with"
                              f" misaligned length ({self.nbytes:X} bytes)")
 
         # Guaranteed aligned when allocated with DACArray
@@ -338,9 +339,9 @@ class ChannelWaveform(Waveform):
             "word_address": word_address
         }]
     
-class DecimatedChannelWaveform(ChannelWaveform):
+class DecimatedChannelWaveformMemory(ChannelWaveformMemory):
     """
-    A :class:`Waveform` intended to abstract signals streamed in from an
+    A :class:`WaveformMemory` intended to abstract signals streamed in from an
     ADC channel.
     """
     
@@ -369,7 +370,7 @@ class DecimatedChannelWaveform(ChannelWaveform):
         super().__init__(channel, shape=shape, dtype="<i4", resource_allocator=resource_allocator)
 
         if channel.is_dac:
-            raise TypeError(f"DecimatedChannelWaveform objects may only be"
+            raise TypeError(f"DecimatedChannelWaveformMemory objects may only be"
                             f" created for ADC channels")
         
         self._decimation = decimation
@@ -399,7 +400,7 @@ class DecimatedChannelWaveform(ChannelWaveform):
             "blank": False
         }]
         
-class FixedChannelWaveform(ChannelWaveform):
+class FixedChannelWaveformMemory(ChannelWaveformMemory):
     """
     A waveform with a constant value.
     """
@@ -416,7 +417,7 @@ class FixedChannelWaveform(ChannelWaveform):
         :type length: float or :class:`Symbol` wrapping a float
         """
         if not isinstance(channel, Channel):
-            raise TypeError(f"Channel for a FixedChannelWaveform must be a Channel object")
+            raise TypeError(f"Channel for a FixedChannelWaveformMemory must be a Channel object")
         
         self.channel = channel
         self.blank = blank
@@ -431,7 +432,7 @@ class FixedChannelWaveform(ChannelWaveform):
     def dma_parameters(self) -> list[dict]:  
         if self.channel.is_dac:
             if self._resource is None:
-                raise ValueError("FixedWaveform for DAC channel not allocated")
+                raise ValueError("FixedWaveformMemory for DAC channel not allocated")
             word_address = self._resource._resource_id // self.channel.interface_width_bytes
         else:
             word_address = 0
@@ -447,7 +448,7 @@ class FixedChannelWaveform(ChannelWaveform):
     def set(self, data, scale: complex = 1.0):
 
         # If the user specifies a scipy signal envelope but a zero-length window,
-        # we can't just call set() on the data argument because Waveform.set() will 
+        # we can't just call set() on the data argument because WaveformMemory.set() will 
         # try to populate the nominally-constant four-wide memory block of the fixed
         # waveform with non-constant values. therefore, only use pass through the 
         # data argument if the user provided a number or a direct array
@@ -457,7 +458,7 @@ class FixedChannelWaveform(ChannelWaveform):
         super().set(set_data, scale)
 
                 
-class WindowedConstantWaveform(ChannelWaveform):
+class WindowedConstantWaveformMemory(ChannelWaveformMemory):
     """
     A constant waveform whose sharp rise and fall events are tapered with a 
     window function. This is carried out by
@@ -494,7 +495,7 @@ class WindowedConstantWaveform(ChannelWaveform):
             self.split_cycle = None
             self.split_sample = None
         
-        self._constant = FixedChannelWaveform(channel, constant_length_cycles, resource_allocator=resource_allocator)
+        self._constant = FixedChannelWaveformMemory(channel, constant_length_cycles, resource_allocator=resource_allocator)
         
     def dma_parameters(self) -> list[dict]:
         constant_parameters = self._constant.dma_parameters()

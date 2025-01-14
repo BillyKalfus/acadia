@@ -26,9 +26,9 @@ class QubitSpectroscopyRuntime(Runtime):
         readout_stimulus_channel = acadia.channel(self.readout_stimulus["channel"])
         readout_capture_channel = acadia.channel(self.readout_capture["channel"])
 
-        qubit_stimulus_waveform = acadia.create_waveform(qubit_channel, **self.qubit_stimulus["waveform"])
-        readout_stimulus_waveform = acadia.create_waveform(readout_stimulus_channel, **self.qubit_stimulus["waveform"])
-        readout_capture_waveform = acadia.create_waveform(readout_capture_channel, decimation=0, **self.readout_capture["waveform"]) 
+        qubit_stimulus_waveform = acadia.create_waveform_memory(qubit_channel, **self.qubit_stimulus["waveform"])
+        readout_stimulus_waveform = acadia.create_waveform_memory(readout_stimulus_channel, **self.qubit_stimulus["waveform"])
+        readout_capture_waveform = acadia.create_waveform_memory(readout_capture_channel, decimation=0, **self.readout_capture["waveform"]) 
                 
         self.data.add_group("traces", uniform=True)
                 
@@ -144,7 +144,7 @@ class QubitSpectroscopyRuntime(Runtime):
 
     def update(self):
         import numpy as np
-        from acadia.waveforms import Waveform
+        from acadia.waveforms import WaveformMemory
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
@@ -176,7 +176,7 @@ class QubitSpectroscopyRuntime(Runtime):
             else:
                 self.data_summed += new_data_summed
             
-            self.data_complex = Waveform.sample_to_complex(self.data_summed, scale=1/completed_iterations)
+            self.data_complex = WaveformMemory.sample_to_complex(self.data_summed, scale=1/completed_iterations)
 
             # Apply the electrical delay
             self.data_complex *= self.electrical_delay_phases

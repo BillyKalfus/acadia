@@ -1,5 +1,11 @@
 from dataclasses import dataclass
-from acadia import Runtime
+from acadia import Runtime, WaveformMemory
+
+from scipy.signal import find_peaks
+from scipy.optimize import curve_fit
+
+def linear(x, m, b):
+    return m*x + b
 
 @dataclass
 class DelayCalibrationRuntime(Runtime):
@@ -10,8 +16,8 @@ class DelayCalibrationRuntime(Runtime):
     stimulus: dict
     capture: dict
     iterations: int
-    plot: bool = True
-    figsize: tuple[int] = (4,3)
+    delays: list[int]
+    figsize: tuple[int] = (4,8)
         
     def main(self):     
         import numpy as np
@@ -23,8 +29,8 @@ class DelayCalibrationRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create the waveforms that we'll need 
-        stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform(capture_channel, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["waveform"]) 
 
         # Create an array in the cache that we can use to load in the 
         # delay value so that we don't have to reassemble every time
@@ -62,7 +68,6 @@ class DelayCalibrationRuntime(Runtime):
             with a.channel_synchronizer():
                 a.schedule_waveform(stimulus_waveform)
 
-                
         # Compile the sequence
         acadia.compile(sequence)
                 
@@ -78,18 +83,18 @@ class DelayCalibrationRuntime(Runtime):
         # Populate the stimulus with data
         stimulus_waveform.set(**self.stimulus["signal"])
 
-        # Load the cache array with something
-        cache[0] = 10
-
         # Assemble and load the program
         acadia.assemble()
         acadia.load()
 
         import time
         for i in range(self.iterations):
-            acadia.run()
-            time.sleep(0.001)
-            self.data["traces"].write(capture_waveform.array)
+            for delay in self.delays:
+                cache[0] = delay
+
+                acadia.run()
+                time.sleep(0.001)
+                self.data["traces"].write(capture_waveform.array)
             
             if self.data.serve() == DataManager.serve_hangup():
                 self.data.disconnect()
@@ -99,25 +104,36 @@ class DelayCalibrationRuntime(Runtime):
 
     def initialize(self):
         # Set the matplotlib backend to one which we can actually update
-        if self.plot:
-            from acadia.processing import DynamicLine
-            import matplotlib.pyplot as plt
-
-            self.fig, self.ax = plt.subplots(1, 1, figsize=self.figsize)
-            self.fig.tight_layout()
-            self.fig.subplots_adjust(left=0.25, bottom=0.25)
-
-            self.line_re = DynamicLine(self.ax, ".-")
-            self.line_im = DynamicLine(self.ax, ".-")
-            self.ax.set_xlabel("Time [s]")
-            self.ax.set_ylabel("Signal Amplitude [arb. V]")
-            self.ax.grid()
-
-            self.time_axis = None
-
+        from acadia.processing import DynamicLine
+        import matplotlib.pyplot as plt
         from tqdm.notebook import tqdm
+
+        self.fig, self.ax = plt.subplots(2, 1, figsize=self.figsize)
+        self.fig.tight_layout()
+        self.fig.subplots_adjust(hspace=0.4, left=0.25, bottom=0.25)
+
+        self.lines = []
+        self.peak_locations = []
+        colors = ["blue"]
+        for delay in self.delays:
+            self.lines.append(DynamicLine(self.ax[0], ".-", label=f"{delay}"))
+            self.peak_locations.append(DynamicLine(self.ax[0], color="black"))
+        self.ax[0].set_xlabel("Time [s]")
+        self.ax[0].set_ylabel("Signal Amplitude [arb. V]")
+        self.ax[0].grid()
+
+        self.aggregated_line = DynamicLine(self.ax[1], ".-")
+        self.ax[1].set_xlabel("Programmed Delay [cycles]")
+        self.ax[1].set_ylabel("Actual Delay [cycles]")
+        self.ax[1].grid()
+
+        self.time_axis = None
+
         self.progress_bar = tqdm(desc="Iterations", dynamic_ncols=True, total=self.iterations)
         self.previous_completed_iterations = 0
+
+        self.data_summed = None
+        self.data_complex = None
 
     def update(self):
         import numpy as np
@@ -126,37 +142,69 @@ class DelayCalibrationRuntime(Runtime):
         if "traces" not in self.data or len(self.data["traces"]) == 0:
             return
 
+
         # Update the progress bar based on the number of iterations that have been completed
-        completed_iterations = len(self.data["traces"])
+        completed_iterations = len(self.data["traces"]) // len(self.delays)
         self.progress_bar.update(completed_iterations - self.previous_completed_iterations)
-        self.previous_completed_iterations = completed_iterations        
+                
+        if completed_iterations != 0:
+            # Get the collection of data and reshape it so that the axes index as: 
+            # (iteration, frequency, sample time, sample quadrature)
+            valid_traces = completed_iterations*len(self.delays)
+            data = self.data["traces"].records()[:valid_traces, ...]
+            samples_per_trace = data.shape[-2]
+            data_reshaped = data.reshape(-1, len(self.delays), samples_per_trace, 2)
 
-        # We'll make an x-axis for the plot, but we only need to make it once
-        if self.time_axis is None:
-            # Last index is for quadrature
-            samples_per_trace = self.data["traces"].records().shape[-2]
-            capture_time = self.capture["waveform"]["length"]
-            self.time_axis = np.linspace(0, capture_time, samples_per_trace, endpoint=False)
+            if self.time_axis is None:
+                self.time_axis = np.linspace(0, self.capture["waveform"]["length"], samples_per_trace, endpoint=False)
+            
+            # Slice the data so that we have an array containing only the traces
+            # we didn't have the last time update() was called
+            self.new_data = data_reshaped[self.previous_completed_iterations:, :, :, :]
 
-        # Sum the traces from each iteration
-        # Each trace has the shape (samples, 2) where the number of samples is determined
-        # at runtime from the specified waveform length in seconds. 
-        # Because the record group is uniform, when we get the records from the
-        # group, they are stacked into a single array of shape (iterations, samples, 2)
-        self.trace_summed = np.sum(self.data["traces"].records(), axis=0)
-        
-        if self.plot:
-            self.line_re.update(self.time_axis, self.trace_summed[:,0])
-            self.line_im.update(self.time_axis, self.trace_summed[:,1])
-            self.ax.relim()
-            self.ax.autoscale(tight=True)
+            # Sum the new data and then add it to the aggregated array of trace data
+            new_data_summed = np.sum(self.new_data, axis=0, keepdims=False)
+            if self.data_summed is None:
+                self.data_summed = new_data_summed
+            else:
+                self.data_summed += new_data_summed
+
+            # Convert the summed sample data to a complex number and choose 
+            # the scale so that we turn the sum into a mean
+            self.data_complex = WaveformMemory.sample_to_complex(self.data_summed, scale=float(completed_iterations))
+            self.data_mags = np.abs(self.data_complex)
+            
+            for idx,_ in enumerate(self.delays):
+                self.lines[idx].update(self.time_axis, self.data_mags[idx,:])
+
+            self.ax[0].relim()
+            self.ax[0].autoscale(tight=True)
+
+            
+            self.measured_delays = np.empty(len(self.delays), dtype=np.float64)
+            for idx,delay in enumerate(self.delays):
+                peaks, peak_properties = find_peaks(self.data_mags[idx,:], width=7)
+                peak_time = self.time_axis[peaks[-1]]
+                self.peak_locations[idx].update([peak_time, peak_time], self.ax[0].get_ylim())
+                self.measured_delays[idx] = peak_time - self.time_axis[peaks[0]]
+            
+            self.aggregated_line.update(self.delays, self.measured_delays)
+            fit, pcov = curve_fit(linear, self.delays, self.measured_delays)
+
+            # The code above measures the time between pulse centers. To get all of the added delay
+            # due to the synchronizers and DSP, subtract off the pulse time so that we get
+            # the time between end of pulse 1 and start of pulse 2
+            self.extra_delay = fit[1] - self.stimulus["waveform"]["length"]
+
+            self.ax[1].relim()
+            self.ax[1].autoscale(tight=True)
             self.fig.canvas.draw_idle()
+
+        self.previous_completed_iterations = completed_iterations
 
     def finalize(self):
         super().finalize()
         self.progress_bar.close()
-        if self.plot:
-            self.savefig(self.fig)  
 
 def run(plot=True):   
     stimulus: dict = {
@@ -169,12 +217,12 @@ def run(plot=True):
         },
 
         "waveform": {
-            "length": 1e-6,
+            "length": 25e-9,
         },
         
         "signal": {
-            "data": ("scipy", "hann"),
-            "scale": 0.2
+            "data": "hann",
+            "scale": 0.9
         }
     }
 
@@ -182,22 +230,24 @@ def run(plot=True):
         "channel": "ADC1",
 
         "datapath": {
-            "nco_frequency": -4.4e9
+            "nco_frequency": 4.4e9
         },
 
         "waveform": {
-            "length": 4e-6,
+            "length": 1e-6,
             "decimation": 1,
             "region": "plddr"
         }
     }
+
+    delays = [10,20,30,40]
 
     if plot:
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-    rt = DelayCalibrationRuntime(stimulus, capture, plot=plot, iterations=100000)
+    rt = DelayCalibrationRuntime(stimulus, capture, delays=delays, iterations=100000)
     rt.deploy("192.168.2.69")    
     rt.display()
 

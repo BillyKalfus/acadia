@@ -24,8 +24,8 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
         stimulus_channel = acadia.channel(self.stimulus["channel"])
         capture_channel = acadia.channel(self.capture["channel"])
 
-        stimulus_waveform = acadia.create_waveform(stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform(capture_channel, decimation=0, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, decimation=0, **self.capture["waveform"]) 
                 
         self.data.add_group("traces", uniform=True)
                 
@@ -126,7 +126,7 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
 
     def update(self):
         import numpy as np
-        from acadia.waveforms import Waveform
+        from acadia.waveforms import WaveformMemory
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
@@ -160,7 +160,7 @@ class VariableAmplitudeSpectroscopyRuntime(Runtime):
             
             for idx,amp in enumerate(self.amplitudes):
                 scale = amp / completed_iterations
-                self.data_complex[idx, :] = Waveform.sample_to_complex(self.data_summed[idx, :], scale=scale)
+                self.data_complex[idx, :] = WaveformMemory.sample_to_complex(self.data_summed[idx, :], scale=scale)
 
             # Apply the electrical delay
             self.data_complex *= self.electrical_delay_phases

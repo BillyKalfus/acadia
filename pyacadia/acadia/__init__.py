@@ -5,7 +5,7 @@ from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch, ZCU216Sensors
 from .processing import DynamicLine, DynamicErrorbar, ProgressBar, DynamicReadoutHistogram
 from .runtime import Runtime
 from .system import Acadia
-from .waveforms import Waveform, ChannelWaveform, FixedChannelWaveform, DecimatedChannelWaveform, WindowedConstantWaveform
+from .waveforms import WaveformMemory, ChannelWaveformMemory, FixedChannelWaveformMemory, DecimatedChannelWaveformMemory, WindowedConstantWaveformMemory
 
 from .runtimes import *
 from .runtimes import __all__ as runtimes_all
@@ -17,4 +17,4 @@ __all__ = ["Channel",
            "DynamicLine", "DynamicErrorbar", "ProgressBar", "DynamicReadoutHistogram",
            "Runtime",
            "Acadia",
-           "Waveform", "ChannelWaveform", "FixedChannelWaveform", "DecimatedChannelWaveform", "WindowedConstantWaveform"] + runtimes_all
+           "WaveformMemory", "ChannelWaveformMemory", "FixedChannelWaveformMemory", "DecimatedChannelWaveformMemory", "WindowedConstantWaveformMemory"] + runtimes_all

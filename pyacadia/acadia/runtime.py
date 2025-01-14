@@ -639,23 +639,25 @@ class Runtime:
                         logger.debug("Connected")
 
                     # Exception will be thrown above if we're not connected and we can't connect
-                    logger.debug("Syncing")
-                    self.data.sync(timeout_ms=5000)
-                    logger.debug("Synced")
+                    result = self._update_lock.acquire(timeout=self._update_lock_timeout)
+                    if result:
+                        logger.debug("Syncing")
+                        self.data.sync(timeout_ms=5000)
+                        logger.debug("Synced")
 
-                    if do_update:
-                        logger.debug("Updating...")
-                        result = self._update_lock.acquire(timeout=self._update_lock_timeout)
-                        if result:
+                        if do_update:
+                            logger.debug("Updating...")
                             self.update()
-                            logger.debug("Update complete")
-                            self._update_lock.release()
-                        else:
-                            logger.warning("Unable to acquire update lock")
-                        
-                    if self.data.is_finalized():
-                        logger.info("Received fully finalized data; exiting event loop")
-                        break
+                            logger.debug("Update complete")                                
+                            
+                        self._update_lock.release()
+
+                        if self.data.is_finalized():
+                            logger.info("Received fully finalized data; exiting event loop")
+                            break
+                    else:
+                        logger.warning("Unable to acquire update lock")
+
                 except ConnectionRefusedError:
                     logger.warning("Unable to connect to target DataManager")
                 except:
