@@ -1853,7 +1853,7 @@ class Acadia:
     @requires_sequencer
     def cmacc_load(self, 
                     configuration: StreamConfiguration, 
-                    value: complex = 0):
+                    value: tuple[int] = (0,0)):
         """
         Load a value into the accumulator of the given CMACC.
         """
@@ -1865,8 +1865,8 @@ class Acadia:
         
         module_name = f"module{configuration.input_switch_slave}_registers"    
         registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
-        self.sequencer().bus_write(address=registers, data=value.real)
-        self.sequencer().bus_write(address=registers+1, data=value.imag)
+        self.sequencer().bus_write(address=registers, data=value[0])
+        self.sequencer().bus_write(address=registers+1, data=value[1])
 
         
     @DMASynchronizer.synchronized(DMASynchronizer.BARRIER, "channel_synchronizer")

@@ -479,7 +479,7 @@ void RecordGroup_clear(RecordGroup* self)
     self->num_records = 0;
 }
 
-// Write internally-cached records to a file or socket and clear the cache
+// Write internally-cached records to a file or socket
 // It is assumed that the metadata has been sent or stored separately, so the
 // receiver should know how many records to expect
 int RecordGroup_save(RecordGroup* self, int fd)
@@ -489,10 +489,20 @@ int RecordGroup_save(RecordGroup* self, int fd)
     fflush(acadia_log);
     #endif
 
-    if(write(fd, self->record_memory, self->record_memory_size) != (ssize_t)self->record_memory_size)
+    // write() may not write all the bytes in the file, so loop until the entire record 
+    // group has been saved and set an exception if the write actually fails
+    ssize_t bytes_written = 0;
+    ssize_t retval;
+    while(bytes_written < (ssize_t)(self->record_memory_size))
     {
-        PyErr_Format(PyExc_ValueError, "Failed to write %zu record data bytes: %s", self->record_memory_size, strerror(errno));
-        return -1;
+        retval = write(fd, (self->record_memory) + bytes_written, (ssize_t)(self->record_memory_size) - bytes_written);
+        if(retval < 0)
+        {
+            PyErr_Format(PyExc_ValueError, "Failed to write %zu record data bytes: %s", self->record_memory_size, strerror(errno));
+            return -1;
+        }
+
+        bytes_written += retval;
     }
 
     #ifdef ACADIA_DEBUG
