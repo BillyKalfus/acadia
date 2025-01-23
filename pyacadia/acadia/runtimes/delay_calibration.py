@@ -18,6 +18,7 @@ class DelayCalibrationRuntime(Runtime):
     iterations: int
     delays: list[int]
     figsize: tuple[int] = (4,8)
+    procedure: int = 0
         
     def main(self):     
         import numpy as np
@@ -26,10 +27,12 @@ class DelayCalibrationRuntime(Runtime):
         # Create an acadia object and grab a couple of its channels
         acadia = Acadia()
         stimulus_channel = acadia.channel(self.stimulus["channel"])
+        second_stimulus_channel = acadia.channel("DAC3")
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create the waveforms that we'll need 
         stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
+        second_stimulus_waveform = acadia.create_waveform_memory(second_stimulus_channel, **self.stimulus["waveform"])
         capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["waveform"]) 
 
         # Create an array in the cache that we can use to load in the 
@@ -41,32 +44,112 @@ class DelayCalibrationRuntime(Runtime):
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
-            # Initialize a DSP to act as a counter
-            counter = acadia.sequencer().DSP()
+            if self.procedure == 0:
+                # Initialize a DSP to act as a counter
+                counter = acadia.sequencer().DSP()
 
-            # Start capturing right away and don't block
-            capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
-            with a.channel_synchronizer(block=False):
-                a.stream(capture_stream, capture_waveform)
+                # Start capturing right away and don't block
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                with a.channel_synchronizer(block=False):
+                    a.stream(capture_stream, capture_waveform)
 
-            # Play the first pulse and block until it's done
-            with a.channel_synchronizer():
-                a.schedule_waveform(stimulus_waveform)
-            
-            # Start the counter and wait until the counter equals the cache value
-            # Note that in this situation, the compiler is not able to determine whether
-            # the DSP value or the cache value should be loaded into the mask register,
-            # since either one could be changing over time. However, we know that the 
-            # cache value should be constant for this program; therefore, we manually tell
-            # the compiler that the cache value should be put into the mask by indicating
-            # that the right argument is to be used.
-            counter.start_count(clear=True)
-            with a.sequencer().repeat_until(counter == cache[0], mask="right"):
-                pass
+                # Play the first pulse and block until it's done
+                with a.channel_synchronizer():
+                    a.schedule_waveform(stimulus_waveform)
+                
+                # Start the counter and wait until the counter equals the cache value
+                # Note that in this situation, the compiler is not able to determine whether
+                # the DSP value or the cache value should be loaded into the mask register,
+                # since either one could be changing over time. However, we know that the 
+                # cache value should be constant for this program; therefore, we manually tell
+                # the compiler that the cache value should be put into the mask by indicating
+                # that the right argument is to be used.
+                counter.start_count(clear=True)
+                with a.sequencer().repeat_until(counter == cache[0], mask="right"):
+                    pass
 
-            # Play the second pulse (and this time we'll block)
-            with a.channel_synchronizer():
-                a.schedule_waveform(stimulus_waveform)
+                # Play the second pulse (and this time we'll block)
+                with a.channel_synchronizer():
+                    a.schedule_waveform(stimulus_waveform)
+
+            elif self.procedure == 1:
+                # Load the DSP at the start and then count down
+                # Initialize a DSP to act as a counter
+                counter = acadia.sequencer().DSP()
+
+                # Load the counter with the value we put into the cache
+                counter.load(cache[0])
+
+                # Start capturing right away and don't block
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                with a.channel_synchronizer(block=False):
+                    a.stream(capture_stream, capture_waveform)
+
+                # Play the first pulse and block until it's done
+                with a.channel_synchronizer():
+                    a.schedule_waveform(stimulus_waveform)
+                
+                # Start the counter and wait until it reaches zero
+                counter.start_count(inc=int(np.int32(-1).astype(np.uint32)))
+                with a.sequencer().repeat_until(counter == 0):
+                    pass
+
+                # Play the second pulse (and this time we'll block)
+                with a.channel_synchronizer():
+                    a.schedule_waveform(stimulus_waveform)
+
+            elif self.procedure == 2:
+                # Amortize the delay with the playing of the first pulse
+                # Initialize a DSP to act as a counter
+                counter = acadia.sequencer().DSP()
+
+                # Load the counter with the value we put into the cache
+                counter.load(cache[0])
+
+                # Start capturing right away and don't block
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                with a.channel_synchronizer(block=False):
+                    a.stream(capture_stream, capture_waveform)
+
+                # Play the first pulse and again don't block
+                with a.channel_synchronizer(block=False):
+                    a.schedule_waveform(stimulus_waveform)
+                
+                # Start the counter and wait until it reaches zero
+                counter.start_count(inc=int(np.int32(-1).astype(np.uint32)))
+                with a.sequencer().repeat_until(counter == 0):
+                    pass
+
+                # Play the second pulse (and this time we'll block)
+                with a.channel_synchronizer():
+                    a.schedule_waveform(stimulus_waveform)
+
+            elif self.procedure == 3:
+                # Same as 2, but with the second pulse on a different channel
+                # Initialize a DSP to act as a counter
+                counter = acadia.sequencer().DSP()
+
+                # Load the counter with the value we put into the cache
+                counter.load(cache[0])
+
+                # Start capturing right away and don't block
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                with a.channel_synchronizer(block=False):
+                    a.stream(capture_stream, capture_waveform)
+
+                # Play the first pulse and again don't block
+                with a.channel_synchronizer(block=False):
+                    a.schedule_waveform(stimulus_waveform)
+                
+                # Start the counter and wait until it reaches zero
+                counter.start_count(inc=int(np.int32(-1).astype(np.uint32)))
+                with a.sequencer().repeat_until(counter == 0):
+                    pass
+
+                # Play the second pulse (and this time we'll block)
+                with a.channel_synchronizer():
+                    a.schedule_waveform(second_stimulus_waveform)
+
 
         # Compile the sequence
         acadia.compile(sequence)
@@ -76,12 +159,15 @@ class DelayCalibrationRuntime(Runtime):
 
         # Configure channel analog parameters
         stimulus_channel.set(nco_update_event_source="immediate", **self.stimulus["datapath"])
+        second_stimulus_channel.set(nco_update_event_source="immediate", **self.stimulus["datapath"])
         capture_channel.set(nco_update_event_source="immediate", **self.capture["datapath"])
         stimulus_channel.nco_immediate_update_event()
+        second_stimulus_channel.nco_immediate_update_event()
         capture_channel.nco_immediate_update_event()
 
         # Populate the stimulus with data
         stimulus_waveform.set(**self.stimulus["signal"])
+        second_stimulus_waveform.set(**self.stimulus["signal"])
 
         # Assemble and load the program
         acadia.assemble()
@@ -189,12 +275,12 @@ class DelayCalibrationRuntime(Runtime):
                 self.measured_delays[idx] = peak_time - self.time_axis[peaks[0]]
             
             self.aggregated_line.update(self.delays, self.measured_delays)
-            fit, pcov = curve_fit(linear, self.delays, self.measured_delays)
+            self.fit, pcov = curve_fit(linear, self.delays, self.measured_delays)
 
             # The code above measures the time between pulse centers. To get all of the added delay
             # due to the synchronizers and DSP, subtract off the pulse time so that we get
             # the time between end of pulse 1 and start of pulse 2
-            self.extra_delay = fit[1] - self.stimulus["waveform"]["length"]
+            self.extra_delay = self.fit[1] - self.stimulus["waveform"]["length"]
 
             self.ax[1].relim()
             self.ax[1].autoscale(tight=True)
@@ -217,7 +303,7 @@ def run(plot=True):
         },
 
         "waveform": {
-            "length": 25e-9,
+            "length": 20e-9,
         },
         
         "signal": {
@@ -234,20 +320,21 @@ def run(plot=True):
         },
 
         "waveform": {
-            "length": 1e-6,
+            "length": 1.2e-6,
             "decimation": 1,
             "region": "plddr"
         }
     }
 
-    delays = [10,20,30,40]
+    import numpy as np
+    delays = np.arange(2, 102, 2, dtype=np.int32)
 
     if plot:
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-    rt = DelayCalibrationRuntime(stimulus, capture, delays=delays, iterations=100000)
+    rt = DelayCalibrationRuntime(stimulus, capture, procedure=3, delays=delays, iterations=100000)
     rt.deploy("192.168.2.69")    
     rt.display()
 

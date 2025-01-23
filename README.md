@@ -20,7 +20,7 @@ The host computer must have `python>=3.8` along with the packages `python3-pip` 
 
 ```
 sudo apt update
-sudo apt install python3-pip python3-venv
+sudo apt install python3-pip python3-venv python3-dev gcc
 ```
 
 Though it is not required, we encourage the use of Python virtual environments for managing dependencies. A new Python virtual environment can be created by running 

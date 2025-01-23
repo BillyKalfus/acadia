@@ -12,6 +12,8 @@ utils_module = Extension("acadia.utils", sources=utils_sources)
 
 result = subprocess.run("lscpu | grep Cortex-A53", shell=True)
 on_rfsoc = result.returncode == 0
+if not on_rfsoc:
+    requirements = ["numpy"]
 
 data_module = Extension("acadia.data",
                         sources=["acadia/data/io.c",

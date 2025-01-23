@@ -1078,7 +1078,109 @@ class Acadia:
         d["clk_wiz_locked"] = PSGPIO.sysfs_read(self._clk_wiz_locked)
                         
         return d
-    
+
+    def sequencer_clock_frequency(self) -> float:
+        """
+        :return: The clock frequency of the sequencer (and correspondingly 
+            the frequency of the RF tile interface) in Hz
+        :rtype: float
+        """
+        return self._firmware["clk104_pl_clk"]["freq_hz"]
+
+    def seconds_to_cycles(self, 
+                        t: Union[float, np.ndarray], 
+                        rounding_raise: bool = True, 
+                        eps: float = 1e-10) -> Union[np.int32, np.ndarray]:
+        """
+        Convert a float or array of floats into integer numbers of sequencer cycles.
+        The parameter ``rounding_raise` determines the behavior when a provided time 
+        does not equal an integer number of cycles exactly. When ``True``,
+        an exception is raised if any number of calculated cycles is more than 
+        ``eps`` away from the nearest integer. When ``False``, 
+        all values are blindly rounded to the nearest integer.
+        """
+        cycles = t * self.sequencer_clock_frequency()
+        rounded = np.rint(cycles).astype(np.int32)
+        if not rounding_raise:
+            return rounded
+
+        abs_errs = np.abs(rounded - cycles)
+        if np.isscalar(t):
+            if abs_errs > eps:
+                raise ValueError(f"Time value {t} does not equal an integer"
+                                f" number of cycles (found {cycles}).")
+            return rounded
+
+        else:
+            amax = np.argmax(abs_errs)
+            if abs_errs[amax] > eps:
+                raise ValueError(f"Time value {t[amax]} does not equal an integer"
+                                    f" number of cycles (found {cycles[amax]}).")
+
+            return rounded
+
+    def delay_times_to_counter_values(self, 
+                                    t: np.ndarray, 
+                                    waveform_memory: Union[WaveformMemory, None] = None) -> np.ndarray:
+        """
+        Calculates counter values for sequencer DSPs for the design pattern of 
+        loading the DSP with a counter value, playing a waveform, waiting some 
+        amount by starting the DSP decrementing and waiting for it to reach 
+        zero, and then playing another waveform.
+        After converting to cycles, the time values need to be offset to account 
+        for the overhead of configuring the DSP and the synchronizer(s), so this
+        function computes the values that should be loaded into the DSP. 
+
+        If the sequence involves playing a second pulse on the same channel once 
+        the delay is complete, there is a minimum time in between the first 
+        pulse finishing and the second pulse starting so that the DMA has ample
+        time to retrieve the descriptor for the second pulse. This requires that 
+        the command to the DMA be pushed into the FIFO after it stops running, and
+        then with the 4 cycles of retrieval time, the minimum delay is 5 cycles.
+
+        This minimum delay only applies if the second pulse is on the same channel
+        and if the delay amount is comparable to the length of the first pulse; if
+        the second pulse is far in the future, on another channel, or is 
+        non-existent, this condition may be safely ignored. However, this condition
+        may be automatically checked by providing the waveform memory for the first
+        pulse in the ``waveform_memory`` parameter.
+        """
+
+        # We need to take into account the few-cycle overhead associated with 
+        # the counter and synchronizers
+        # From system calibrations using very short pulses, we know that using a 
+        # delay count of 2 yields a 60 ns interval between the starting points 
+        # of the two pulses, and that this is the minimum counter value we can 
+        # use. 
+
+        # First, convert all the time values into cycles
+        delay_cycles = self.seconds_to_cycles(t)
+
+        # Subtract off the 50 ns (10 cycle) offset, so that a delay of 60 ns 
+        # corresponds to a count value of 2
+        dsp_count_values = delay_cycles - 10 
+        amin = np.argmin(dsp_count_values)
+        if np.any(dsp_count_values < 2):
+            raise ValueError(f"Counter value {dsp_count_values[amin]}"
+                            f" for time {t[amin]} is too small")
+
+        # Now, we need to make sure that the delay is long enough so that the 
+        # second pulse starts at least 5 cycles after the first one
+        # We can do this by comparing the length of the delay to the length
+        # of the first pulse, and if the length of the delay is longer than
+        # the length of the pulse + 5, we don't have to do anything
+        # If there's no second pulse on this channel or it's known to start 
+        # way in the future, this can be omitted
+        if waveform_memory is not None:
+            waveform_length_cycles = sum([p["length"] for p in waveform_memory.dma_parameters()])
+            if delay_cycles[amin] < waveform_length_cycles + 5:
+                raise ValueError(f"Delay is too short for separating two waveforms on"
+                                f" the same channel using a dynamic delay; first"
+                                f" waveform is {waveform_length_cycles} cycles,"
+                                f" but requested a delay of {delay_cycles[amin]}")
+
+        return dsp_count_values
+
     # -------------- CHANNEL HELPERS ----------- #
 
     def DAC(self, num: Union[int, str]) -> Channel:

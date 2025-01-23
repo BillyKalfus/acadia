@@ -316,4 +316,3 @@ STP \newline \newline Store Data Parallel &
 
  Integrated AXI DMA
 ^^^^^^^^^^^^^^^^^^^^
-
