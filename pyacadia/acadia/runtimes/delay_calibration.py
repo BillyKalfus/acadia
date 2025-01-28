@@ -327,7 +327,10 @@ def run(plot=True):
     }
 
     import numpy as np
-    delays = np.arange(2, 102, 2, dtype=np.int32)
+    # delays = np.arange(2, 102, 2, dtype=np.int32)
+    from acadia import Acadia
+    a = Acadia()
+    delays = a.delay_times_to_counter_values(np.arange(60e-9, 150e-9, 10e-9))
 
     if plot:
         # Set the matplotlib backend to one which we can actually update

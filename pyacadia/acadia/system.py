@@ -1,6 +1,5 @@
 import os
 import mmap
-import time
 import logging
 import struct
 import builtins
@@ -645,6 +644,8 @@ class Acadia:
         self._sequencer_done = self._firmware["ps_gpio"]["sysfs_offset"] + 64           
         PSGPIO.sysfs_export(self._sequencer_done)
         PSGPIO.sysfs_set_direction(self._sequencer_done, "in")
+
+        self._previous_run_time = 0
         
     def detach(self):
         """
@@ -757,7 +758,7 @@ class Acadia:
         self.pulse_sysref(0)
         logger.debug("SYSREF disabled")
 
-        time.sleep(0.2)
+        utils.sys_nanosleep(200000000)
 
         return result
     
@@ -778,7 +779,8 @@ class Acadia:
             
         # Wait a moment so that the sysref will have actually happened
         # TODO: find a way to check this. if it exists it's not documented
-        time.sleep(0.001)
+        # until then, we'll sleep for just a bit; 5us seems nice
+        utils.sys_nanosleep(5000)
 
     def update_nco_frequency(self, channel: Channel, frequency: float):
         """
@@ -958,7 +960,7 @@ class Acadia:
 
         # Perform the sync by toggling SYNC_POL
         RFClk.LMK.set_sync_polarity(True)
-        time.sleep(0.001)
+        utils.sys_nanosleep(1000000)
         RFClk.LMK.set_sync_polarity(False)
 
         # Now that everything is sync'ed, disable synchronization on the 
@@ -982,7 +984,7 @@ class Acadia:
         RFClk.LMK.set_sysref_mux(2) 
 
         # Wait a bit for everything to lock
-        time.sleep(0.5)
+        utils.sys_nanosleep(500000000)
 
     def pulse_sysref(self, count=None):
         """
@@ -2155,14 +2157,25 @@ class Acadia:
 
     # -------------- RUNTIME UTILITIES ----------- #
     
-    def run(self, configure_streams=True, block=True):
+    def run(self, configure_streams: bool = True, block: bool = True, minimum_delay: int = 0):
         """
-        Assemble, load, and run a sequence on Acadia hardware.
-        Significant speedups may be achieved if reassembly is not
-        required.
+        Run a sequence on Acadia hardware.
         
+        :param configure_streams: If ``True``, the streams of the stream processing
+            path will be configured before running the sequencer. 
+        :type configure_streams: bool
         :param block: If `True`, execution will block until the sequencer
             signals completion.
+        :type block: bool
+        :param minimum_delay: The minimum amount of time (in nanoseconds) that must have
+            elapsed since the sequencer last completed its execution. If not satisfied,
+            this function will block until the minimum delay is met. The exact delay time 
+            is only guaranteed to be longer than the specified delay, but is may be longer
+            and may differ from call to call. Note that the last
+            completion time is noted by :meth:`complete`; if `block=False`, :meth:`complete` 
+            must be called manually in order to correctly timestamp the execution completion
+            time.
+        :type minimum_delay: int
         """
 
         if configure_streams:
@@ -2173,19 +2186,24 @@ class Acadia:
             self._stream_processing_path_input_switch.disconnect()
             self._ADC_input_switch.disconnect()
             for cfg in self._stream_configurations:
-                # logger.debug(f"Applying stream configuration {cfg}")
                 self.configure_stream(cfg)
                 
-        # logger.debug("Running sequencer")
+        # Wait for until a required delay, if any
+        while(utils.clock_monotonic_ns() - self._previous_run_time < minimum_delay):
+            utils.sys_nanosleep(10000)
         
-        # self.sequencer_reset()
-        # self.sequencer_run()
         utils.sequencer_halt_and_reset()
         utils.sequencer_run()
         
         if block:
-            utils.sequencer_complete()
-            # logger.debug("Sequencer completed")
+            self.complete()
+
+    def complete(self):
+        """
+        Wait for the sequencer to complete its execution.
+        """
+        utils.sequencer_complete()
+        self._previous_run_time = utils.clock_monotonic_ns()
 
     def configure_stream(self, configuration: StreamConfiguration):
         """
@@ -2345,12 +2363,12 @@ class Acadia:
             
     def reset_plddr0(self):
         PSGPIO.sysfs_write(self._ddr4_c0_sys_rst_gpio, 1)
-        time.sleep(0.001)
+        utils.sys_nanosleep(1000000)
         PSGPIO.sysfs_write(self._ddr4_c0_sys_rst_gpio, 0)
 
     def reset_plddr1(self):
         PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 1)
-        time.sleep(0.001)
+        utils.sys_nanosleep(1000000)
         PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 0)
 
     def is_plddr0_cal_complete(self):
@@ -2368,7 +2386,7 @@ class Acadia:
         PSGPIO.sysfs_export(gpio)
         PSGPIO.sysfs_set_direction(gpio, "out")
         PSGPIO.sysfs_write(gpio, 0)
-        time.sleep(0.1)
+        utils.sys_nanosleep(100000000)
         PSGPIO.sysfs_write(gpio, 1)
         
     def gpio_set_direction(self, port, directions):
