@@ -16,16 +16,22 @@ def sample_to_complex(input: np.ndarray, output: np.ndarray, scale: np.complex12
 
 
 def complex_to_sample(input: np.ndarray, output: np.ndarray, scale: np.complex128):
-    # shift range from [-1,1) to [0,2)
-    shifted = np.reshape(input*scale, -1) + 1 + 1j
+    # # shift range from [-1,1) to [0,2)
+    # shifted = np.reshape(input*scale, -1) + 1 + 1j
 
-    # scale range from [0,2) to [0, 2^16 - 1] and round
+    # # scale range from [0,2) to [0, 2^16 - 1] and round
+    # float_type = np.dtype(f"<f{input.dtype.itemsize // 2}")
+    # scaled = np.multiply(shifted, (2**16-1)/2.0).view(float_type)
+    # rounded = np.rint(scaled).astype(np.int16, casting="unsafe")
+
+    # # shift range from [0, 2^16-1] to [-2^15, 2^15-1]
+    # rounded -= 2**15
+    # np.copyto(np.reshape(output, (-1, 2)), np.reshape(rounded, (-1, 2)))
+
+    # scale range from [-1,1) to [-2^15, 2^15) and round
     float_type = np.dtype(f"<f{input.dtype.itemsize // 2}")
-    scaled = np.multiply(shifted, (2**16-1)/2.0).view(float_type)
+    scaled = np.multiply(input, scale*(2**15)).view(float_type)
     rounded = np.rint(scaled).astype(np.int16, casting="unsafe")
-
-    # shift range from [0, 2^16-1] to [-2^15, 2^15-1]
-    rounded -= 2**15
     np.copyto(np.reshape(output, (-1, 2)), np.reshape(rounded, (-1, 2)))
 
 _FUNCTIONS = {}

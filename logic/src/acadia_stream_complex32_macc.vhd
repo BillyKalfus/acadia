@@ -375,11 +375,11 @@ begin
 
             if(registers_en = '1' and registers_we = '1') then
                 if(registers_addr(1 downto 0) = "00") then
-                    accumulator_re(46 downto 15) <= signed(registers_mosi);
-                    accumulator_re(14 downto 0)  <= (others => '0');
+                    accumulator_re(accumulator_re'high downto accumulator_re'high-31) <= signed(registers_mosi);
+                    accumulator_re(accumulator_re'high-32 downto 0)  <= (others => '0');
                 elsif(registers_addr(1 downto 0) = "01") then
-                    accumulator_im(46 downto 15) <= signed(registers_mosi);
-                    accumulator_im(14 downto 0)  <= (others => '0');
+                    accumulator_im(accumulator_im'high downto accumulator_im'high-31) <= signed(registers_mosi);
+                    accumulator_im(accumulator_im'high-32 downto 0)  <= (others => '0');
                 elsif(registers_addr(1 downto 0) = "10") then
                     accumulator_done_int <= registers_mosi(18);
                 end if;
@@ -456,9 +456,9 @@ begin
     registers_read_proc: process(clk) begin
         if rising_edge(clk) then
             if(registers_addr(1 downto 0) = "00") then
-                registers_miso <= std_logic_vector(accumulator_re_d(46 downto 15));
+                registers_miso <= std_logic_vector(accumulator_re_d(accumulator_re'high downto accumulator_re'high-31));
             elsif(registers_addr(1 downto 0) = "01") then
-                registers_miso <= std_logic_vector(accumulator_im_d(46 downto 15));
+                registers_miso <= std_logic_vector(accumulator_im_d(accumulator_im'high downto accumulator_im'high-31));
             elsif(registers_addr(1 downto 0) = "10") then
                 registers_miso(LOG2_KERNEL_MEMORY_DEPTH-1 downto 0) <= kernel_memory_pointer;
                 registers_miso(15 downto LOG2_KERNEL_MEMORY_DEPTH)  <= (others => '0');

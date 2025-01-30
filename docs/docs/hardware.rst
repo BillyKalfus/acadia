@@ -28,6 +28,11 @@ The RF Data Converter subsystem of the RFSoC comprises a variety of digital sign
 
 The DAC region of the RF Data Converter tile embedded in the RFSoC contains much more than simply a DAC core; notably, a chain of pre-processing logic preceding the DAC core and a highly-connected clock synthesis and distribution network for the sample clock, both of which are reconfigurable in software. We'll describe the various features of the components integrated in the hardware below. 
 
+ Gearbox FIFO
+^^^^^^^^^^^^^^
+
+Samples are provided to the DAC via a first-in-first-out (FIFO) queue. The FIFOs are reconfigurable and may be configured for various different throughputs depending on the programmed sampling rate of the DAC, the clock frequency of the logic feeding it, and any interpolation (described below). In the default firmware configuration, every DAC is configured to accept four samples per clock cycle, each of which is comprised of two 16-bit quadratures. The quadrature values are expressed as two's-complement signed numbers; correspondingly, the maximum positive number is 2^15 - 1 and the minimum negative number is -2^15. Note that this asymmetry restricts the valid full-scale values to a range of [-1,1), where the open interval on the right corresponds to an offset of one bit.
+
  Interpolation
 ^^^^^^^^^^^^^^^
 
@@ -79,7 +84,7 @@ The RFSoC Data Converter implements interpolation at the interface to the tile, 
  Sequencer
 -----------
 
-The sequencer may be thought of as a high-performance real-time CPU in that it accesses a memory containing "instructions" that govern how data flows through the internal datapath of the sequencer (the classification of whether something is or is not a CPU is largely academic pedantry rather than a description of actual capabilities, so comparing the sequencer to a CPU is primarily useful for building intuition about its behavior). Also like a CPU, the datapath of the sequencer is a controllable interconnect responsible for moving data from one place to another as directed by the instructions; however unlike a (typical) CPU, the data does not pass through any other logic on its way to its destination. Instead, the endpoints of the datapath (referred to as the sources and destinations) determine how data can be transformed or transported by the sequencer. For example, rather than having a native instruction to add numbers by routing data through an arithmetic logic unit (ALU) as it passes from source to destination (as is typically done in conventional CPUs), one would execute instructions that move the addends from their respective sources into the ALU, then retrieve the result when the addition is complete. This architecture offers quite a bit of flexiblity in the operations available to the sequencer while allowing the clock speed to remain high, since the "distance" between sources and destinations are not lengthened by the presence of processing logic (such as an ALU). In contrast to a multi-cycle datapath (in which registers are inserted into long datapath branches and instructions take multiple cycles to complete), the real-time nature of the sequencer's execution is maintained: every data transfer from a source to a destination takes one cycle. This behavior is extremely useful for distributed systems requiring a high degree of synchronicity, since this means that the sequencer is able to operate at the finest timebase resolution of the system. 
+The sequencer is a small real-time CPU that is responsible for coordinating actions across the system. It steps through a sequence of instructions, each of which moves data from one location in the internal datapath of the sequencer (the "sources") to another (the "destinations"). There is only one type of instruction, but many destination ports of the sequencer will take additional action when written to or provide access to logic units that carry out more complex operations. For example, rather than having a native instruction to add numbers by routing data through an arithmetic logic unit (ALU) as it passes from source to destination, one would execute instructions that move the addends from their respective sources into the ALU via its destination ports, then retrieve the result from its source port when the addition is complete. This architecture greatly reduces the critical path of the sequencer, allowing the clock speed to remain reasonably high while allowing the sequencer to fetch and execute . This behavior is extremely useful for distributed systems requiring a high degree of synchronicity, since this means that the sequencer is able to operate at the finest timebase resolution of the system. 
 
 When the sequencer starts, it begins reading from instruction memory and executing instructions in sequence. The sequencer has only two native instructions: store parallel (STP) and store conditional (STC). During an STP instruction, the sequencer is able to take any two data sources and load them into any two destinations independently of one another. The sources and destinations connected to the datapath determine the capabilities of the sequencer, which we'll detail individually in the following sections. During an STC instruction, one data source may be conditionally written to a destination, depending on whether a user-specified condition is satisfied. Therefore, for destinations that execute actions when written to, this mechanism can intrinsically allow those actions to be executed conditionally.
 
@@ -301,6 +306,26 @@ STP \newline \newline Store Data Parallel &
 
  Complex Multiplier with Accumulator (CMACC)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The Complex Multiplier and Accumulator (CMACC) module provides a low-latency solution for measuring the vector amplitude of captured signals in real time. Each sample that enters the CMACC is multiplied with the corresponding sample of a complex window/kernel, and the result is iteratively summed ("accumulated") in a register (the "accumulator"). By choosing an appropriate window function, different bands of noise can be rejected from the incoming signal. This architecture can also allow the signal to be processed with a matched filter, which optimizes the noise rejection when trying to distinguish between two discrete vector amplitudes.
+
+Each CMACC has a dedicated bank of window function memory with a depth of 2048 samples. Before streaming a signal into the CMACC, the sequencer is expected to write an address in window function memory into the corresponding CMACC register, to be interpreted by the CMACC as a pointer to the start of the window function. An internal counter increments each cycle as samples enter the CMACC, and its value is added to the provided memory pointer in order to retrieve the appropriate window function sample for that point in time. The sequencer must also provide a length, and when the counter reaches this length, it is reset. This enables the use of periodic window functions that are much longer than the depth of the window function memory. A special case of this is the commonly-used "boxcar" window, which only requires loading a single entry in window memory.
+
+The primary datapath of the CMACC is as follows:
+
+1. Four samples enter the CMACC, each comprised of two 16-bit signed quadratures.
+
+1. The four input samples are summed together, yielding a complex value with 18-bit signed quadratures.
+
+1. The partial products of the complex multiplication between the input signal and the kernel are calculated as four 34-bit signed numbers, resulting from the product of the 18-bit summed input sample quadratures and the 16-bit window function sample quadratures.
+
+1. The partial products are sign-extended to 48 bits and added into 48-bit accumulators for each quadrature.
+
+When a set of samples enters the CMACC with the ``last`` flag set, once they have been multiplied and incorporated into the accumulator, the internal registers of the CMACC module will set a ``done`` signal. The sequencer may monitor this signal over the bus in order to determine when the capture is complete. The sequencer can then choose to read the upper 32 bits of the accumulator quadartures. In principle, the sequencer may read the value of the accumulator during the accumulation, but the value will change each cycle; observing the ``done`` signal allows the sequencer to be certain that the accumulator value will be stable until the next signal enters the CMACC. The ``done`` signal is purely for the user's convenience, and may be set or reset at any time by writing to the CMACC configuration register.
+
+The CMACC has an output stream port that can produce a single complex value with two 32-bit quadratures each cycle. A multiplexer preceding the output port allows the user to choose whether the 18-bit summed input signal, the upper 32 bits of the accumulator, the lower 32 bits of the accumulator, or nothing is streamed out of the output port. Additionally, the user can choose whether only the last value is written to the output port, or whether an output is produced for every valid output entering the CMACC. Common configurations for these settings include bypassing the accumulator entirely and duplicating the input signal at the output, or writing only the final accumulated value to the output.
+
+
 
  AXI DataMovers
 ^^^^^^^^^^^^^^^^

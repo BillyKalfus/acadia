@@ -7,7 +7,7 @@ import re
 import json
 from dataclasses import dataclass
 from functools import wraps
-from typing import Union, Callable
+from typing import Union, Callable, Literal
 from binascii import hexlify,unhexlify
 
 import numpy as np
@@ -1628,9 +1628,6 @@ class Acadia:
         optionally specify ``length`` (and also optionally ``offset``) to fill
         only a portion of ``dst``.
 
-        :param src: Data source. If a configuration is provided and this is of
-            type :class:`Channel`, the channel in the configuration must match.
-        :type src: :class:`Channel` or :class:`Array`
         :param dst: Data destination
         :type dst: :class:`ChannelWaveformMemory`
         :param length: Length of data to stream in samples. Note that this
@@ -1649,36 +1646,37 @@ class Acadia:
             raise TypeError(f"Stream destination must be a WaveformMemory;"
                             f" received {type(dst)}")
 
-        dst_params = dst.dma_parameters()[0]
-        if isinstance(configuration.input_source, Channel):
-            if memory_input is not None:
-                raise TypeError(f"src_memory must be None when using stream"
-                                " configurations with Channel inputs")
-            dst_params["channel"] = configuration.input_source
-
         if length is None:
             # Fill the output
             # The waveform length will already have been validated when the waveform was created
             length = dst.size
-        
+
         input_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
+        output_length_bytes = length * 2*dst.dtype.itemsize
+        offset_bytes = offset * 2*dst.dtype.itemsize
+
+        # Some type checking
+        if isinstance(configuration.input_source, Channel):
+            if memory_input is not None:
+                raise TypeError(f"src_memory must be None when using stream"
+                                " configurations with Channel inputs")
+            if not isinstance(dst, ChannelWaveformMemory):
+                raise TypeError("When the input source for a stream is a Channel,"
+                                " the destination must be of type ChannelWaveformMemory"
+                                f"(received type {type(dst)})")
 
         # Use the value of length to determine parameters for the DataMover
         if isinstance(dst, DecimatedChannelWaveformMemory):
-            dst_params["length"] = length * dst.cycles_per_output_sample
+            length_cycles = length * dst.cycles_per_output_sample
         else:
             # When not decimating, the DataMover writes one path-width of data per cycle
             if length % input_samples_per_cycle != 0:
                 raise ValueError(f"Stream of length {length} samples does not"
                                  f" produce an integer number of cycles"
                                  f" ({length / input_samples_per_cycle})")
-            dst_params["length"] = length // input_samples_per_cycle
-                
-
-        output_length_bytes = length * 2*dst.dtype.itemsize
-        offset_bytes = offset * 2*dst.dtype.itemsize
+            length_cycles = length // input_samples_per_cycle
         
-        logger.debug(f"Stream length {dst_params['length']} cycles, decimation"
+        logger.debug(f"Stream length {length_cycles} cycles, decimation"
                      f" {dst._decimation if isinstance(dst, DecimatedChannelWaveformMemory) else 1},"
                       f" of output size {output_length_bytes} bytes to address"
                       f" 0x{dst.byte_address:010X} + 0x{offset_bytes:X}")
@@ -1689,6 +1687,8 @@ class Acadia:
 
         if isinstance(configuration.input_source, Channel):
             # notify the synchronizer, which will then add the DMA command for us   
+            dst_params = dst.dma_parameters()[0]
+            dst_params.update({"channel": configuration.input_source, "length": length_cycles})
             self.channel_synchronizer.add({
                 "function": DMASynchronizer.DMA, 
                 "self": self, 
@@ -1696,7 +1696,7 @@ class Acadia:
                 "kwargs": dst_params,
                 "retval": None})
         else:
-            self._command_datamover(f"input{configuration.input_switch_master}_mm2s_datamover", 
+            self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
                                    memory_input.byte_address,
                                    memory_input.nbytes)
     
@@ -1779,7 +1779,7 @@ class Acadia:
     def configure_cmacc(self, 
                         src: Union[Channel, WaveformMemory],
                         kernel: Union[np.ndarray, float, None] = None,
-                        write_mode: Union[str, None] = "upper", 
+                        write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
                         last_only: bool = True, 
                         reset_fifo: bool = False,
                         accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
@@ -2820,7 +2820,7 @@ class Acadia:
                 # This will raise an exception if it's not in the list
                 adc_switch_master = adc_switch_inputs.index(input_source.num())
             
-        elif isinstance(self.input_source, str):
+        elif isinstance(input_source, str):
             input_resource = self._stream_input_resources[input_source]()
             
         else:

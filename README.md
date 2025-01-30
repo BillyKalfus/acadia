@@ -77,7 +77,7 @@ Please note that the first installation of Acadia must be carried out using a Li
 
    1. Use `d` to delete all the partitions on the card. If there are multiple partitions on the card, continue to delete them until running `d` tells you that there are no partitions defined.
 
-   1. Create a GPT partition table by running `g`. If it tells you that the device contains a DOS signature and will be removed, this is okay and may be ignored.
+   1. Create a DOS partition table by running `o`. If it tells you that the device contains a signature and will be removed, this is okay and may be ignored.
 
    1. Create a new partition by running `n`. Use the default values for the partition number and the first sector, but when it asks for the last sector, enter "+1G". If it tells you that the partition contains a signature and asks whether you want to remove it, enter `Y`.
 
