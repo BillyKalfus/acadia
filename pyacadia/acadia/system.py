@@ -1092,7 +1092,7 @@ class Acadia:
     def seconds_to_cycles(self, 
                         t: Union[float, np.ndarray], 
                         rounding_raise: bool = True, 
-                        eps: float = 1e-10) -> Union[np.int32, np.ndarray]:
+                        eps: float = 1e-6) -> Union[np.int32, np.ndarray]:
         """
         Convert a float or array of floats into integer numbers of sequencer cycles.
         The parameter ``rounding_raise` determines the behavior when a provided time 

@@ -632,24 +632,34 @@ class Runtime:
                     logger.error(f"Exception checking for screens: {traceback.format_exc()}")
                 
                 # Synchronize with the target and perform any updates
-                try:
-                    if not self.data.is_connected():
-                        logger.debug("Connecting to remote target DataManager")
+                if not self.data.is_connected():
+                    logger.debug("Connecting to remote target DataManager")
+                    try: 
                         self.data.connect(self._target_address)
                         logger.debug("Connected")
+                    except ConnectionRefusedError:
+                        logger.warning("Unable to connect to target DataManager")
+                    except:
+                        logger.error(f"Exception connecting to DataManager: {traceback.format_exc()}")
 
-                    # Exception will be thrown above if we're not connected and we can't connect
+                if self.data.is_connected():
                     result = self._update_lock.acquire(timeout=self._update_lock_timeout)
                     if result:
-                        logger.debug("Syncing")
-                        self.data.sync(timeout_ms=5000)
-                        logger.debug("Synced")
+                        try:
+                            logger.debug("Syncing")
+                            self.data.sync(timeout_ms=5000)
+                            logger.debug("Synced")
+                        except:
+                            logger.error(f"Exception synchronizing: {traceback.format_exc()}")
 
                         if do_update:
-                            logger.debug("Updating...")
-                            self.update()
-                            logger.debug("Update complete")                                
-                            
+                            try:
+                                logger.debug("Updating...")
+                                self.update()
+                                logger.debug("Update complete")
+                            except:
+                                logger.error(f"Exception updating: {traceback.format_exc()}")        
+                                
                         self._update_lock.release()
 
                         if self.data.is_finalized():
@@ -658,14 +668,9 @@ class Runtime:
                     else:
                         logger.warning("Unable to acquire update lock")
 
-                except ConnectionRefusedError:
-                    logger.warning("Unable to connect to target DataManager")
-                except:
-                    logger.error(f"Exception synchronizing: {traceback.format_exc()}")
-
                 self._retrieve_logs()
 
-                # Ensure that at least event_loop_period seconds have 
+                # Ensure that at least event_loop_period seconds have passed
                 while time.time() < t_loop + event_loop_period:
                     pass
 
