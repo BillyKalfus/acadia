@@ -159,6 +159,11 @@ class DynamicLine:
             xmax = np.max(xdata)
             if (xmin != xlim[0] or xmax != xlim[1]) and xmin != xmax:
                 self._ax.set_xlim(xmin, xmax)
+            
+            if (ylim_top == "auto") and (ylim_bottom=="auto"):
+                self._ax.relim()
+                self._ax.autoscale(axis='y')
+                return
 
             ylim = self._ax.get_ylim()
             if ylim_bottom == 'auto':

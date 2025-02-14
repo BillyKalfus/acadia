@@ -10,3 +10,5 @@ pyacadia/pyacadia*/
 testing/
 docs/_build
 .vscode*
+*.so
+.idea
