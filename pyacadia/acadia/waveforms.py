@@ -68,6 +68,19 @@ class WaveformMemory:
             # actually requested, since this must happen after the array is attached
             self._resource = resource_allocator(shape=self._shape, dtype=self._dtype)
             self._attached_array = None
+
+        # The only reason we need to stash a reference internally is so that we can 
+        # duplicate the memory if needed
+        self._resource_allocator = resource_allocator
+
+    def duplicate(self):
+        """
+        Create a copy of the memory. Note that this just creates another WaveformMemory
+        with the same shape, dtype, and resource allocator as this one; it does not
+        copy the contents of the memory. Note additionally that if this memory is attached,
+        the duplicated memory will not be.
+        """
+        return WaveformMemory(self.shape, self.dtype, self._resource_allocator)
     
     @property
     def __array_interface__(self) -> dict:
