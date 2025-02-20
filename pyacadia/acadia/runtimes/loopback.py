@@ -23,15 +23,15 @@ class LoopbackRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create the waveforms that we'll need 
-        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["memory"]) 
         
         # Create a record group for saving captured data
         self.data.add_group("traces", uniform=True)
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
-            capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+            capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
 
             with a.channel_synchronizer():
                 a.schedule_waveform(stimulus_waveform)
@@ -50,7 +50,8 @@ class LoopbackRuntime(Runtime):
         capture_channel.nco_immediate_update_event()
 
         # Populate the stimulus with data
-        stimulus_waveform.set(**self.stimulus["signal"])
+        from scipy.signal.windows import hann
+        stimulus_waveform.load(hann(stimulus_waveform.size), scale=self.stimulus["waveform_scale"])
 
         # Assemble and load the program
         acadia.assemble()
@@ -104,7 +105,7 @@ class LoopbackRuntime(Runtime):
         if self.time_axis is None:
             # Last index is for quadrature
             samples_per_trace = self.data["traces"].records().shape[-2]
-            capture_time = self.capture["waveform"]["length"]
+            capture_time = self.capture["memory"]["length"]
             self.time_axis = np.linspace(0, capture_time, samples_per_trace, endpoint=False)
 
         # Sum the traces from each iteration
@@ -137,14 +138,11 @@ def run(plot=True):
             "nco_frequency": 4.4e9
         },
 
-        "waveform": {
+        "memory": {
             "length": 1e-6,
         },
         
-        "signal": {
-            "data": ("hann"),
-            "scale": 0.2
-        }
+        "waveform_scale": 0.999
     }
 
     capture: dict = {
@@ -154,7 +152,7 @@ def run(plot=True):
             "nco_frequency": -4.4e9
         },
 
-        "waveform": {
+        "memory": {
             "length": 4e-6,
             "decimation": 1,
             "region": "plddr"

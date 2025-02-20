@@ -29,13 +29,13 @@ class DSPSpectroscopyRuntime(Runtime):
         stimulus_channel = acadia.channel(self.stimulus["channel"])
         capture_channel = acadia.channel(self.capture["channel"])
 
-        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["memory"]) 
                 
         self.data.add_group("traces", uniform=True)
                 
         def sequence(a: Acadia):
-            capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+            capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
             with a.channel_synchronizer():
                 a.schedule_waveform(stimulus_waveform)
                 a.stream(capture_stream, capture_waveform)
@@ -48,7 +48,8 @@ class DSPSpectroscopyRuntime(Runtime):
         stimulus_channel.set(nco_update_event_source="sysref", **self.stimulus["datapath"])
         capture_channel.set(nco_update_event_source="sysref", **self.capture["datapath"])
 
-        stimulus_waveform.set(**self.stimulus["signal"])
+        from scipy.signal.windows import hann
+        stimulus_waveform.load(hann(stimulus_waveform.size), scale=self.stimulus["waveform_scale"])
 
         acadia.assemble()
         acadia.load()
@@ -165,7 +166,7 @@ class DSPSpectroscopyRuntime(Runtime):
             # the scale so that we turn the sum into a mean
             # Simultaneously, choose the scale so that the result is independent
             # of amplitude
-            scale = (self.stimulus["signal"]["scale"] / completed_iterations)
+            scale = (self.stimulus["waveform_scale"] / completed_iterations)
             self.data_complex = WaveformMemory.sample_to_complex(self.data_summed, scale=scale)
 
             # Apply the electrical delay

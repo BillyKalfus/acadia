@@ -33,11 +33,11 @@ class SpectroscopyRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create a waveform to store the stimulus signal
-        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
 
         # For the capture waveform, we need to set decimation to zero so that
         # the output will be a single sample
-        capture_waveform = acadia.create_waveform_memory(capture_channel, decimation=0, **self.capture["waveform"]) 
+        capture_waveform = acadia.create_waveform_memory(capture_channel, decimation=0, **self.capture["memory"]) 
                 
         # Create a data record group for storing the data that we collect
         # we can mark it as uniform because we know that every record we collect
@@ -80,12 +80,12 @@ class SpectroscopyRuntime(Runtime):
         stimulus_channel.set(nco_update_event_source="sysref", **self.stimulus["datapath"])
         capture_channel.set(nco_update_event_source="sysref", **self.capture["datapath"])
 
-        # Load the stimulus waveform memory with a pulse profile as instructed 
-        # by provided parameters
-        stimulus_waveform.set(**self.stimulus["signal"])
+        # Load the stimulus waveform memory with a hann window
+        from scipy.signal.windows import hann
+        stimulus_waveform.load(hann(stimulus_waveform.size), self.stimulus["memory_scale"])
 
         # Set the amplitude of the boxcar integration kernel 
-        kernel.set(np.float64(0.1))
+        kernel.load(np.float64(0.9))
 
         # Assemble the sequence and load it into sequencer instruction memory
         acadia.assemble()
@@ -257,15 +257,12 @@ def run(plot=True):
             "mix_reconstruction": True
         },
 
-        "waveform": {
+        "memory": {
             "length": 64e-9,
             "fixed_length": 2e-6
         },
         
-        "signal": {
-            "data": ("scipy", "hann"),
-            "scale": 0.8
-        }
+        "waveform_scale": 0.8
     }
     
     capture: dict = {
@@ -278,7 +275,7 @@ def run(plot=True):
         # Because we're using the CMACC to do the integration, the length here 
         # corresponds to the length of the integration programmed into the CMACC,
         # rather than the length of the array in memory
-        "waveform": {
+        "memory": {
             "length": 2.56e-6,
             "region": "plddr"
         }

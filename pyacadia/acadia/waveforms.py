@@ -7,9 +7,8 @@ import numpy as np
 
 from acadia.rfdc import Channel
 from .compiler import Symbol, Operation
-from .sample_arithmetic import sample_to_complex as s2c
-from .sample_arithmetic import complex_to_sample as c2s
-from .sample_arithmetic import get_function
+from .sample_arithmetic import sample_to_complex
+from .sample_arithmetic import complex_to_sample
 
 __all__ = ["WaveformMemory", 
            "ChannelWaveformMemory",
@@ -73,14 +72,16 @@ class WaveformMemory:
         # duplicate the memory if needed
         self._resource_allocator = resource_allocator
 
-    def duplicate(self):
+    def duplicate(self, **kwargs):
         """
         Create a copy of the memory. Note that this just creates another WaveformMemory
         with the same shape, dtype, and resource allocator as this one; it does not
         copy the contents of the memory. Note additionally that if this memory is attached,
         the duplicated memory will not be.
         """
-        return WaveformMemory(self.shape, self.dtype, self._resource_allocator)
+        _kwargs = {"shape": self.shape, "dtype": self.dtype, "resource_allocator": self._resource_allocator}
+        _kwargs.update(kwargs)
+        return WaveformMemory(**_kwargs)
     
     @property
     def __array_interface__(self) -> dict:
@@ -146,151 +147,47 @@ class WaveformMemory:
     def __setitem__(self, k, v):
         self._resource[k] = v
     
-    def set(self, 
-            data: Union[str, np.ndarray, float, complex], 
-            scale: complex = 1.0,
-            **kwargs) -> None:
+    def load(self, 
+            data: Union[np.ndarray, float, complex], 
+            scale: complex = 1.0) -> None:
         """
-        Load the memory with data according to the type of the 
-        ``data`` parameter.
+        Load the memory with data.
 
-        If ``data`` is a numpy array or a scalar, the numeric data will be
-        converted into to integer sample values assuming a full-scale range
-        of [-1,1] in each quadrature. The ``scale`` parameter can be used to
-        scale the conversion factor, allowing for more efficient amplitude
-        scaling and phase-shifting then pre-scaling the floating-point data. 
-        Providing any extra keyword arguments will cause an exception to be 
-        raised.
-        
-        If ``data`` is a string, it must be a valid function name for 
-        :func:`sample_arithmetic.functional_populate`. The function will be 
-        passed the output array as the first positional argument and the scale 
-        as the third. Any other provided keyword arguments will be passed 
-        through.
+        If ``data`` is a numpy array or a scalar of floats, it is passed 
+        directly into :func:``sample_arithmetic.complex_to_sample``. If it
+        is a numpy array of ints and the dtype matches this object's dtype,
+        it is loaded in.
             
         :param data: Loading specifier as described above
-        :type data: tuple of str, np.ndarray, float, complex
+        :type data: np.ndarray, float, complex
         :param scale: Optional scale factor for sample-data
         :type scale: complex
         """
-        if isinstance(data, str):
-            func = get_function(data)
-            func(self.array, scale, **kwargs)
-        elif isinstance(data, WaveformMemory):
-            self.set(data.array)
-       
-        # For numpy scalars, make 1D array and recurse
-        elif isinstance(data, (float, np.float64, np.float32, complex, np.complex64, np.complex128)):
-            # Make 1D array from scalar for proper broadcasting and cast to complex
-            data = np.array(data, ndmin=1)
-            if data.dtype.kind == 'f':
-                data = data.astype(np.dtype(f"<c{2*data.dtype.itemsize}"))
-            
-            self.set(data)
-            
-        elif isinstance(data, np.ndarray):
-            if len(kwargs) != 0:
-                raise ValueError(f"Keyword arguments are not allowed for"
-                                 " array or scalar data.")
+        if self._resource is None:
+            raise ValueError(f"Attempted to load non-attached memory.")
 
-            if data.dtype.kind == 'i':
+        if isinstance(data, WaveformMemory):
+            self.load(data.array)
+        elif isinstance(data, (float, np.float64, np.float32, complex, np.complex64, np.complex128)):
+            self.load(complex_to_sample(data, scale=scale))
+        elif isinstance(data, np.ndarray):
+            if data.dtype.kind == 'c' or data.dtype.kind == 'f':
+                self.load(complex_to_sample(data, scale=scale))
+            elif data.dtype.kind == 'i':
                 if data.shape[-1] != 2:
                     raise ValueError(f"Setting a WaveformMemory with sample data must"
                                      f" have a final dimension of length 2;"
                                      f" received ndarray has shape {data.shape}")
-                
-                # copyto will automatically broadcast if necessary
+                if data.dtype != self.dtype:
+                    raise TypeError(f"Unable to load WaveformMemory of dtype"
+                                    f" {self.dtype} from array of dtype {data.dtype}")                
                 np.copyto(self.array, data)
-
-            elif data.dtype.kind == 'c':
-                # complex_to_sample will automatically take care of broadcasting a 1D array
-                if self._resource is None:
-                    raise ValueError(f"Attempted to set data of non-attached"
-                                   f" memory with array of shape {data.shape}.")
-                
-                WaveformMemory.complex_to_sample(data, output=self.array, scale=scale)
             else:
                 raise TypeError(f"Unable to convert waveform data of dtype"
                                 f" {data.dtype} to complex.")
-
         else:
-            raise TypeError(f"Unable to set WaveformMemory using object of type {type(data)}")
-        
-       
-    @staticmethod
-    def sample_to_complex(input: np.ndarray, 
-                            output: Union[np.ndarray, np.dtype, None] = None, 
-                            scale: Union[float, complex] = 1.0) -> np.ndarray:
-        """
-        Convert sample data from its signed integer quadratures to complex 
-        floating-point numbers. Inputs must have an innermost dimension of 
-        size 2.
-        """
+            raise TypeError(f"Unable to load WaveformMemory from object of type {type(data)}")
 
-        input = np.array(input)
-
-        if input.dtype.kind != "i":
-            raise TypeError(f"Unable to accept input with dtype kind {input.dtype.kind}")
-        
-        if input.shape[-1] != 2:
-            raise ValueError(f"Last dimension of input array must correspond to quadrature")
-        
-        if output is None:
-            output = np.dtype("<c16")
-
-        if isinstance(output, np.dtype):
-            output = np.empty(input.shape[:-1], dtype=output)
-            
-        elif not hasattr(output, "dtype"):
-            raise TypeError(f"Output must have (or be) a dtype, got type"
-                            f" {type(output)}")
-        
-        if output.dtype.kind != "c":
-            raise TypeError(f"Output dtype must be complex (found kind"
-                            f" {output.dtype.kind})")
-        
-        s2c(input, output, np.complex128(scale))
-        return output
-            
-    @staticmethod
-    def complex_to_sample(input: Union[np.ndarray], 
-                        output: Union[np.ndarray, np.dtype] = None, 
-                        scale: Union[float, complex] = 1.0) -> np.ndarray:
-        """
-        Convert complex floating-point data into integer samples and pack into
-        an array in the order expected by the RF tiles. The input 
-        floating-point values must be in the range [-1, 1). Note that the upper
-        bound is exclusive; the last valid value in the range is 1 - 2^-13.
-        """
-        if not hasattr(input, "dtype"):
-            raise TypeError(f"Input must have a dtype (input is of type"
-                            f" {type(input)})")
-        
-        if input.dtype.kind == "f":
-            input = input.astype(f"<c{input.dtype.itemsize*2}")
-        
-        if input.dtype.kind != "c":
-            raise TypeError(f"Input dtype must be complex (found kind"
-                            f" {input.dtype.kind})")
-        
-        if output is None:
-            output = np.empty((*input.shape, 2), dtype=np.int16)
-
-        if not hasattr(output, "dtype"):
-            raise TypeError(f"Output must have a dtype (output is of type"
-                            f" {type(output)})")
-
-        if output.dtype.kind != "i" or output.dtype.itemsize != 2:
-            raise TypeError(f"Output dtype must be 16-bit integer (found dtype"
-                            f" {output.dtype})")
-        
-        if output.shape[-1] != 2:
-            raise ValueError(f"Converting complex values to samples requires"
-                             f" the last dimension to correspond to quadrature"
-                             f" (received shape {output.shape})")
-        
-        c2s(input, output, np.complex128(scale))
-        return output
         
 class ChannelWaveformMemory(WaveformMemory):
     """
@@ -324,11 +221,22 @@ class ChannelWaveformMemory(WaveformMemory):
         
         self.channel = channel
 
-        if resource_allocator is None:
-            raise ValueError(f"Region must be provided for ChannelWaveformMemory"
-                                 f" associated with channel {channel}")
+        # if resource_allocator is None:
+        #     raise ValueError(f"Region must be provided for ChannelWaveformMemory"
+        #                          f" associated with channel {channel}")
 
         super().__init__(shape, dtype, resource_allocator)
+
+    def duplicate(self, **kwargs):
+        """
+        Create a copy of the memory. Note that this just creates another WaveformMemory
+        with the same shape, dtype, and resource allocator as this one; it does not
+        copy the contents of the memory. Note additionally that if this memory is attached,
+        the duplicated memory will not be.
+        """
+        _kwargs = {"channel": self.channel, "shape": self.shape, "dtype": self.dtype, "resource_allocator": self._resource_allocator}
+        _kwargs.update(kwargs)
+        return ChannelWaveformMemory(**_kwargs)
     
     def dma_parameters(self) -> list[dict]:
         """
@@ -399,6 +307,17 @@ class DecimatedChannelWaveformMemory(ChannelWaveformMemory):
         # cycles per output sample = input samples per output sample / input samples per cycle
         self.cycles_per_output_sample = self._decimation // input_samples_per_cycle
         self.length_cycles = self.size * self.cycles_per_output_sample
+
+    def duplicate(self, **kwargs):
+        """
+        Create a copy of the memory. Note that this just creates another WaveformMemory
+        with the same shape, dtype, and resource allocator as this one; it does not
+        copy the contents of the memory. Note additionally that if this memory is attached,
+        the duplicated memory will not be.
+        """
+        _kwargs = {"channel": self.channel, "shape": self.shape, "decimation": self._decimation, "resource_allocator": self._resource_allocator}
+        _kwargs.update(kwargs)
+        return DecimatedChannelWaveformMemory(**_kwargs)
     
     def dma_parameters(self) -> list[dict]:
         """
@@ -458,8 +377,7 @@ class FixedChannelWaveformMemory(ChannelWaveformMemory):
             "blank": self.blank
         }]
     
-    def set(self, data, scale: complex = 1.0):
-
+    def load(self, data: Union[np.ndarray, float, complex], scale: complex = 1.0) -> None:
         # If the user specifies a scipy signal envelope but a zero-length window,
         # we can't just call set() on the data argument because WaveformMemory.set() will 
         # try to populate the nominally-constant four-wide memory block of the fixed
@@ -468,7 +386,7 @@ class FixedChannelWaveformMemory(ChannelWaveformMemory):
         # Otherwise, just pass in a constant 1 so that the constant will be broadcasted
         # during the assignment
         set_data = data if np.isscalar(data) or isinstance(data, np.ndarray) else np.float64(1.0)
-        super().set(set_data, scale)
+        super().load(set_data, scale)
 
                 
 class WindowedConstantWaveformMemory(ChannelWaveformMemory):
@@ -524,12 +442,12 @@ class WindowedConstantWaveformMemory(ChannelWaveformMemory):
         
         return ramp_first + constant_parameters + ramp_second
     
-    def set(self, data, scale: complex = 1.0):
+    def load(self, data: Union[np.ndarray, float, complex], scale: complex = 1.0) -> None:
         if self.split_sample is not None:
             # update the pulse memory for the ramp part as usual
-            super().set(data, scale=scale) 
+            super().load(data, scale=scale) 
             split_sample_value = self.array.reshape(-1,2)[self.split_sample,:]
-            self._constant.set(split_sample_value, scale=scale)
+            self._constant.load(split_sample_value, scale=scale)
         else:
-            self._constant.set(data, scale=scale)
+            self._constant.load(data, scale=scale)
         

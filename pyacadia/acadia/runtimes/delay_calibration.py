@@ -31,9 +31,9 @@ class DelayCalibrationRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create the waveforms that we'll need 
-        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["waveform"])
-        second_stimulus_waveform = acadia.create_waveform_memory(second_stimulus_channel, **self.stimulus["waveform"])
-        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["waveform"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
+        second_stimulus_waveform = acadia.create_waveform_memory(second_stimulus_channel, **self.stimulus["memory"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["memory"]) 
 
         # Create an array in the cache that we can use to load in the 
         # delay value so that we don't have to reassemble every time
@@ -49,7 +49,7 @@ class DelayCalibrationRuntime(Runtime):
                 counter = acadia.sequencer().DSP()
 
                 # Start capturing right away and don't block
-                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
                 with a.channel_synchronizer(block=False):
                     a.stream(capture_stream, capture_waveform)
 
@@ -81,7 +81,7 @@ class DelayCalibrationRuntime(Runtime):
                 counter.load(cache[0])
 
                 # Start capturing right away and don't block
-                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
                 with a.channel_synchronizer(block=False):
                     a.stream(capture_stream, capture_waveform)
 
@@ -107,7 +107,7 @@ class DelayCalibrationRuntime(Runtime):
                 counter.load(cache[0])
 
                 # Start capturing right away and don't block
-                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
                 with a.channel_synchronizer(block=False):
                     a.stream(capture_stream, capture_waveform)
 
@@ -133,7 +133,7 @@ class DelayCalibrationRuntime(Runtime):
                 counter.load(cache[0])
 
                 # Start capturing right away and don't block
-                capture_stream = acadia.configure_dsp(capture_channel, self.capture["waveform"]["decimation"])
+                capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
                 with a.channel_synchronizer(block=False):
                     a.stream(capture_stream, capture_waveform)
 
@@ -166,9 +166,10 @@ class DelayCalibrationRuntime(Runtime):
         capture_channel.nco_immediate_update_event()
 
         # Populate the stimulus with data
-        stimulus_waveform.set(**self.stimulus["signal"])
-        second_stimulus_waveform.set(**self.stimulus["signal"])
-
+        from scipy.signal.windows import hann
+        stimulus_waveform.load(hann(stimulus_waveform.size), scale=self.stimulus["waveform_scale"])
+        second_stimulus_waveform.load(hann(stimulus_waveform.size), scale=self.stimulus["waveform_scale"])
+        
         # Assemble and load the program
         acadia.assemble()
         acadia.load()
@@ -242,7 +243,7 @@ class DelayCalibrationRuntime(Runtime):
             data_reshaped = data.reshape(-1, len(self.delays), samples_per_trace, 2)
 
             if self.time_axis is None:
-                self.time_axis = np.linspace(0, self.capture["waveform"]["length"], samples_per_trace, endpoint=False)
+                self.time_axis = np.linspace(0, self.capture["memory"]["length"], samples_per_trace, endpoint=False)
             
             # Slice the data so that we have an array containing only the traces
             # we didn't have the last time update() was called
@@ -280,7 +281,7 @@ class DelayCalibrationRuntime(Runtime):
             # The code above measures the time between pulse centers. To get all of the added delay
             # due to the synchronizers and DSP, subtract off the pulse time so that we get
             # the time between end of pulse 1 and start of pulse 2
-            self.extra_delay = self.fit[1] - self.stimulus["waveform"]["length"]
+            self.extra_delay = self.fit[1] - self.stimulus["memory"]["length"]
 
             self.ax[1].relim()
             self.ax[1].autoscale(tight=True)
@@ -302,14 +303,11 @@ def run(plot=True):
             "nco_frequency": 4.4e9
         },
 
-        "waveform": {
+        "memory": {
             "length": 20e-9,
         },
-        
-        "signal": {
-            "data": "hann",
-            "scale": 0.9
-        }
+
+        "waveform_scale": 0.999
     }
 
     capture: dict = {
@@ -319,7 +317,7 @@ def run(plot=True):
             "nco_frequency": 4.4e9
         },
 
-        "waveform": {
+        "memory": {
             "length": 1.2e-6,
             "decimation": 1,
             "region": "plddr"

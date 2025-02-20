@@ -6,10 +6,14 @@ import logging
 @dataclass
 class ContinuousSynthesisRuntime(Runtime):
     """
-    A Runtime for streaming a pulse out of a DAC channel repeatedly.
+    A Runtime for streaming a pulse out of a DAC channel indefinitely.
     """
     
-    stimulus: dict
+    channel: str
+    amplitude: float = 0.999
+    frequency: float = 0
+    mix_reconstruction: bool = True
+    vop: int = 12000
 
     # Amount of time in seconds to run for
     timeout: float = 5
@@ -21,8 +25,8 @@ class ContinuousSynthesisRuntime(Runtime):
         
         acadia = Acadia()
 
-        channel = acadia.channel(self.stimulus["channel"])
-        pulse = acadia.create_waveform_memory(channel, **self.stimulus["waveform"])
+        channel = acadia.channel(self.channel)
+        pulse = acadia.create_waveform_memory(channel, fixed_length=1e-6)
         
         def sequence(a: Acadia):
             with a.sequencer().loop():
@@ -34,10 +38,14 @@ class ContinuousSynthesisRuntime(Runtime):
         acadia.compile(sequence)
         acadia.attach()
         
-        channel.set(nco_update_event_source="immediate", **self.stimulus["datapath"])
+        channel.set(
+            nco_update_event_source="immediate", 
+            mix_reconstruction=self.mix_reconstruction, 
+            vop=vop, 
+            nco_frequency=self.nco_frequency)
         channel.nco_immediate_update_event()
         
-        pulse.set(**self.stimulus["signal"])
+        pulse.load(self.amplitude)
         
         acadia.assemble()
         acadia.load()
@@ -45,30 +53,10 @@ class ContinuousSynthesisRuntime(Runtime):
         acadia.run(block=False)
         time.sleep(self.timeout)
         
-        # utils.sequencer_halt_and_reset()
+        utils.sequencer_halt_and_reset()
 
 def run():
-    stimulus: dict = {
-        "channel": "DAC4",
-
-        "datapath": {
-            "vop": 30000,
-            "mix_reconstruction": False,
-            "nco_frequency": 0.05e9
-        },
-
-        "waveform": {
-            "length": 0.0,
-            "fixed_length": 1e-6
-        },
-        
-        "signal": {
-            "data": ("scipy", "hann"),
-            "scale": 0.99
-        }
-    }
-
-    rt = ContinuousSynthesisRuntime(stimulus)
+    rt = ContinuousSynthesisRuntime(channel="DAC4")
     rt.deploy("10.66.3.198", "continuous_synthesis", files=[__file__])    
     rt.display()
 
