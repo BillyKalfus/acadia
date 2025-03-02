@@ -124,7 +124,10 @@ class DMASynchronizer(Synchronizer):
                 # (if any) it only adds delays after this one
                 channel_lengths = {}
                 logger.debug(f"Total channel lengths at barrier insertion time: {total_channel_lengths}")
-                barrier_time = Operation(builtins.max, list(total_channel_lengths.values()))
+                if len(total_channel_lengths) == 1:
+                    barrier_time = list(total_channel_lengths.values())[0]
+                else:
+                    barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
                                                 
                 # Then, for every channel that has some action after the 
                 # barrier, we need to add a blank so that the next action 
