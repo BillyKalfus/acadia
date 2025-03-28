@@ -186,8 +186,8 @@ class DSPConfiguration:
 # Create dataclasses for abstracting machine code
 @dataclass
 class STP:
-    src1: Source = Source(Source.Major.REG)
-    src2: Source = Source(Source.Major.REG)
+    src1: Source = Source.Major.REG
+    src2: Source = Source.Major.REG
     dest1: Union[Destination, None] = None
     dest2: Union[Destination, None] = None
     op: Union[str, None] = None
