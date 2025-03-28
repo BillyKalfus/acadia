@@ -186,8 +186,8 @@ class DSPConfiguration:
 # Create dataclasses for abstracting machine code
 @dataclass
 class STP:
-    src1: Source = Source.Major.REG
-    src2: Source = Source.Major.REG
+    src1: Union[Source, None] = None
+    src2: Union[Source, None] = None
     dest1: Union[Destination, None] = None
     dest2: Union[Destination, None] = None
     op: Union[str, None] = None
@@ -203,16 +203,23 @@ class STP:
     def __post_init__(self):
         # Check types
         self.name = "STP"
-        if is_numeric(self.src1):
+        if self.src1 is None:
+            self.src1 = Source(Source.Major.REG)
+        elif is_numeric(self.src1):
             self.imm1 = self.src1
             self.src1 = Source(Source.Major.IMM)
-        if not isinstance(self.src1, Source):
+        elif not isinstance(self.src1, Source):
             raise TypeError(f"STP field src1 must be of type Source;"
                             f" received {self.src1}.")
         
-        if is_numeric(self.src2):
+        if self.src2 is None:
+            self.src2 = Source(Source.Major.REG)
+        elif is_numeric(self.src2):
             self.imm2 = self.src2
             self.src2 = Source(Source.Major.IMM)
+        elif not isinstance(self.src2, Source):
+            raise TypeError(f"STP field src2 must be of type Source;"
+                            f" received {self.src2}.")
             
         # Do basic type-checking
         for field,field_type in get_type_hints(self).items(): 
@@ -477,7 +484,7 @@ class Sequencer(Processor):
 
             :param inc: Increment amount, defaults to 1
             :type inc: int, optional
-            :param clear: If `True`\, sets the counter value to zero before 
+            :param clear: If `True`\\, sets the counter value to zero before 
                 incrementing
             """
             if isinstance(inc, int) and inc == 1:
@@ -652,7 +659,7 @@ class Sequencer(Processor):
         :param dest: The destination for the data.
         :param condition: The condition for the data to be stored. By default,
             ``store`` operations are unconditional.
-        :type condition: :class:`Operation`\, optional
+        :type condition: :class:`Operation`\\, optional
         :param mask: Specifies the value to load into the mask register.
         """
 
@@ -1302,7 +1309,7 @@ class Sequencer(Processor):
         - ``loop(start, stop, step)``
 
         where the behavior and definitions of these parameters are identical to
-        those of ``range``\, and when no parameters are provided the loop will 
+        those of ``range``\\, and when no parameters are provided the loop will 
         execute forever. The loop is implemented with a DSP, and the context 
         target yielded by this function is the allocated DSP object (which will
         inherently contain the iteration variable)

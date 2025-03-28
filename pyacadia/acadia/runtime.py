@@ -521,9 +521,11 @@ class Runtime:
         self._dump_fields()
 
         # Deploy everything
-        cmd = f"rsync -r --mkpath -e \"ssh {self._multiplex_options}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
+        # cmd = f"rsync -r --mkpath -e \"ssh {self._multiplex_options}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
+        # import pdb; pdb.set_trace()
+        cmd = f"scp -r {self.local_directory} {self.login}:{self.remote_directory}"
         logger.debug(f"Executing command {cmd}")
-        run(cmd, shell=True, check=True)
+        r = run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE)
 
     def final_serve(self, timeout=5):
         """

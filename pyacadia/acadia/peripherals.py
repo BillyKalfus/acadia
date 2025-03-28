@@ -10,7 +10,7 @@ from .sequencer import Sequencer
 
 import acadia.rfclk as rfclk
     
-_DMESG_GPIO_PATTERN = "gpio@(?P<axi_address>[0-9]+)[:,\ a-z]+(?P<gpio_num>[0-9]+)"
+_DMESG_GPIO_PATTERN = "gpio@(?P<axi_address>[0-9]+)[:,\\ a-z]+(?P<gpio_num>[0-9]+)"
     
 def get_gpio_base(axi_address):
     """
@@ -284,7 +284,7 @@ class RFClk:
             Configures the analog delay for an output by setting DCLKOUTx_ADLY
             and DCLKOUTx_ADLY_PD. Set ``delay`` to 0 to disable the delay and
             power down the circuitry; otherwise the delay (in ps) must be
-            ``500 + k*25``\, where ``1 <= k <= 23``\.
+            ``500 + k*25``\\, where ``1 <= k <= 23``\\.
             """
 
             # Power the analog delay up or down depending on the arguments
@@ -612,8 +612,8 @@ class RFClk:
         @classmethod
         def set_sync_polarity(cls, invert):
             """
-            Sets the SYNC polarity to non-inverted \(``invert=False``\) or 
-            inverted \(``invert=True``\).
+            Sets the SYNC polarity to non-inverted \\(``invert=False``\\) or 
+            inverted \\(``invert=True``\\).
             """
 
             reg143 = cls.read_reg(0x143)
@@ -1130,7 +1130,7 @@ class ZCU216Sensors:
         """
         Measure system voltage, current, or temperature as reported by 
         on-chip and on-board sensors. Valid measurement keys are returned by
-        :meth:`keys`\.
+        :meth:`keys`\\.
 
         :return: The measurement result
         :rtype: float
