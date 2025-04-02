@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
             echo "Unknown option $1"
             echo "Usage: remote_install.sh --ip IP [--initial] [--firmware]"
             echo "With only an IP address supplied, pyacadia will be deployed and installed."
-            echo "Use --initial to install drivers and other required libraries that are required for pyacadia, but which do not need to be reinstalled when updating acadia. This is typically used following a power cycle after which the target's memory is wiped."
+            echo "Use --initial to set up SSH keys and install drivers and other required libraries that are required for pyacadia, but which do not need to be reinstalled when updating acadia. This is typically used following a power cycle after which the target's memory is wiped."
             echo "Use --firmware to download the latest firmware (the packaged Linux image and FPGA gateware) and deploy it to the target. This option will automatically run the steps for --initial after the new firmware is loaded."
             exit 1
             ;;
@@ -50,54 +50,64 @@ EOS
     rm ./{BOOT.BIN,image.ub,boot.scr}
     
     echo "Rebooting target..."
-    ssh root@$IP "reboot; exit"
+    ssh -oStrictHostKeyChecking=no -i $HOME/.ssh/id_acadia root@$IP "reboot; exit"
 
     echo "Waiting for target availability..."
     sleep 100
 fi
 
 if $INITIAL; then
-    echo "Copying SSH key..."
     ssh-keygen -f ~/.ssh/known_hosts -R $IP
-    ssh-copy-id root@$IP
+
+    if [ ! -f ~/.ssh/id_acadia ]; then
+        # Create a dedicated ID for acadia operations that has no passphrase
+        echo "Creating dedicated acadia SSH key..."
+        ssh-keygen -Z aes128-ctr -f ~/.ssh/id_acadia -N ""
+    fi
+    
+    # Copy the key to the remote host
+    # This will ask for the password, so we can use an expect script to automatically provide it
+    echo "Sending acadia SSH key to target..."
+    cmd="ssh-copy-id -f -i $HOME/.ssh/id_acadia -oStrictHostKeyChecking=no root@$IP"
+    expect -c "eval spawn $cmd; expect \"password:\"; send \"root\r\"; interact"
 fi
 
 echo "Killing active screens..."
-ssh root@$IP killall screen
+ssh -i $HOME/.ssh/id_acadia root@$IP killall screen
 
 echo "Deploying acadia..."
-scp -q -r "$(dirname $SCRIPT)/../../acadia" root@$IP:/home/root
+scp -i $HOME/.ssh/id_acadia -q -r "$(dirname $SCRIPT)/../../acadia" root@$IP:/home/root
 
 echo "Cleaning remote build files for acadia..."
-ssh root@$IP rm -r /home/root/acadia/pyacadia/{build,pyacadia.egg-info}
+ssh -i $HOME/.ssh/id_acadia root@$IP rm -r /home/root/acadia/pyacadia/{build,pyacadia.egg-info}
 
 echo "Installing pyacadia..."
-ssh root@$IP pip3 install --force-reinstall acadia/pyacadia
+ssh -i $HOME/.ssh/id_acadia root@$IP pip3 install --force-reinstall acadia/pyacadia
 
 if $INITIAL; then
     # scipy will be needed to import Acadia (waveforms uses get_window), so deploy that first
     echo "Deploying scipy..."
     wget https://files.pythonhosted.org/packages/c0/66/9cd4f501dd5ea03e4a4572ecd874936d0da296bd04d1c45ae1a4a75d9c3a/scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
-    scp scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root
+    scp -i $HOME/.ssh/id_acadia scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root
     echo "Installing scipy..."
-    ssh root@$IP "pip3 install scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    ssh -i $HOME/.ssh/id_acadia root@$IP "pip3 install scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
     rm scipy-1.13.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
 
     echo "Configuring clocks and resetting RAM..."
-    ssh root@$IP 'python3 -c "from acadia import Acadia; a = Acadia(); a.attach(); a.configure_clocks(); a.reset_plddr0(); a.reset_plddr1(); a.reset_logic()"'
+    ssh -i $HOME/.ssh/id_acadia root@$IP 'python3 -c "from acadia import Acadia; a = Acadia(); a.attach(); a.configure_clocks(); a.reset_plddr0(); a.reset_plddr1(); a.reset_logic()"'
 
     # echo "Deploying LLVM..."
     # wget https://files.pythonhosted.org/packages/0a/e4/bce6de49651ade8b47ed7f0c11366d49be1bad752fbf16c1976545d389fa/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
-    # scp llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+    # scp -i $HOME/.ssh/id_acadia llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl root@$IP:/home/root/llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
     # echo "Installing LLVM..."
-    # ssh root@$IP "pip3 install llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+    # ssh -i $HOME/.ssh/id_acadia root@$IP "pip3 install llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl; rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
     # rm llvmlite-0.42.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
 
     # echo "Deploying numba..."
     # wget https://github.com/numba/numba/archive/refs/tags/0.59.1.tar.gz
-    # scp -r 0.59.1.tar.gz root@$IP:/home/root
+    # scp -i $HOME/.ssh/id_acadia -r 0.59.1.tar.gz root@$IP:/home/root
     # echo "Installing numba..."
-    # ssh root@$IP "tar -xzf 0.59.1.tar.gz; pip3 install ./numba-0.59.1; rm -r numba-0.59.1; rm 0.59.1.tar.gz"
+    # ssh -i $HOME/.ssh/id_acadia root@$IP "tar -xzf 0.59.1.tar.gz; pip3 install ./numba-0.59.1; rm -r numba-0.59.1; rm 0.59.1.tar.gz"
     # rm 0.59.1.tar.gz
 fi
 

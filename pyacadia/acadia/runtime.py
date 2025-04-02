@@ -7,7 +7,7 @@ import pickle
 
 from datetime import datetime
 from threading import Thread, Event, Lock
-from typing import Any, Dict, get_type_hints
+from typing import Any, Dict, get_type_hints, Union
 from subprocess import PIPE, run
 from binascii import hexlify, unhexlify
 from io import BytesIO
@@ -148,7 +148,7 @@ class Runtime:
             do_initialize: bool = True,
             do_update: bool = True,
             do_finalize: bool = True,
-            finalization_time: float = 10):
+            finalization_time: float = 10) -> None:
         """
         Deploy the procedure implemented by :meth:`main` on a remote
         target. 
@@ -170,9 +170,9 @@ class Runtime:
         
         Deployment is carried out using SSH and a password prompt is not 
         implemented, meaning that key-based authentication must be configured
-        on the target prior to deployment. This can be done by executing 
-        
-            ``ssh-copy-id username@target``
+        on the target prior to deployment. This is automatically carried out
+        when deploying acadia onto a target using the 
+        ``misc/remote_install.sh`` script.
             
         on the host. This only needs to be done when the target does not
         already contain a copy of the host's key, such as when the target
@@ -243,10 +243,12 @@ class Runtime:
         self._displayed = False
         self._update_lock = Lock()
         self._update_lock_timeout = update_lock_timeout
+        self._ssh_options = ["-i " + os.path.expanduser("~/.ssh/id_acadia"), "-o StrictHostKeyChecking=no"]
 
         # Create a local directory to save everything in before deployment
         os.makedirs(self.local_directory)
 
+        # Set up logging
         log_level = logging.DEBUG if log_debug else logging.INFO
         
         while len(logger.handlers) > 0:
@@ -273,28 +275,15 @@ class Runtime:
         self.data_manager["properties"].write({"time": current_time})
         self.data_manager.save(self.local_directory)
                 
-        self._set_status("Configuring SSH multiplexing")
         self._configure_ssh(multiplex_control_path)
-
-        self._set_status("Preparing and deploying files")
         self._prepare_files(files, runtime_module, log_level, finalization_time)
-
-        self._set_status("Preparing remote runtime screen")
-        Runtime._prepare_screen(self.login, self._multiplex_options)
-
-        self._set_status("Starting remote runtime")
-        cmd = f"ssh {self._multiplex_options} {self.login} \"screen -S acadia -X readreg p {self.remote_directory}/run.py; screen -S acadia -X paste p\""
-        run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE)
-        
-        self._stop_flag = Event()
-        
-        self._set_status("Starting event loop")
-        self._event_loop = self._create_event_loop(event_loop_period, do_initialize, do_update, do_finalize)
-        self._event_loop.start()
+        self._prepare_screen()
+        self._start_remote_runtime()
+        self._create_event_loop(event_loop_period, do_initialize, do_update, do_finalize)
 
         self._set_status("Running")
 
-    def stop(self, timeout=2):
+    def stop(self, timeout=2) -> None:
         """
         Stop execution. This attempts to end the event loop, which will then
         attempt to stop the remote process.
@@ -315,21 +304,21 @@ class Runtime:
             self.kill()
             if self._remove_remote_directory:
                 self._set_status("Removing remote directory (after killing process)")
-                run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
+                run(f"ssh {' '.join(self._ssh_options)} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
 
         if self._displayed:
             self._stop_button.disabled = True
 
-    def kill(self):
+    def kill(self) -> None:
         """
         Kill the remote process.
         """
 
         # Send a ctrl-C to the remote screen, if it exists
-        run(f"ssh {self._multiplex_options} {self.login} screen -S acadia -X stuff ^C".split(" "))
+        run(f"ssh {' '.join(self._ssh_options)} {self.login} screen -S acadia -X stuff ^C".split(" "))
         self._set_status("Killed")
 
-    def display(self):
+    def display(self) -> None:
         """
         Create a widget layout containing some useful controls.
         """
@@ -366,7 +355,7 @@ class Runtime:
     def data(self) -> DataManager:
         return self.data_manager
     
-    def is_done(self):
+    def is_done(self) -> bool:
         return self._event_loop is not None and not self._event_loop.is_alive()
 
     def savefig(self, figure, name: str = None) -> None:
@@ -391,7 +380,7 @@ class Runtime:
     # ----------------------- Internal utility functions --------------------- #
 
     @staticmethod
-    def _transform_arg(v):
+    def _transform_arg(v) -> Union[list, dict, str]:
         if isinstance(v, (bytes, bytearray)):
             return f"bytes;{hexlify(v).decode('ascii')}"
         
@@ -412,7 +401,7 @@ class Runtime:
         return v
     
     @staticmethod
-    def _untransform_arg(v):
+    def _untransform_arg(v) -> Any:
         if isinstance(v, list):
             return [Runtime._untransform_arg(item) for item in v]
         
@@ -432,8 +421,10 @@ class Runtime:
         
         return v
     
-    def _configure_ssh(self, multiplex_control_path):
+    def _configure_ssh(self, multiplex_control_path) -> None:
         # Configure SSH multiplexing
+        self._set_status("Configuring SSH")
+
         if multiplex_control_path is None:
             self._multiplex_control_path = os.path.expanduser("~/.ssh/controlmasters")
         else:
@@ -443,8 +434,10 @@ class Runtime:
             os.mkdir(self._multiplex_control_path)
 
         # Create an SSH control master    
-        # run(f"ssh -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
-        self._multiplex_options = (f"-o ControlMaster=auto -o ControlPath={self._multiplex_control_path}/%r@%h:%p -o ControlPersist=20")
+        run(f"ssh {' '.join(self._ssh_options)} -o ControlMaster=yes -o ControlPath={self._multiplex_control_path} -o ControlPersist=20 {self.login} exit", shell=True, stdout=PIPE, stderr=PIPE)
+        self._ssh_options += [f"-o ControlMaster=auto", 
+                                f"-o ControlPath={self._multiplex_control_path}/%r@%h:%p", 
+                                f"-o ControlPersist=20"]
     
     def _get_fields(self) -> Dict[str,Any]:
         kwargs = {}
@@ -452,7 +445,7 @@ class Runtime:
             kwargs[name] = hint
         return kwargs
 
-    def _dump_fields(self, fields: dict = None):
+    def _dump_fields(self, fields: dict = None) -> None:
         logger = logging.getLogger("acadia")
 
         # Aggregate arguments by using introspection to retrieve the values
@@ -471,8 +464,9 @@ class Runtime:
         else:
             logger.warning("No arguments found!")
 
-    def _prepare_files(self, files, runtime_module, log_level, finalization_time):
+    def _prepare_files(self, files, runtime_module, log_level, finalization_time) -> None:
         logger = logging.getLogger("acadia")
+        self._set_status("Preparing and deploying files")
 
         # Copy all of the files that we need into the local execution directory
         if files is not None:
@@ -521,13 +515,13 @@ class Runtime:
         self._dump_fields()
 
         # Deploy everything
-        # cmd = f"rsync -r --mkpath -e \"ssh {self._multiplex_options}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
+        cmd = f"rsync -r --mkpath -e \"ssh {' '.join(self._ssh_options)}\" {self.local_directory}/ {self.login}:{self.remote_directory}/"
         # import pdb; pdb.set_trace()
-        cmd = f"scp -r {self.local_directory} {self.login}:{self.remote_directory}"
+        # cmd = f"scp -r {self.local_directory} {self.login}:{self.remote_directory}"
         logger.debug(f"Executing command {cmd}")
         r = run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE)
 
-    def final_serve(self, timeout=5):
+    def final_serve(self, timeout=5) -> None:
         """
         Finalize the internal DataManager and spin the data server for a given amount of time to allow a remote host to
         retrieve data. If no client is connected, if data is sent, or if the client
@@ -547,24 +541,23 @@ class Runtime:
         logging.debug(f"DataManager serve loop finished with retval {retval}.")
         self.data.disconnect()
     
-    @staticmethod
-    def _list_remote_screens(login, multiplex_options) -> tuple[str,str]:
-        cmd = f'ssh {multiplex_options} {login} screen -ls | grep -E --only-matching "[0-9]+\.[a-z0-9 -\.]+"'
+    def _list_remote_screens() -> tuple[str,str]:
+        cmd = f"ssh {' '.join(self._ssh_options)} {self.login} screen -ls | grep -E --only-matching \"[0-9]+\\.[a-z0-9 -\\.]+\""
         r = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
         return [s for s in r.stdout.decode("utf-8").split("\n") if s != '']
 
-    @staticmethod
-    def _prepare_screen(login, multiplex_options) -> str:
+    def _prepare_screen() -> str:
         """
         Retrieve a preprepared runtime screen, if it exists.
         """
         logger = logging.getLogger("acadia")
+        self._set_status("Preparing remote runtime screen")
 
         cmd = ""
 
         # If there's already an existing acadia screen running, we'll need to kill it
         screen_found = False
-        for s in Runtime._list_remote_screens(login, multiplex_options):
+        for s in self._list_remote_screens():
             if s.endswith("acadia"):
                 logger.warning(f"Killing remote screen {s}")
                 cmd += f"screen -S {s} -X kill; "
@@ -582,12 +575,17 @@ class Runtime:
         cmd += "screen -dmS acadia-prep python3; "
         cmd += "screen -S acadia-prep -X stuff \"from acadia import *; import numpy;^M\"; "
 
-        cmd = f"ssh {multiplex_options} {login} {cmd}"
+        cmd = f"ssh {' '.join(self._ssh_options)} {self.login} {cmd}"
         logger.debug(f"Executing command {cmd}")
         run(cmd.split(" "), stdout=PIPE)
 
-    def _retrieve_logs(self):
-        cmd = f"rsync -e \"ssh {self._multiplex_options}\" --append {self.login}:{self.remote_directory}/*.log {self.local_directory}"
+    def _start_remote_runtime(self) -> None:
+        self._set_status("Starting remote runtime")
+        cmd = f"ssh {' '.join(self._ssh_options)} {self.login} \"screen -S acadia -X readreg p {self.remote_directory}/run.py; screen -S acadia -X paste p\""
+        run(cmd, shell=True, check=True, stdout=PIPE, stderr=PIPE)
+
+    def _retrieve_logs(self) -> None:
+        cmd = f"rsync -e \"ssh {' '.join(self._ssh_options)}\" --append {self.login}:{self.remote_directory}/*.log {self.local_directory}"
         logging.getLogger("acadia").debug(f"Retrieving logs with command: {cmd}")
         proc = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
         if proc.returncode != 0:
@@ -597,8 +595,9 @@ class Runtime:
                            event_loop_period: float, 
                            do_initialize: bool, 
                            do_update: bool, 
-                           do_finalize: bool) -> Thread:
-                
+                           do_finalize: bool) -> None:
+        self._stop_flag = Event()
+
         def event_loop():
             import time
 
@@ -619,7 +618,7 @@ class Runtime:
                 logger.debug("Checking runtime for completion")
 
                 try:
-                    screens = Runtime._list_remote_screens(self.login, self._multiplex_options)
+                    screens = self._list_remote_screens()
                     found = False
                     for s in screens:
                         if s.endswith("acadia"):
@@ -709,16 +708,17 @@ class Runtime:
             if self._remove_remote_directory:
                 try:
                     self._set_status("Removing remote directory")
-                    run(f"ssh {self._multiplex_options} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
+                    run(f"ssh {' '.join(self._ssh_options)} {self.login} rm -r {self.remote_directory}".split(" "), check=True)
                 except:
                     logger.error("Failed to remove remote directory")
                     
             self._set_status("Completed")
             
-        thread = Thread(target=event_loop,
+        self._event_loop = Thread(target=event_loop,
                         name="EventLoopThread",
                         daemon=True)
-        return thread
+        self._set_status("Starting event loop")
+        self._event_loop.start()
 
     def _set_status(self, status):
         logger = logging.getLogger("acadia")

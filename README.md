@@ -16,11 +16,11 @@ Host computers are responsible for deploying procedures onto remote targets, rec
 
 Acadia only supports host computers using an Ubuntu or Debian-based distribution of Linux, either natively or through the Windows Subsystem for Linux (WSL). See [this link](https://learn.microsoft.com/en-us/windows/wsl/install) for information about how to install WSL on Windows machines. This software was developed using Ubuntu 22.04.3 LTS, though any reasonably modern distribution should function properly. Acadia has also been known to function on recent versions of Mac OS, though compatibility is not guaranteed.
 
-The host computer must have `python>=3.8` along with the packages `python3-pip` and (optionally) `python3-venv`. These can be installed from the Linux command line as
+The host computer requires a few packages in order to host a proper runtime environment, which may be installed by calling the following at the Linux command line:
 
 ```
 sudo apt update
-sudo apt install python3-pip python3-venv python3-dev gcc
+sudo apt install python3-pip python3-venv python3-dev gcc expect
 ```
 
 Though it is not required, we encourage the use of Python virtual environments for managing dependencies. A new Python virtual environment can be created by running 
