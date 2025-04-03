@@ -541,12 +541,12 @@ class Runtime:
         logging.debug(f"DataManager serve loop finished with retval {retval}.")
         self.data.disconnect()
     
-    def _list_remote_screens() -> tuple[str,str]:
+    def _list_remote_screens(self) -> tuple[str,str]:
         cmd = f"ssh {' '.join(self._ssh_options)} {self.login} screen -ls | grep -E --only-matching \"[0-9]+\\.[a-z0-9 -\\.]+\""
         r = run(cmd, shell=True, stdout=PIPE, stderr=PIPE)
         return [s for s in r.stdout.decode("utf-8").split("\n") if s != '']
 
-    def _prepare_screen() -> str:
+    def _prepare_screen(self) -> str:
         """
         Retrieve a preprepared runtime screen, if it exists.
         """
