@@ -24,11 +24,11 @@ Sequencer
 
 The sequencer is a small real-time CPU that is responsible for coordinating actions across the system. It steps through a sequence of instructions, each of which moves data from one location in the internal datapath of the sequencer (the "sources") to another (the "destinations"). All source and destination ports are 32 bits wide.
 
-When the sequencer starts, it begins stepping through instruction memory and executing instructions in sequence. There is only one instruction, which can either 
+When the sequencer starts, it begins stepping through instruction memory and executing instructions in order. The sequencer has only one instruction, which can specify the following operations 
 
-* retrieve values from any two sources and load them into any two destinations independently of one another, or
+* Retrieve values from any two source ports and write them into any two destination ports, independently of one another
 
-* conditionally retrieve a value from one source and write it to one destination, conditioned on the value of a second source. 
+* Retrieve a value from one source and conditionally write it to one destination, conditioned on the value of an operation on a second source
 
 Many destination ports will take additional action when written to or provide access to logic units that carry out more complex operations, described in further detail below. This architecture greatly reduces the critical path of the sequencer, allowing the clock speed to remain reasonably high while allowing the sequencer to fetch and execute instructions with low latency. This behavior is extremely useful for distributed systems requiring a high degree of synchronicity, since this means that the sequencer is able to operate at the finest timebase resolution of the system. 
 
