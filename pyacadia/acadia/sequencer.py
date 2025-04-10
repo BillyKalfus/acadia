@@ -549,6 +549,7 @@ class Sequencer(Processor):
         :type address: int, optional
         :param latency: Additional latency cycles to add after addressing the 
         bus
+        
         """
         if address is not None:
             self.store(src=address, dest=Destination(Destination.Major.BUS_ADDR))

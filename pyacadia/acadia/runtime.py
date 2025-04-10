@@ -161,18 +161,18 @@ class Runtime:
         deployment is expected to collect a large amount of data, care should
         be taken to ensure that the remote base directory has sufficient free
         space for storing the results.
+
         Throughout the lifetime of the execution, various files are transferred
         to the host from the target and stored in a local execution directory.
         When execution completes successfully, the local execution directory
         will contain a copy of the remote execution directory, which may be 
-        safely deleted (and will be done so automatically if 
-        ``remove_remote_directory=True``).
+        safely deleted (and will be done so automatically if ``remove_remote_directory=True``).
         
         Deployment is carried out using SSH and a password prompt is not 
         implemented, meaning that key-based authentication must be configured
         on the target prior to deployment. This is automatically carried out
-        when deploying acadia onto a target using the 
-        ``misc/remote_install.sh`` script.
+        when deploying acadia onto a target using the ``misc/remote_install.sh`` 
+        script.
             
         on the host. This only needs to be done when the target does not
         already contain a copy of the host's key, such as when the target
@@ -181,8 +181,8 @@ class Runtime:
         :param target_address: IP address of the target
         :type target_address: str
         :param runtime_module: Name of the :class:`Runtime` subclass. This is 
-            directly used in an ``import``
-            statement as ``from <runtime_module> import <this class name>``. 
+            directly used in an ``import`` statement as 
+            ``from <runtime_module> import <this class name>``. 
             If ``None``, the current class' module path and name is used.
         :type runtime_module: str
         :param files: Files to be deployed to the target for use during the
@@ -227,6 +227,7 @@ class Runtime:
         :param finalization_time: The amount of time for the remote process to
             serve data to a host after the Runtime's main() has completed
         :type finalization_time: float
+        
         """      
         logger = logging.getLogger("acadia")
 

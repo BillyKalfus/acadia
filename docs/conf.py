@@ -7,9 +7,9 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'acadia'
-copyright = '2022, William D. Kalfus and Jacob C. Curtis'
-author = 'William D. Kalfus and Jacob C. Curtis'
-release = '1.0.0'
+copyright = '2025, William D. Kalfus'
+author = 'William D. Kalfus'
+release = '7.0'
 
 import os
 import sys
