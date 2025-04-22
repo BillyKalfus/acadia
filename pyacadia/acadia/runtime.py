@@ -148,7 +148,8 @@ class Runtime:
             do_initialize: bool = True,
             do_update: bool = True,
             do_finalize: bool = True,
-            finalization_time: float = 10) -> None:
+            finalization_time: float = 10,
+            datamanager_sync_timeout_ms = 10000) -> None:
         """
         Deploy the procedure implemented by :meth:`main` on a remote
         target. 
@@ -245,6 +246,7 @@ class Runtime:
         self._update_lock = Lock()
         self._update_lock_timeout = update_lock_timeout
         self._ssh_options = ["-i " + os.path.expanduser("~/.ssh/id_acadia"), "-o StrictHostKeyChecking=no"]
+        self._datamanager_sync_timeout_ms = datamanager_sync_timeout_ms
 
         # Create a local directory to save everything in before deployment
         os.makedirs(self.local_directory)
@@ -649,7 +651,7 @@ class Runtime:
                     if result:
                         try:
                             logger.debug("Syncing")
-                            self.data.sync(timeout_ms=5000)
+                            self.data.sync(timeout_ms=self._datamanager_sync_timeout_ms)
                             logger.debug("Synced")
                         except:
                             logger.error(f"Exception synchronizing: {traceback.format_exc()}")

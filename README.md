@@ -1,12 +1,70 @@
-# The Acadia Microwave Instrument
+# The Acadia Mixed-Signal Instrumentation Platform
 
-William Kalfus
+William Kalfus, Yale University
 
-Yale University, 2024
+# Description
 
-## Description
+Acadia is a laboratory instrument designed for carrying out complex sequences of signal synthesis and capture. It couples a very simplistic real-time sequencer to a general-purpose high-performance processor and orchestrates them in concert, reaping the benefits of each: the sequencer provides real-time sequencing with conditional control flow with very low latency, while the processor can carry out advanced computation to influence the sequencer's behavior and rapidly generate new sequences. The sequencer's simple nature allows sequence branching to have very low overhead, and because waveform synthesis is always scheduled dynamically by the sequencer, sequences can easily incorporate signal synthesis conditioned on measurements, computation results, memory values, and more. Captured signals pass through a reconfigurable network of processing units that are optimized for different aspects of signal processing such as wide-bandwidth capture, low-latency filtering, and high-precision spectroscopy. A full assembler and compiler are provided that allow complex programs involving the complete system to be expressed simply as Python classes. We also include a runtime manager that seamlessly deploys programs to remote hardware, transparently transfers and archives captured data, and performs arbitrary post-processing and visualization.
 
-The Acadia platform is intended to provide a modern, simple, and unified framework for integrating real-time signal synthesis and processing with hardware compute resources. The framework was developed to target the ZCU216 RFSoC evaluation board but straightforwardly extends to other hardware. 
+Acadia was designed with the challenges of quantum device research in mind, and a more thorough discussion of the associated considerations may be found in [Motivation](docs/motivation.rst). However, its flexibility in orchestrating different signal processing functions allows Acadia to straightforwardly replicate the functionality of common lab instruments like oscilloscopes, signal generators, vector network analyzers, and spectrum analyzers. Along with a high-performance analog front-end, this can drastically lower the cost associated with having these capabilities available in a lab compared to commercial units, and the coexistence of these capabilities can allow bespoke combinations of functionality for unique experiments.
+
+Acadia is targeted for implementation on a ZCU216 development board from Xilinx, though it is straightforwardly portable to other hardware. Many parameters of the design (such as memory depths) can be modified simply by [editing a firmware definition file](pyacadia/acadia/firmware_configurations.py), but the default configuration has shown to be sufficient for many experiments in our lab. Some parameters of the default configuration include:
+
+ - A sequencer with single-cycle instruction decode and execution
+   
+   - 200 MHz clock rate
+
+   - Two-cycle branch latency
+
+   - 4K-deep instruction memory, able to be reloaded in real-time from external memory
+
+   - Eight 32-bit general-purpose registers
+
+   - Eight 48-bit DSP units for real-time arithmetic
+
+   - 32-bit memory bus for interface to the rest of the system
+
+ - 16 DACs operating at 6.4 GS/s, interpolated from an 800 MS/s fabric interface rate
+
+   - DAC sample rates may be changed dynamically to allow optimal placement of Nyquist zone boundaries
+
+   - 32 KS memory for each DAC channel (just over 40 us at the default rate), indexed by up to 1024 descriptors
+
+   - Waveform memory can be reloaded by the sequencer in real-time from multiple external memory sources
+
+   - A 48-bit numerically-controlled quadrature oscillator capable of modulating the samples at the full DAC bandwidth
+
+ - 16 ADCs operating at 2.4 GS/s, decimated to an 800 MS/s fabric interface rate
+
+   - A 48-bit numerically-controlled quadrature oscillator capable of modulating the samples at the full DAC bandwidth
+
+ - All ADC outputs and two memory-to-stream units feed a stream switch, allowing data streams to be concurrently routed to different processing units
+
+   - Four complex multiplier/accumulator units 
+   
+     - Real-time signal filtering using an arbitrary integration kernel
+
+     - Provides filtered results to the sequencer within 50 ns
+
+     - Able to be dynamically reset by the sequencer for repeated measurements within a sequence
+
+   - Two full-bandwidth capture paths that write the input stream directly to memory
+
+   - Two programmable DSP units that enable a wide range of operations, including decimation, accumulation, shifting, scaling, and bitwise operations
+
+ - A fast true-dual-port cache memory
+
+   - Organized as 32768 32-bit words
+ 
+   - Optimized for very-low-latency communication between the sequencer and the processor (approximately 100 ns)
+
+   - Direct connections to processor AXI master port and to sequencer bus
+
+ - Two 4 GB banks of external DDR4 RAM
+
+ - A 256-bit AXI interconnect allowing all memory regions to be concurrently accessed by the stream processing units and the processor
+
+# Installation
 
 ## Host Computers
 
@@ -47,18 +105,17 @@ Once you have entered your preferred Python environment, download and install th
 git clone https://git.yale.edu/RSL/acadia.git
 pip3 install acadia/pyacadia
 ```
-
 ### Development Environment
 
 This software supports deployment and runtime management from any Python terminal. However, many users would like to visualize data in real-time, even if just to confirm that deployment is progressing satisfactorily. This is implemented in Acadia through `IPython` and `ipywidgets`, and visualization is supported in any front-end capable of rendering their outputs, such as Jupyter notebooks. 
 
 We primarily encourage the use of this software through VS Code, which may be installed [here](https://code.visualstudio.com/download).
 
-## ZCU216 Configuration
+# Hardware setup for ZCU216
 
-### First-time SD card preparation and firmware installation
+## First-time SD card preparation
 
-Please note that the first installation of Acadia must be carried out using a Linux-based machine to which you have root access (it is currently unknown whether this can be performed on Windows or through WSL). Some Linux machines are available in RSL, talk to Billy for connection information. You will need a microSD card onto which the boot image will be installed; this will erase all information on the card. This will install the latest firmware, so when this step is carried out you can skip the "Updating firmware" section.
+Please note that the first installation of Acadia must be carried out using a Linux-based machine to which you have sufficient permissions for disk formatting (it is currently unknown whether this can be performed on Windows or through WSL). Some Linux machines are available in RSL; talk to Billy for connection information. You will need a microSD card onto which the boot image will be installed; this will erase all information on the card. This will install the latest firmware, so when this step is carried out you can skip the "Updating firmware" section.
 
 1. Download this repository somewhere onto the PC. 
 
@@ -67,6 +124,7 @@ Please note that the first installation of Acadia must be carried out using a Li
 1. Determine the device path of the card by running `lsblk` at the Linux command line. This will print out one line for each disk and partition in the system, which contains a path like `/dev/sdx` and a device size. Given the device sizes, determine which path corresponds to the SD card. If the disk is already partitioned, there may be a path with a number at the end such as `/dev/sdx1`; ignore this.
 
 1. Use `fdisk` to wipe the card and create a partition for the boot image. We'll create a partition that's only 1GB in size due to bootloader limitations on the FPGA, but you may create additional partitions for data if you like. 
+
    1. At the command line, run the following:
 
    ```
@@ -89,7 +147,9 @@ Please note that the first installation of Acadia must be carried out using a Li
 
 1. Mount the filesystem on the PC by running `udisksctl mount -b /dev/sdx1`. If this completes successfully, it will tell you the path at which the filesystem was mounted. 
 
-1. Change directories to the path that `udisksctl` reported.
+## Installing Pre-built Firmware
+
+1. Change directories to the mount path of the SD card (if you just completed the SD card setup, this will be the path that `udisksctl` reports).
 
 1. Retrieve the latest firmware image by running the following (note that this must be run as one single command, not one line at a time):
 
