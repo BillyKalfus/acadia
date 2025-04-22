@@ -16,7 +16,9 @@ class ContinuousSynthesisRuntime(Runtime):
     vop: int = 12000
 
     # Amount of time in seconds to run for
-    timeout: float = 5
+    timeout: float = 20
+
+    FILE = __file__
 
     def main(self):        
         from acadia import Acadia
@@ -41,8 +43,8 @@ class ContinuousSynthesisRuntime(Runtime):
         channel.set(
             nco_update_event_source="immediate", 
             mix_reconstruction=self.mix_reconstruction, 
-            vop=vop, 
-            nco_frequency=self.nco_frequency)
+            vop=self.vop, 
+            nco_frequency=self.frequency)
         channel.nco_immediate_update_event()
         
         pulse.load(self.amplitude)
@@ -56,7 +58,12 @@ class ContinuousSynthesisRuntime(Runtime):
         utils.sequencer_halt_and_reset()
 
 def run():
-    rt = ContinuousSynthesisRuntime(channel="DAC4")
+    rt = ContinuousSynthesisRuntime(channel="DAC6", 
+                                    amplitude = 0.5,
+                                    mix_reconstruction=True,
+                                    frequency=1.9e9, 
+                                    vop=20000)
+
     rt.deploy("10.66.3.198", "continuous_synthesis", files=[__file__])    
     rt.display()
 

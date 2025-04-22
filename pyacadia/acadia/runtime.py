@@ -11,6 +11,7 @@ from typing import Any, Dict, get_type_hints, Union
 from subprocess import PIPE, run
 from binascii import hexlify, unhexlify
 from io import BytesIO
+from functools import wraps
 
 
 import numpy as np
@@ -729,5 +730,26 @@ class Runtime:
         if self._displayed:
             self._status.value = s
         logger.debug(s)
-        
-        
+
+
+def annotate_method(**annotations):
+    """
+    Decorator for attaching arbitrary annotations to a method.
+    Useful for identifying different types of runtime methods.
+
+    Each key-value pair in `annotations` will be set as an attribute on the original method.
+    For example, @annotate_method(plot_name='amp_sweep') results in method.plot_name = 'amp_sweep'.
+
+    :param annotations: Dictionary of {annotation_name: value} to set on the method.
+    """
+    def decorator(func):
+        for key, value in annotations.items():
+            setattr(func, key, value)  # Attach to the original function, not the wrapper
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
