@@ -2009,6 +2009,98 @@ static PyObject* PyRfdc_set_analog_sample_rate(PyObject* self, PyObject* args, P
     #endif
 }
 
+static const char RFDC_GET_MULTIBAND_CONFIG_DOCSTRING[] = "Retrieves the multiband configuration for a tile.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n";
+static PyObject* PyRfdc_get_multiband_config(PyObject* self, PyObject* tile_obj)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    unsigned int tile_type;
+    unsigned int tile_id;
+    uint32_t retval;
+
+    if(!PyArg_Parse(tile_obj, "s", &tile))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if((strcmp(tile, "ADCTile0") == 0) || (strcmp(tile, "ADCTile1") == 0) || (strcmp(tile, "ADCTile2") == 0) || (strcmp(tile, "ADCTile3") == 0))
+    {
+        tile_type = XRFDC_ADC_TILE;
+    }
+    else if((strcmp(tile, "DACTile0") == 0) || (strcmp(tile, "DACTile1") == 0) || (strcmp(tile, "DACTile2") == 0) || (strcmp(tile, "DACTile3") == 0))
+    {
+        tile_type = XRFDC_DAC_TILE;
+    }
+    else 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+    tile_id = tile[7] - '0';
+
+    retval = XRFdc_GetMultibandConfig((&xrfdc), tile_type, tile_id);
+
+    return PyLong_FromLong(retval);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char RFDC_SET_MULTIBAND_CONFIG_DOCSTRING[] = "Sets the multiband configuration for a tile.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n"
+    ":param digital_datapath_mask: First 4 bits represent 4 data paths, 1 means enabled and 0 means disabled.\n"
+    ":param data_converter_mask: Block enabled mask (input/output driving blocks). 1 means enabled and 0 means disabled.\n";
+static PyObject* PyRfdc_set_multiband_config(PyObject* self, PyObject* args, PyObject* kwargs)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    unsigned int tile_type;
+    unsigned int tile_id;
+    uint32_t digital_datapath_mask;
+    uint32_t data_converter_mask;
+
+    static char* kwlist[] = {"tile", "digital_datapath_mask", "data_converter_mask", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "sII", kwlist, 
+        &tile, 
+        &digital_datapath_mask, 
+        &data_converter_mask))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if((strcmp(tile, "ADCTile0") == 0) || (strcmp(tile, "ADCTile1") == 0) || (strcmp(tile, "ADCTile2") == 0) || (strcmp(tile, "ADCTile3") == 0))
+    {
+        tile_type = XRFDC_ADC_TILE;
+    }
+    else if((strcmp(tile, "DACTile0") == 0) || (strcmp(tile, "DACTile1") == 0) || (strcmp(tile, "DACTile2") == 0) || (strcmp(tile, "DACTile3") == 0))
+    {
+        tile_type = XRFDC_DAC_TILE;
+    }
+    else 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+    tile_id = tile[7] - '0';
+
+    if(XRFdc_MultiBand((&xrfdc), tile_type, tile_id, digital_datapath_mask, XRFDC_MB_DATATYPE_C2R, data_converter_mask) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Call to XRFdc_MultiBand in %s failed.", __FUNCTION__);
+    }
+
+    Py_RETURN_NONE;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+
+
 static const char RFDC_MTS_INIT_DOCSTRING[] = "Initializes multi-tile synchronization (MTS).";
 static PyObject* PyRfdc_mts_init(PyObject* self)
 {
@@ -2116,6 +2208,8 @@ static PyMethodDef PyRfdcMethods[] = {
     {"set_clock_distribution", (PyCFunction)PyRfdc_set_clock_distribution, METH_KEYWORDS | METH_VARARGS, RFDC_SET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_sysref_enabled", (PyCFunction)PyRfdc_set_sysref_enabled, METH_O, RFDC_SET_SYSREF_ENABLED_DOCSTRING},
     {"set_analog_sample_rate", (PyCFunction)PyRfdc_set_analog_sample_rate, METH_KEYWORDS | METH_VARARGS, RFDC_SET_ANALOG_SAMPLE_RATE_DOCSTRING},
+    {"get_multiband_config", (PyCFunction)PyRfdc_get_multiband_config, METH_O, RFDC_GET_MULTIBAND_CONFIG_DOCSTRING},
+    {"set_multiband_config", (PyCFunction)PyRfdc_set_multiband_config, METH_KEYWORDS | METH_VARARGS, RFDC_SET_MULTIBAND_CONFIG_DOCSTRING},
     {"mts_init", (PyCFunction)PyRfdc_mts_init, METH_NOARGS, RFDC_MTS_INIT_DOCSTRING},
     {"mts_sync", (PyCFunction)PyRfdc_mts_sync, METH_NOARGS, RFDC_MTS_SYNC_DOCSTRING},
     {NULL, NULL, 0, NULL}
