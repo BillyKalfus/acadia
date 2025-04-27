@@ -31,19 +31,19 @@ settings.DAC[1].PLLSettings.RefClkFreq = 250
 settings.DAC[2].PLLSettings.RefClkFreq = 250
 settings.DAC[3].PLLSettings.RefClkFreq = 250
 
-settings.DAC[0].PLLSettings.SampleRate = 6000
-settings.DAC[1].PLLSettings.SampleRate = 6000
-settings.DAC[2].PLLSettings.SampleRate = 6000
-settings.DAC[3].PLLSettings.SampleRate = 6000
+settings.DAC[0].PLLSettings.SampleRate = 6400
+settings.DAC[1].PLLSettings.SampleRate = 6400
+settings.DAC[2].PLLSettings.SampleRate = 6400
+settings.DAC[3].PLLSettings.SampleRate = 6400
 
 settings.DAC[0].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
 settings.DAC[1].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
 settings.DAC[2].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_RX")
 settings.DAC[3].DistributedClock = Channel.RFDC_def("XRFDC_DIST_OUT_NONE")
 
-settings.ADC[0].PLLSettings.SampleRate = 2000
-settings.ADC[1].PLLSettings.SampleRate = 2000
-settings.ADC[2].PLLSettings.SampleRate = 2000
-settings.ADC[3].PLLSettings.SampleRate = 2000
+settings.ADC[0].PLLSettings.SampleRate = 2400
+settings.ADC[1].PLLSettings.SampleRate = 2400
+settings.ADC[2].PLLSettings.SampleRate = 2400
+settings.ADC[3].PLLSettings.SampleRate = 2400
 
 Channel.RFDC_call_checked("SetClkDistribution", settings)
