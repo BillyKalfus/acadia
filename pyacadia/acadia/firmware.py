@@ -287,36 +287,6 @@ class Firmware:
                 user_port_output_pipeline=self.config[f"dac_tile{i}_sample_memory"]["dac_port_output_pipeline"])
             self._hdl_modules.append(memory_controller)
             self.dac_tile_memory_controllers.append(memory_controller)
-
-        self.dac_dma_descriptor_memory_controller = AXIMemoryArray(f"dac_dma_descriptor", 
-            size_bits=self.config["dac_dma_descriptor_memory"]["size_bits"], 
-            width=64, 
-            elements=self.NUM_DACS, 
-            read_only=True,
-            use_rst=False,
-            controller_width=self.config["dac_dma_descriptor_memory"]["controller_width"],
-            synchronous=self.config["dac_dma_descriptor_memory"]["synchronous"],
-            primitive=self.config["dac_dma_descriptor_memory"]["primitive"], 
-            controller_port_input_pipeline=self.config["dac_dma_descriptor_memory"]["controller_port_input_pipeline"],
-            controller_port_output_pipeline=self.config["dac_dma_descriptor_memory"]["controller_port_output_pipeline"],   
-            user_port_input_pipeline=self.config["dac_dma_descriptor_memory"]["dma_port_input_pipeline"],
-            user_port_output_pipeline=self.config["dac_dma_descriptor_memory"]["dma_port_output_pipeline"])
-        self._hdl_modules.append(self.dac_dma_descriptor_memory_controller)
-
-        self.adc_dma_descriptor_memory_controller = AXIMemoryArray(f"adc_dma_descriptor", 
-            size_bits=self.config["adc_dma_descriptor_memory"]["size_bits"], 
-            width=64, 
-            controller_width=self.config["adc_dma_descriptor_memory"]["controller_width"],
-            elements=self.NUM_ADCS, 
-            read_only=True,
-            use_rst=False,
-            synchronous=self.config["adc_dma_descriptor_memory"]["synchronous"],
-            primitive=self.config["adc_dma_descriptor_memory"]["primitive"], 
-            controller_port_input_pipeline=self.config["adc_dma_descriptor_memory"]["controller_port_input_pipeline"],
-            controller_port_output_pipeline=self.config["adc_dma_descriptor_memory"]["controller_port_output_pipeline"],   
-            user_port_input_pipeline=self.config["adc_dma_descriptor_memory"]["dma_port_input_pipeline"],
-            user_port_output_pipeline=self.config["adc_dma_descriptor_memory"]["dma_port_output_pipeline"])
-        self._hdl_modules.append(self.adc_dma_descriptor_memory_controller)
         
         # If we have any CMACCs, make a memory controller for the kernel ports
         self._max_cmacc_memory = 0
@@ -358,8 +328,6 @@ class Firmware:
             # Write the TCL that will generate the IP for the AXI memory controllers
             memory_tcl = self.cache_memory_controller.generate_ip_tcl(ip_directory)
             memory_tcl += self.instruction_memory_controller.generate_ip_tcl(ip_directory)
-            memory_tcl += self.dac_dma_descriptor_memory_controller.generate_ip_tcl(ip_directory)
-            memory_tcl += self.adc_dma_descriptor_memory_controller.generate_ip_tcl(ip_directory)
             
             if self._num_cmaccs > 0:
                 memory_tcl += self.cmacc_kernel_memory_controller.generate_ip_tcl(ip_directory)
@@ -440,13 +408,12 @@ class Firmware:
             # First slave is the RFDC IP
             slaves = 1
 
-            # One slave port for each AXIS switch
+            # Add a slave if there's an ADC input switch to the stream processing path
             if len([inp for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"]) > 0:
                 slaves += 1
 
-            # Kernel memory for CMACCs
-            if self._num_cmaccs > 0:
-                slaves += 1 
+            # Add a slave for the stream processing path input switch
+            slaves += 1 
 
             # One slave for the SYSREF capture block
             slaves += 1
@@ -492,11 +459,10 @@ class Firmware:
             #           PS AXI Slave HP0-1, 
             #           PL DDR C0-1,
             #           DAC Tile 0-3 Memory,
-            #           DAC and ADC DMA Descriptor Memory, 
             #           
             create_ip(f, name="hedgehog/memory_smartconnect", vlnv="xilinx.com:ip:smartconnect:1.0")
             set_property(f, name="hedgehog/memory_smartconnect", 
-                         properties={"NUM_MI": 13, 
+                         properties={"NUM_MI": 11, 
                                      "NUM_SI": self._memory_smartconnect_masters, 
                                      "NUM_CLKS": 4})
             connect_bd_net(f, f"hedgehog/memory_smartconnect/aclk", f"hedgehog/PS_AXI_clk")
@@ -772,13 +738,6 @@ class Firmware:
                 connect_bd_net(f, f"hedgehog/dac_tile{tile}_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
                 memory_smartconnect_slave += 1
             
-            # ------------------- DAC DMA Descriptor Memory -------------------- #
-            create_module(f, f"hedgehog/dac_dma_descriptor_memory", f"dac_dma_descriptor_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
-            connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aclk", seq_clk_pin)
-            connect_bd_net(f, f"hedgehog/dac_dma_descriptor_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
-            memory_smartconnect_slave += 1
-            
             # ------------------- DAC Real-Time DMAs -------------------- #
             for channel in range(self.NUM_DACS):
                 tile = channel // 4
@@ -789,13 +748,11 @@ class Firmware:
                 set_property(f, 
                              f"hedgehog/dac{channel}_dma", 
                              properties={
-                                "HAS_DECIMATION": self.config[f"rfdc"]["dac"]["dma_has_decimation"][channel],
-                                "HAS_NARROWING": self.config[f"rfdc"]["dac"]["dma_has_narrowing"][channel],
                                 "ADDRESS_WIDTH": next_highest_power_of_2(
                                                     self.config[f"dac_tile{tile}_sample_memory"]["size_bits"] 
                                                     // self.config[f"rfdc"]["dac"]["channel_interface_width"][channel], 
                                                 log=True),
-                                "DESCRIPTOR_MEM_ADDR_WIDTH": next_highest_power_of_2(self.config["dac_dma_descriptor_memory"]["size_bits"] // 64, log=True)})
+                                "DESCRIPTOR_FIFO_DEPTH": self.config[f"rfdc"]["dac"]["dma_fifo_depth"][channel]})
                 connect_bd_net(f, f"hedgehog/dac{channel}_dma/clk", seq_clk_pin)
                 connect_bd_net(f, f"hedgehog/dac{channel}_dma/nrst", seq_clk_peripheral_aresetn)
 
@@ -818,21 +775,11 @@ class Firmware:
                 connect_bd_net(f, f"hedgehog/dma_trigger_dataport/dac{channel}_dma", f"hedgehog/dac{channel}_dma/trigger")
                 connect_bd_net(f, f"hedgehog/dma_running_dataport/dac{channel}_dma", f"hedgehog/dac{channel}_dma/running")
                 
-                # Connect DAC Descriptor BRAMs and to the DMA                
-                connect_bd_intf_net(f, f"hedgehog/dac_dma_descriptor_memory/mem{channel}", f"hedgehog/dac{channel}_dma/DESCRIPTOR_MEM")
-
                 # Connect the data input of the DMA to zeros in order to suppress the
                 # critical warning vivado will generate
                 create_ip(f, name=f"hedgehog/xlconst_dac{channel}_dma_data_in", vlnv="xilinx.com:ip:xlconstant:1.1")
                 set_property(f, name=f"hedgehog/xlconst_dac{channel}_dma_data_in", properties={"CONST_WIDTH": 32, "CONST_VAL": 0})
                 connect_bd_net(f, f"hedgehog/xlconst_dac{channel}_dma_data_in/dout", f"hedgehog/dac{channel}_dma/data_in")
-            
-            # ------------------- ADC DMA Descriptor Memory -------------------- #
-            create_module(f, f"hedgehog/adc_dma_descriptor_memory", f"adc_dma_descriptor_axi_memory")
-            connect_bd_intf_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi", f"hedgehog/memory_smartconnect/M{memory_smartconnect_slave:02d}_AXI")
-            connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aclk", seq_clk_pin)
-            connect_bd_net(f, f"hedgehog/adc_dma_descriptor_memory/s_axi_aresetn", seq_clk_peripheral_aresetn)
-            memory_smartconnect_slave += 1
             
             # ------------------- ADC Real-Time DMAs -------------------- #
             for d in range(self.NUM_ADCS):
@@ -842,10 +789,8 @@ class Firmware:
                 set_property(f, 
                              name=f"hedgehog/adc{d}_dma", 
                              properties={
-                                "HAS_DECIMATION": self.config[f"rfdc"]["adc"]["dma_has_decimation"][channel],
-                                "HAS_NARROWING": self.config[f"rfdc"]["adc"]["dma_has_narrowing"][channel],
                                 "DATA_WIDTH": self.config["stream_processing_path"]["width"],
-                                "DESCRIPTOR_MEM_ADDR_WIDTH": next_highest_power_of_2(self.config["adc_dma_descriptor_memory"]["size_bits"] // 64, log=True)})
+                                "DESCRIPTOR_FIFO_DEPTH": self.config[f"rfdc"]["adc"]["dma_fifo_depth"][channel]})
                 connect_bd_net(f, f"hedgehog/adc{d}_dma/clk", seq_clk_pin)
                 connect_bd_net(f, f"hedgehog/adc{d}_dma/nrst", seq_clk_peripheral_aresetn)
                 
@@ -867,21 +812,17 @@ class Firmware:
                 connect_bd_intf_net(f, f"hedgehog/sequencer_bus_decoder/adc{d}_dma", f"hedgehog/adc{d}_dma/master_bus")
                 connect_bd_net(f, f"hedgehog/dma_trigger_dataport/adc{d}_dma", f"hedgehog/adc{d}_dma/trigger")
                 connect_bd_net(f, f"hedgehog/dma_running_dataport/adc{d}_dma", f"hedgehog/adc{d}_dma/running")
-                
-                # Connect to descriptor memory
-                connect_bd_intf_net(f, 
-                                    f"hedgehog/adc{d}_dma/descriptor_mem", 
-                                    f"hedgehog/adc_dma_descriptor_memory/mem{d}")
             
             # ------------------- Stream Processing Path -------------------- #
             
-            # Create an AXI switch for multiplexing the ADC outputs to the stream processing path
             # Some ADCs will be directly connected to the stream input path input switch, and the remainder
             # will have their own switch
+            # Determine these quantities so that we know how many ports the stream processing path input switch will need
             adc_direct_inputs = [inp["channel"] for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC"]
             adc_switch_inputs = [f"ADC{i}" for i in range(self.NUM_ADCS) if i not in adc_direct_inputs]
             num_adc_switch_outputs = len([inp for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC_switch"])
             
+            # Now create the input switch itself
             create_ip(f, name="hedgehog/stream_processing_input_switch", vlnv="xilinx.com:ip:axis_switch:1.1")
             set_property(f, name="hedgehog/stream_processing_input_switch", 
                              properties="CONFIG.TDATA_NUM_BYTES.VALUE_SRC USER "
@@ -908,7 +849,7 @@ class Firmware:
             connect_bd_net(f, f"hedgehog/stream_processing_input_switch/s_axi_ctrl_aclk", seq_clk_pin)
             connect_bd_net(f, f"hedgehog/stream_processing_input_switch/s_axi_ctrl_aresetn", seq_clk_peripheral_aresetn)
                 
-                
+            # Connect the switch's control port to the lite crossbar and assign addresses
             connect_bd_intf_net(f, 
                                 f"hedgehog/lite_crossbar/M{lite_crossbar_slave:02d}_AXI", 
                                 f"hedgehog/stream_processing_input_switch/S_AXI_CTRL")
@@ -922,7 +863,7 @@ class Firmware:
             # ------------------- ADC Input Switch -------------------- #
             if num_adc_switch_outputs > 0:
                 
-                # Create the switch and connect it to the AXI network
+                # Create a switch for the remaining ADCs not directly connected to the input switch
                 create_ip(f, name="hedgehog/adc_input_switch", vlnv="xilinx.com:ip:axis_switch:1.1")
                 set_property(f, name="hedgehog/adc_input_switch", 
                                 properties="CONFIG.TDATA_NUM_BYTES.VALUE_SRC USER "
@@ -949,7 +890,7 @@ class Firmware:
                 connect_bd_net(f, f"hedgehog/adc_input_switch/s_axi_ctrl_aclk", seq_clk_pin)
                 connect_bd_net(f, f"hedgehog/adc_input_switch/s_axi_ctrl_aresetn", seq_clk_peripheral_aresetn)
                 
-                
+                # Connect the switch's control port to the lite crossbar
                 connect_bd_intf_net(f, 
                                 f"hedgehog/lite_crossbar/M{lite_crossbar_slave:02d}_AXI", 
                                 f"hedgehog/adc_input_switch/S_AXI_CTRL")
@@ -960,7 +901,7 @@ class Firmware:
                               self.config["stream_processing_path"]["adc_input_switch"]["axi_address"], 
                               self.config["stream_processing_path"]["adc_input_switch"]["axi_size_bits"] // 8)
             
-            # Connect the ADC DMA outputs to the ADC input switch if they're not directly connected to the input switch
+            # Connect the ADC DMA outputs to the ADC switch if they're not directly connected to the main input switch
             adc_input_switch_master = 0
             direct_connections = [inp["channel"] for inp in self.config["stream_processing_path"]["inputs"] if inp["kind"] == "ADC"]                
             for channel in range(self.NUM_ADCS):
@@ -1556,14 +1497,6 @@ class Firmware:
                         offset=self.config["stream_processing_path"][f"cmacc_kernel_memory_controller"]["base_address"], 
                         range=self._num_cmaccs*self._max_cmacc_memory*4, 
                         addr_seg=f"hedgehog/cmacc_kernel_memory/" + self.config["stream_processing_path"][f"cmacc_kernel_memory_controller"]["segment"])
-                
-                for t,count in [("dac", self.NUM_DACS), 
-                                ("adc", self.NUM_ADCS)]:
-                    assign_bd_address(f, 
-                        target_address_space=target_address_space, 
-                        offset=self.config[f"{t}_dma_descriptor_memory"]["address"], 
-                        range=count*self.config[f"{t}_dma_descriptor_memory"]["size_bits"] // 8, 
-                        addr_seg=f"hedgehog/{t}_dma_descriptor_memory/" + self.config[f"{t}_dma_descriptor_memory"]["segment"])
                 
                 assign_bd_address(f, 
                     target_address_space=target_address_space, 

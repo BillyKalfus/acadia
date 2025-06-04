@@ -6,16 +6,16 @@ import builtins
 import re
 import json
 from dataclasses import dataclass
-from functools import wraps
-from typing import Union, Callable, Literal
+from functools import wraps, reduce
+from typing import Union, Callable, Literal, Any, List, Dict
 from binascii import hexlify,unhexlify
+from operator import or_
 
 import numpy as np
 
-from .waveforms import WaveformMemory, ChannelWaveformMemory, FixedChannelWaveformMemory, DecimatedChannelWaveformMemory, WindowedConstantWaveformMemory
+from .waveforms import WaveformMemory
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
-from .sequencer import Sequencer
-from .dma import DMA
+from .sequencer import Sequencer, Source, is_numeric
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
 from .firmware import Firmware
 from .firmware_configurations import CONFIG_200
@@ -29,15 +29,18 @@ __all__ = ["DMASynchronizer",
            "StreamConfiguration"
            "Acadia"]
 
-logger = logging.getLogger()
+logger = logging.getLogger("acadia")
 
 class DMASynchronizer(Synchronizer):
     """
     Synchronizes DMA triggers.
     """
     
-    DMA = 1
-    BARRIER = 2
+    ARBITRARY_CONTINUED = 0
+    ARBITRARY = 1
+    CONSTANT_CONTINUED = 2
+    DWELL = 3
+    BARRIER = 4
     
     def __call__(self, *args, **kwargs):
         if not isinstance(Processor.active_processor(), Sequencer):
@@ -50,28 +53,435 @@ class DMASynchronizer(Synchronizer):
         self._dma_trigger = kwargs.pop("trigger", True)
         self._dma_block = kwargs.pop("block", self._dma_trigger) # don't block if we don't trigger
         return super().__call__(*args, **kwargs)
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # Get a reference to the Sequencer
-        proc = Processor.active_processor()
-        
-        # Keep track of the aggregate values of all the calls
-        # Store the mask so that if we don't block, we can know which DMAs were triggered
-        self._acadia = None
-        
-        # Keep track of the total runtime for each channel since the last 
-        # barrier (or since the start, if there haven't been any barriers 
-        # yet) so that when we do add one, we can know where to add it
-        channel_lengths = {}
-        
-        # Keep track of when every channel in the synchronizer had its first 
-        # entry pushed to the FIFO. We need to know this because we'll have a
-        # problem if we push to the FIFO too close to when we trigger
-        latest_first_call = 0
-        channels_used = []
-        
-        self.dma_mask = 0
 
+    @staticmethod
+    def create_schedules(calls) -> List[Dict[Channel,List[Dict[str,Any]]]]:
+        """
+        Converts a sequence of function calls into individual
+        subschedules separated by barriers. The complete schedule is a list, and
+        each element of this list is a dict representing a single subschedule.
+        The dict's keys are channels, and the values are lists containing
+        all the commands issued on the channel during the subschedule.
+        These commands are themselves dicts containing necessary arguments
+        for commanding the DMA.
+        """
+        schedules = [{}]
+
+        for idx_call,call in enumerate(calls):
+            function,acadia,args,kwargs,retval = call.values()
+
+            # For DMA command calls, aggregate the details of the call and organize them by channel
+            if function in [DMASynchronizer.ARBITRARY, DMASynchronizer.ARBITRARY_CONTINUED, DMASynchronizer.CONSTANT_CONTINUED, DMASynchronizer.DWELL]:
+                
+                if "length" not in kwargs:
+                    raise KeyError(f"Unable to locate length in kwargs {kwargs}")
+
+                # Extract and validate the channel
+                if "channel" not in kwargs:
+                    raise KeyError(f"Unable to locate channel in kwargs {kwargs}")
+                
+                channel = kwargs["channel"]
+
+                if not isinstance(channel, Channel):
+                    raise TypeError(f"Channel must be of type `Channel` (received"
+                                    f" {channel}).")
+
+                # Note that the values of the function constants are chosen
+                # to match the command values for command_dma, so we can pass it 
+                # right into the eventual function call arguments
+                command_dict = {
+                    "length": kwargs["length"],
+                    "command_type": function,
+                    "length_is_minus_one": kwargs.get("length_is_minus_one", False)
+                }
+                if function == DMASynchronizer.ARBITRARY:
+                    if "address" not in kwargs:
+                        raise KeyError(f"Unable to locate address in kwargs for arbitrary DMA command: {kwargs}")
+
+                    command_dict["address"] = kwargs["address"]
+                    
+                schedule_dict = schedules[-1]
+                if channel in schedule_dict:
+                    schedule_dict[channel].append(command_dict)
+                else:
+                    schedule_dict[channel] = [command_dict]
+                
+            elif function == DMASynchronizer.BARRIER:
+                # Start a new subschedule, new commands are automatically
+                # added to the last one in the list
+                schedules.append({})
+
+            else:
+                raise ValueError(f"Synchronizer called with unrecognized"
+                                 f" function code: {function}")
+
+        return schedules
+
+    @staticmethod
+    def calculate_subschedule_dwells(schedule, indeterminate_types: List, last: bool = False) -> tuple[Dict[Channel,List[Dict[str,Any]]], Operation, Dict]:
+        """
+        Given a list of subschedules within a single synchronizer, the 
+        barriers are reconciled by inserting dwells on channels prior to each 
+        barrier so that all channels are aligned in their command execution 
+        at the point of the barrier. The total length of the subschedule is 
+        calculated by first finding the longest total sequence on any channel in the 
+        subschedule, and defining its endpoint to be the total length of the 
+        subschedule. Then, dwells are inserted on any other channels 
+        that are used after the barrier, so that the total length of all their 
+        commands in the current subschedule matches the longest one. This means that 
+        at the point when the longest sequence completes, the sequences for all other 
+        channels are completing as well, thus guaranteeing that all channels begin the 
+        following subschedule at the same time (the time of the barrier).
+
+        For example, let's assume that in a given subschedule, channel n has a sequence 
+        of commands with total length l_n and another channel m has a sequence of total 
+        length l_m. If l_m > l_n, then a dwell will be inserted on channel n of length 
+        l_m - l_n so that both channels are completing their subschedules at a time 
+        l_m after they started. If this subschedule is followed by another one with commands
+        on a third channel p, then a dwell will be inserted in the current subschedule
+        on channel p of length l_m, so that it also begins its subschedule at the same time
+        as channels m and n.
+
+        Because some commands may be of indeterminate length, determining the length
+        of a subschedule (and therefore, deciding dwells to precede future commands) 
+        is not always possible (or can lead to unacceptable overhead to compute 
+        them at runtime). Therefore, when a command in a subschedule has an indeterminate 
+        length, the following strategy is used:
+
+        - All other channels that require a dwell compensating for the length of the 
+        indeterminate command will receive a dwell of *matching* length. 
+        
+        - The channel with the most indeterminate commands is assumed to be the 
+        longest sequence, regardless of the lengths of any other channel, 
+        determinate or not.
+
+        - Dwells are calculated for determinate and indeterminate commands separately. 
+        
+        The following examples demonstrate this strategy:
+        
+        - Suppose that channel m has a determinate command of length 5 and an 
+        indeterminate command of length l_m, and a channel n has a determinate 
+        command of length 3 and an indeterminate command of length l_n. If it 
+        cannot be known at compile time whether l_m = l_n, an error is raised. 
+        The actual value need not be known, they just must be known to be equal. 
+        If they are equal, then channel n will receive a dwell of length 5-3 = 2 
+        to compensate for the difference in determinate command lengths. The total
+        length of both subschedules is then l_m + 5.
+
+        - Suppose that channel m has a determinate command of length 5 and an 
+        indeterminate command of length l_m, and a channel n has a determinate 
+        command of length 3 and two indeterminate commands of length l_n1 and l_n2.
+        If it cannot be known at compile time whether l_m is equal to l_n1 or l_n2, 
+        an error is raised. Suppose without loss of generality that l_m = l_n1. 
+        Then, channel m will receive a dwell of length l_n2 so that the total
+        length of indeterminate commands on both channels is l_n1 + l_n2. Channel n 
+        will also receive a dwell of length 5-3 = 2 to compensate for the 
+        difference in determinate commands. The total length of both subschedules 
+        is then l_n1 + l_n2 + 5.
+
+        Equality between indeterminate command lengths can only be established 
+        when the two lengths are Source objects referring to the same Register 
+        or DSP (but they need not be the same object). Otherwise, they are 
+        assumed to be unequal.
+
+        Only Registers and DSPs are valid for use as indeterminate command sources.
+        Any other source will throw an error.
+
+        Lengths given by Symbols and Operations are assumed to be determinate, 
+        since the values of Symbols and Operations are required to be 
+        resolveable by assembly time. Length calculations are kept symbolic throughout
+        compilation, so Symbols and Operations that are unassigned or unresolveable 
+        at compile time are still assumed to be determinate and will be computed at 
+        assembly time.
+        """
+
+        # Let's first validate the subschedules and make sure that 
+        # everything is valid and that they contain all the necessary information
+        
+        if not isinstance(schedule, dict):
+            raise TypeError(f"Received schedule of invalid type: {type(schedule)}")
+
+        logger.debug(f"Schedule contains {len(schedule)} channels")
+
+        # Keep track of all the indeterminate commands scheduled on each channel, so that
+        # we can make sure that they're all resolveable
+        # While we're iterating, we'll also gather the lengths of all the determinate commands
+        # so that we can compute dwells for these later
+        indeterminate_commands = {c: [] for c in schedule.keys()}
+        determinate_lengths = {c: 0 for c in schedule.keys()}
+        for channel,channel_schedule in schedule.items():
+            if not isinstance(channel, Channel):
+                raise TypeError(f"Received channel of invalid type: {type(channel)}")
+
+            if not isinstance(channel_schedule, list):
+                raise TypeError(f"Received channel schedule of invalid type: {type(channel_schedule)}")
+
+            logger.debug(f"Processing commands in subschedule for channel"
+                         f" {str(channel)} ({len(channel_schedule)} commands)")
+
+            for command in channel_schedule:
+                if not isinstance(command, dict):
+                    raise TypeError(f"Found command of invalid type: {type(command)}")  
+                
+                if "length" not in command:
+                    raise KeyError(f"Command missing length")
+
+                if "command_type" not in command:
+                    raise KeyError(f"Command missing command type")
+
+                if command["command_type"] == DMASynchronizer.ARBITRARY and "address" not in command:
+                    raise KeyError(f"Arbitrary command missing address")
+
+                length = command["length"]
+                if isinstance(length, tuple(indeterminate_types)):
+                    # Either a register or a DSP
+                    logger.debug(f"Found indeterminate command from source {str(length)}")
+                    indeterminate_commands[channel].append(command)
+                    
+                elif np.issubdtype(type(length), int) or isinstance(length, (Symbol, Operation)):
+                    if command["length_is_minus_one"]:
+                        determinate_lengths[channel] += length + 1
+                    else:
+                        determinate_lengths[channel] += length
+                else:
+                    raise TypeError(f"Received command length of invalid type: {type(length)}")
+
+        logger.debug(f"Command types validated."
+                    f" Indeterminate-length command counts:"
+                    f" {', '.join([f'{c}: {len(l)}' for c,l in indeterminate_commands.items()])}")
+
+        # All the types have been validated. If this isn't the last schedule in the synchronizer,
+        # we need to make sure that the conditions are met for us to insert the appropriate dwells
+        # for the next one
+        if last:
+            logger.debug(f"No dwells needed for last subschedule in synchronizer")
+            return {}
+
+        # In preparation for the upcoming barrier, we need to make sure that we can insert 
+        # dwells of appropriate length on all the channels with indeterminate commands
+        # We'll sort the grouping of channels with indeterminate commands by the number of indeterminate
+        # commands they have (in reverse order, so that the channel with the most indeterminate commands is first)
+        indeterminate_commands_channels_sorted = sorted(indeterminate_commands.keys(), key=lambda l: len(indeterminate_commands[l]), reverse=True)
+        
+        # We need to make sure that the sets of indeterminate commands on every other channel 
+        # are each a subset of those on the channel with the most
+        longest_indeterminate_sequence = indeterminate_commands[indeterminate_commands_channels_sorted[0]]
+        logger.debug(f"Longest indeterminate sequence (on channel {indeterminate_commands_channels_sorted[0]}) has {len(longest_indeterminate_sequence)} command(s)")
+
+        for channel in indeterminate_commands_channels_sorted:
+            for command in indeterminate_commands[channel]:
+                if command not in longest_indeterminate_sequence:
+                    raise ValueError(f"Command on channel {channel}"
+                                    f" not found in longest sequence.")
+
+        logger.debug(f"Indeterminate subsets validated.")
+
+        # Use the lists generated above to determine the dwells we should add to each 
+        # channel to compensate for the other channels' indeterminate commands
+        logger.debug(f"Reconciling indeterminate dwells")
+        dwell_commands = {c: [] for c in schedule.keys()}
+        for channel,channel_schedule in schedule.items():
+            for command in longest_indeterminate_sequence:
+                if command not in channel_schedule:
+                    cmd = {k:v for k,v in command.items() if k != "command_type"}
+                    cmd["command_type"] = DMASynchronizer.DWELL
+                    dwell_commands[channel].append(cmd)
+        logger.debug("Reconciled.")
+
+        # Add the determinate dwells
+        # We need dedicated logic to check if the lengths list has only one element because if we pass only one
+        # argument to max(), it will try to iterate over it, and if we pass the argument to max() as a list with
+        # only one element, the compiler won't detect the list argument as numeric and will fail to compile it
+        # Fortunately, this is also a good opportunity to avoid creating NOPs, because when there's only one command
+        # of determinate length, we can avoid inserting a nulled command on the channel that it pushes to
+        if len(determinate_lengths) == 1:
+            longest_determinate_sequence_length = list(determinate_lengths.values())[0]
+            longest_determinate_sequence_channel = list(determinate_lengths.keys())[0]
+            logger.debug(f"Only one determinate-length command found in subschedule"
+                        f" (on channel {str(longest_determinate_sequence_channel)},"
+                        f" length {longest_determinate_sequence_length}),"
+                        f" creating dwell of identical length for other channels in subschedule")
+            for channel in schedule.keys():
+                if channel != longest_determinate_sequence_channel:
+                    dwell_commands[channel].append({
+                        "command_type": DMASynchronizer.DWELL,
+                        "length": longest_determinate_sequence_length,
+                        "length_is_minus_one": False
+                    })
+        else:
+            longest_determinate_sequence_length = Operation(builtins.max, *list(determinate_lengths.values()))
+            logger.debug(f"Determinate dwells validated."
+                        f" Channels with determinate-length commands:"
+                        f" {', '.join([f'{c}: {l}' for c,l in determinate_lengths.items()])}")
+            
+            for channel,channel_schedule in schedule.items():
+                dwell_commands[channel].append({
+                    "command_type": DMASynchronizer.DWELL,
+                    "length": longest_determinate_sequence_length - determinate_lengths[channel],
+                    "length_is_minus_one": False
+                })
+
+        return dwell_commands, longest_determinate_sequence_length, longest_indeterminate_sequence
+
+
+    @staticmethod
+    def merge_schedules(schedules: List, indeterminate_types: List) -> Dict[Channel,List[Dict[str,Any]]]:
+        """
+        Combine schedules, adding padding as necessary to align channel 
+        schedules are barrier boundaries. Note that the elements of 
+        the provided argument will be modified, extending the individual
+        schedules with dwells as necessary.
+
+        The return value is a single combined schedule for all channels
+        involved in any provided schedules.
+        """
+        # Determine the dwells associated with each sub-schedule 
+        # (except for the last one, since no dwell is needed for that)
+        logger.debug(f"Merging {len(schedules)} subschedules")
+        for idx_schedule in range(len(schedules)-1):
+            logger.debug(f"Calculating dwells for subschedule {idx_schedule}")
+            dwell_commands, longest_determinate_sequence_length, longest_indeterminate_sequence = DMASynchronizer.calculate_subschedule_dwells(schedules[idx_schedule], indeterminate_types)
+            
+            # Add dwells to channels that need them
+            logger.debug(f"Subschedule {idx_schedule} has {len(dwell_commands)} channels with added alignment dwells")
+            for channel,channel_dwells in dwell_commands.items():
+                logger.debug(f"{str(channel)}: {len(channel_dwells)} dwells")
+                schedules[idx_schedule][channel].extend(channel_dwells)
+
+            # Take the list of dwells created for this sub-schedule and
+            # add dwells for channels used in future sub-schedules that 
+            # didn't have anything scheduled here
+            logger.debug(f"Adding dwells to channels in future subschedules")
+            for idx_next_schedule in range(idx_schedule+1, len(schedules)):
+                logger.debug(f"Examining future subschedule {idx_next_schedule}")
+                for channel in schedules[idx_next_schedule].keys():
+                    if channel in schedules[idx_schedule]:
+                        logging.debug(f"Channel {str(channel)} already in current schedule, no compensating dwells added")
+                    else:
+                        # We found a channel in a future subschedule that doesn't have 
+                        # anything in the current subschedule, so we need to add enough dwells
+                        # to compensate for this full subschedule
+                        logging.debug(f"Channel {str(channel)} found in future subschedule {idx_next_schedule}"
+                                      f" with no commands in the current subschedule ({idx_schedule})")
+                        new_schedule = []
+                        for cmd in longest_indeterminate_sequence:
+                            new_cmd = {k:v for k,v in cmd.items() if k != "command_type"}
+                            new_cmd["command_type"] = DMASynchronizer.DWELL
+                            new_schedule.append(new_cmd)
+
+                        logging.debug(f"Added {len(new_schedule)} indeterminate dwells to {str(channel)}")
+                        
+                        # Finally, add the determinate part of the current subschedule
+                        new_schedule.append({
+                            "command_type": DMASynchronizer.DWELL,
+                            "length": longest_determinate_sequence_length, 
+                            "length_is_minus_one": False
+                        })
+
+                        # Since this channel has no entry in the master list, 
+                        # we can just assign it here
+                        schedules[idx_schedule][channel] = new_schedule
+        
+        # We've now properly aligned every sub-schedule and added dwells to them, so we can combine them all
+        logger.debug(f"Combining all compensated subschedules")
+        combined_schedules = {}
+        for idx_schedule,schedule in enumerate(schedules):
+            logger.debug(f"Adding commands for subschedule {idx_schedule}")
+            for channel, channel_schedule in schedule.items():
+                logger.debug(f"Adding {len(channel_schedule)} commands for channel {str(channel)}")
+                if channel not in combined_schedules:
+                    combined_schedules[channel] = []
+                combined_schedules[channel].extend(channel_schedule)
+
+        return combined_schedules
+
+    @staticmethod
+    def calculate_trigger_delay(
+        combined_schedules,
+        is_dma_bus_port_pipelined: List[bool],
+        is_dma_trigger_dataport_bus_port_pipelined: bool,
+        dma_trigger_dataport_output_pipeline_cycles: List[bool],
+        dma_fifo_latencies: Dict[str,int]
+    ) -> int:
+        """
+        There's a small latency before the descriptor appears at the DMA FIFO output after pushing to it.
+        Because of this, we can't trigger immediately after pushing to the DMA FIFO. if there
+        are enough other instructions between when we push the first command to all channels and when we 
+        trigger, this could make up for it, but if there aren't, we need to delay manually 
+        
+        First note that the DMA receives the trigger synchronously, so when 
+        trigger goes high, the DMA loads the FIFO output at the next cycle. This means
+        that at the latest, the FIFO must update its output with the newly-pushed
+        data at the same edge that trigger is raised high.
+         
+        We first need to know how long data takes to propagate through the FIFO.
+        Let's define a latency of zero to mean that the FIFO is combinational; if we
+        push to the FIFO, it immediately appears at the output, and in principle one 
+        could raise trigger in the same cycle. A latency of 1 means that we could
+        trigger in the next cycle immediately after pushing. Because of the architecture
+        of the sequencer's bus, we can't trigger in the same cycle as we push to the FIFO, 
+        so if the FIFO has a latency of 1, we don't need to insert any delays.
+        
+        Simulation tells us the FIFO latency, and this is stored in the firmware configuration.
+        Now, the bus also doesn't necessarily have the same propagation delay from the sequencer to the DMA
+        as it does to the trigger dataport. These values are stored in the firmware configuration, so we 
+        can start by figuring out which channel in the complete schedule has the longest propagation to its
+        DMA register interface, since this sets the limit on how long we need to wait 
+        """
+        push_propagations = {}
+        for channel in combined_schedules.keys():
+            push_propagations[channel] = 1 if is_dma_bus_port_pipelined[channel.num() + (0 if channel.is_dac else 16)] else 0
+
+        # Then we can find the same quantities for the trigger
+        trigger_propagations = {}
+        for channel in combined_schedules.keys():
+            trigger_propagations[channel] = dma_trigger_dataport_output_pipeline_cycles[channel.num() + (0 if channel.is_dac else 16)]
+            if is_dma_trigger_dataport_bus_port_pipelined:
+                trigger_propagations[channel] += 1
+
+        # Now we can find the required number of cycles between when the first push happens and when the trigger is applied
+        # based on when they actually reach the DMAs
+        required_delays = {}
+        for channel in combined_schedules.keys():
+            # If the sequencer could trigger in the same cycle as pushing to the FIFO, how far apart would they arrive at the DMA?
+            push_to_trigger_time = trigger_propagations[channel] - push_propagations[channel]
+            
+            # So, determine how many delay cycles that we would still need in order to ensure that the trigger arrives
+            # a sufficient number of cycles after we push
+            required_delays[channel] = dma_fifo_latencies[channel] - push_to_trigger_time
+        
+        # We only need as much latency as is necessary to appropriately separate 
+        # the first FIFO push for a given channel and its corresponding trigger. 
+        # However, if we write multiple times to a FIFO, this counts as cycles that
+        # separate the first push from the trigger, so we don't need to add as many
+        # NOPs
+        # Therefore, we'll figure out how many pushes we have in the schedule after 
+        # we've added the first push to each necessary channel.
+        # DMA commands were added in an interleaved way, so all we need to do is figure out
+        # how many commands are in the schedule across all channels after the first one from each
+        num_pushes_after_last_first_push = sum([len(s)-1 for s in combined_schedules.values()])
+
+        # Now we'll figure out how many cycles in total we need between the push and the trigger
+        # TODO: if different DMAs have different amounts of required latency, we could
+        # determine individually how much each channel needs. we'll ignore this for
+        # now and just use the DMA that requires the longest delay, and verify that
+        # we have at least that much. it will be typical that the propagation for both 
+        # the DMA registers and the trigger dataport will be the same for all the DMAs 
+        # anyway
+        required_delay = max(required_delays.values())
+        
+        return max(0, required_delay - num_pushes_after_last_first_push)
+
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):        
+        self._acadia = None
+
+        logger.debug(f"DMA synchronizer exited with {len(self._calls)} function calls, processing commands")
+
+        if len(self._calls) == 0:
+            raise ValueError("Empty synchronizer")
+        
+        # Extract an acadia object from one of the calls
         for idx_call,call in enumerate(self._calls):
             function,acadia,args,kwargs,retval = call.values()
             
@@ -80,136 +490,61 @@ class DMASynchronizer(Synchronizer):
             elif acadia is not self._acadia:
                 raise ValueError(f"Unable to synchronize different instances"
                                  f" of `Acadia`")
-                
-            if function == DMASynchronizer.DMA:
-                if "channel" not in kwargs:
-                    raise KeyError(f"Unable to locate channel in kwargs {kwargs}")
-                
-                if "length" not in kwargs:
-                    raise KeyError(f"Unable to locate length in kwargs {kwargs}")
-                
-                channel = kwargs['channel']
-                length = kwargs["length"]
-                
-                if not isinstance(channel, Channel):
-                    raise TypeError(f"Channel must be of type `Channel` (received"
-                                    f" {channel}).")
-                
-                if not isinstance(length, (int, Symbol, Operation)):
-                    raise TypeError(f"Received invalid length: {length}")
-                
-                if channel in channel_lengths:
-                    channel_lengths[channel] += [length]
-                else:
-                    channel_lengths[channel] = [length]
-                    
-                self.dma_mask |= acadia.get_dma(channel).mask
-                acadia.channel_dma_stream(**kwargs)
-                if channel not in channels_used:
-                    latest_first_call = idx_call
-                    channels_used.append(channel)
-                
-            elif function == DMASynchronizer.BARRIER:
-                # We first need to figure out the time in the block at which 
-                # the barrier exists.
-                total_channel_lengths = {}
-                for channel,lengths in channel_lengths.items():
-                    logger.debug(f"Combining lengths for channel {channel}:")
-                    total_channel_lengths[channel] = 0
-                    for length in lengths:
-                        logger.debug(f"\t{length}")
-                        total_channel_lengths[channel] = total_channel_lengths[channel] + length
 
-                # Reset channel lengths so that when we hit the next barrier 
-                # (if any) it only adds delays after this one
-                channel_lengths = {}
-                logger.debug(f"Total channel lengths at barrier insertion time: {total_channel_lengths}")
-                if len(total_channel_lengths) == 1:
-                    barrier_time = list(total_channel_lengths.values())[0]
-                else:
-                    barrier_time = Operation(builtins.max, *list(total_channel_lengths.values()))
-                                                
-                # Then, for every channel that has some action after the 
-                # barrier, we need to add a blank so that the next action 
-                # starts at the right time
-                future_channels = []
-                for call in self._calls[idx_call+1:]:
-                    if (call["function"] == DMASynchronizer.DMA 
-                            and call["kwargs"]["channel"] not in future_channels):
-                        future_channels.append(call["kwargs"]["channel"])
-                
-                for channel in future_channels:
-                    if channel in total_channel_lengths:
-                        pre_barrier_delay = barrier_time - total_channel_lengths[channel]
-                    else:
-                        pre_barrier_delay = barrier_time
+        # Create individual subschedules from the total list of calls
+        logger.debug("Creating subschedules")
+        schedules = DMASynchronizer.create_schedules(self._calls)
 
-                    acadia.channel_dma_stream(channel=channel,
-                                                length=pre_barrier_delay,
-                                                word_address=0,
-                                                fixed=True,
-                                                blank=True)
-                    
-                    if channel not in channels_used:
-                        latest_first_call = idx_call
-                        channels_used.append(channel)
-                
-            else:
-                raise ValueError(f"Synchronizer called with unrecognized"
-                                 f" function code: {function}")
-                
-        if self.dma_mask == 0:
-            raise ValueError("Empty synchronizer")
-        
+        logger.debug(f"Created {len(schedules)} subschedules")
+        for idx_schedule, schedule in enumerate(schedules):
+            count_str = ', '.join([f'{str(c)} ({len(l)} commands)' for c,l in schedule.items()])
+            logger.debug(f"Subschedule {idx_schedule}"
+                f" involves the following channels: {count_str}")
+
+        if len(schedules) == 1 and len(schedules[0]) == 0:
+            raise ValueError(f"Empty synchronizer")
+
+        # Insert dwells and combine the schedules 
+        combined_schedules = DMASynchronizer.merge_schedules(schedules, indeterminate_types=[self._acadia.sequencer().Register, self._acadia.sequencer().DSP])
+
+        # Now actually command the DMA to trigger
+        # For latency reasons discussed below, we'll interleave the channels that
+        # we push to, to maximize the time in between when a channel gets its first
+        # push and the eventual trigger
+        longest_schedule_length = max([len(s) for s in combined_schedules.values()])
+        for i in range(longest_schedule_length):
+            for channel, channel_schedule in combined_schedules.items():
+                if i < len(channel_schedule):
+                    command = channel_schedule[i]
+                    self._acadia.command_dma(channel=channel, **command)
+
+        dma_mask = reduce(or_, [((1 << c.num()) + (0 if c.is_dac else 16)) for c in combined_schedules.keys()])
+
         if self._dma_trigger:
-            # There's a certain latency associated with pushing to the DMA FIFO and 
-            # before the descriptor actually exits the memory, so we need to wait for this
-            required_latency = 0
-            
-            # Figure out if at least one of the channels in the calls is pipelined;
-            # if so, we'll need an extra cycle of trigger latency
-            for call in self._calls:
-                channel = call["kwargs"]['channel']
-                idx = channel.num() + (16 if not channel.is_dac else 0)
-                if self._acadia._firmware["sequencer_bus"]["dma_pipeline"][idx]:
-                    required_latency += 1
-                    break
-            
-            # 1 cycle for the data to propagate from the FIFO input to output 
-            # (this is when the address will appear at the descriptor memory read port)
-            required_latency += 1
-            
-            # Extra cycles for descriptor memory input and output pipeline cycles
-            # TODO: make this smarter, but for now we'll use the DAC pipeline latencies
-            required_latency += self._acadia._firmware["dac_dma_descriptor_memory"]["dma_port_input_pipeline"]
-            required_latency += self._acadia._firmware["dac_dma_descriptor_memory"]["dma_port_output_pipeline"]
-            
-            # We only need as much latency as is necessary to appropriately separate 
-            # the first FIFO push for a given channel and its corresponding trigger. 
-            # However, if we write multiple times to a FIFO, this counts as cycles that
-            # separate the first push from the trigger, so we don't need to add as many
-            # NOPs
-            # TODO: pushing to channel FIFOs should be reordered so that the first push
-            # to each channel happens as early as possible
-            # TODO: what happens if the first push (or more) gets translated into a NOP?
-            nops = required_latency - (len(self._calls) - latest_first_call)
+            nops = DMASynchronizer.calculate_trigger_delay(
+                combined_schedules,
+                is_dma_bus_port_pipelined=self._acadia._firmware["sequencer_bus"]["dma_pipeline"],
+                is_dma_trigger_dataport_bus_port_pipelined=self._acadia._firmware["sequencer_bus"]["dma_trigger_dataport"]["bus_pipeline"],
+                dma_trigger_dataport_output_pipeline_cycles=self._acadia._firmware["sequencer_bus"]["dma_trigger_dataport"]["pipeline"],
+                dma_fifo_latencies={c: self._acadia._firmware["rfdc"]["dac" if c.is_dac else "adc"]["dma_fifo_latency"][c.num()] for c in combined_schedules.keys()}
+            )
+
             for _ in range(nops):
-                proc.nop(comment=f"Trigger latency (latest first call at {latest_first_call},"
-                                 f" required latency {required_latency})")
+                self._acadia.sequencer().nop(comment=f"Delay accounting for DMA FIFO latency")
             
             # The only parent object that we could have had was an Acadia object,
             # so we know on which object we should call dma_trigger
             dma_trigger_device = self._acadia._firmware.sequencer_bus_decoder["dma_trigger"]
-            proc.bus_write(address=dma_trigger_device.address().value(),
-                            data=self.dma_mask,
+            self._acadia.sequencer().bus_write(address=dma_trigger_device.address().value(),
+                            data=dma_mask,
                             comment="Trigger DMAs")
 
         if self._dma_block:
             # Wait until all the DMAs in the mask have completed
             dma_running_device = self._acadia._firmware.sequencer_bus_decoder["dma_running"]
-            bus_op = proc.bus_read(dma_running_device.address().value(),
+            bus_op = self._acadia.sequencer().bus_read(dma_running_device.address().value(),
                         latency=self._acadia._bus_latency("dma_running"))
-            with proc.repeat_until(bus_op & self.dma_mask == 0):
+            with self._acadia.sequencer().repeat_until(bus_op & dma_mask == 0):
                 pass
 
         super().__exit__(exc_type, exc_val, exc_tb)
@@ -536,7 +871,6 @@ class Acadia:
         self.channel_synchronizer = DMASynchronizer(name="channel_synchronizer", allow_standalone=True)
         self.tile_synchronizer = RFDCSynchronizer(name="tile_synchronizer", allow_standalone=True)
         
-        self._create_dmas()
         self._create_cache()
         self._create_dac_arrays()
         self._create_cmacc_kernel_arrays()
@@ -564,18 +898,6 @@ class Acadia:
             size=self._firmware["sequencer_instruction_memory"]["size_bits"] // 8,
             return_map=True)  
         
-        self._dac_dma_descriptor_memory = [self._attach_memory(
-            address=(self._firmware["dac_dma_descriptor_memory"]["address"] 
-                    + i*(self._firmware["dac_dma_descriptor_memory"]["size_bits"] // 8)),
-            size=self._firmware["dac_dma_descriptor_memory"]["size_bits"] // 8,
-            return_map=True) for i in range(self._firmware.NUM_DACS)]
-                
-        self._adc_dma_descriptor_memory = [self._attach_memory(
-            address=(self._firmware["adc_dma_descriptor_memory"]["address"] 
-                    + i*(self._firmware["adc_dma_descriptor_memory"]["size_bits"] // 8)),
-            size=self._firmware["adc_dma_descriptor_memory"]["size_bits"] // 8,
-            return_map=True) for i in range(self._firmware.NUM_ADCS)]
-            
         for dac_mem in self.DACArray:
             self._attach_resource(dac_mem)
             
@@ -909,7 +1231,7 @@ class Acadia:
         RFClk.LMK.set_sync_mode(1)
         RFClk.LMK.set_sysref_mux(0)
 
-        # Set DCLK output dividers to 250 MHz and prepare for SYNC
+        # Set DCLK output dividers to generate all of the clocks at the PL clock rate and prepare for SYNC
         # Although the regular channel (non-sync) for the sync channel SDCLK_RFDC
         # isn't connected to anything, it needs to be set up in order for the
         # sync signal to be generated
@@ -1093,7 +1415,7 @@ class Acadia:
         return self._firmware["clk104_pl_clk"]["freq_hz"]
 
     def seconds_to_cycles(self, 
-                        t: Union[float, np.ndarray], 
+                        t: float, 
                         rounding_raise: bool = True, 
                         eps: float = 1e-6) -> Union[np.int32, np.ndarray]:
         """
@@ -1104,25 +1426,18 @@ class Acadia:
         ``eps`` away from the nearest integer. When ``False``, 
         all values are blindly rounded to the nearest integer.
         """
+        if not np.issubdtype(type(t), float):
+            raise TypeError(f"Input to seconds_to_cycles must be a float;"
+                            f" received {type(t)}")
+
         cycles = t * self.sequencer_clock_frequency()
-        rounded = np.rint(cycles).astype(np.int32)
-        if not rounding_raise:
-            return rounded
+        rounded = int(round(cycles))
 
-        abs_errs = np.abs(rounded - cycles)
-        if np.isscalar(t):
-            if abs_errs > eps:
-                raise ValueError(f"Time value {t} does not equal an integer"
-                                f" number of cycles (found {cycles}).")
-            return rounded
+        if rounding_raise and abs(rounded - cycles) > eps:
+            raise ValueError(f"Time value {t} does not equal an integer"
+                            f" number of cycles (found {cycles}).")
 
-        else:
-            amax = np.argmax(abs_errs)
-            if abs_errs[amax] > eps:
-                raise ValueError(f"Time value {t[amax]} does not equal an integer"
-                                    f" number of cycles (found {cycles[amax]}).")
-
-            return rounded
+        return rounded
 
     def delay_times_to_counter_values(self, 
                                     t: np.ndarray, 
@@ -1226,71 +1541,151 @@ class Acadia:
             return self.ADC(num)
         
         return self.DAC(num)
-
-    def get_dma(self, channel: Channel):
-        """
-        Get the DMA for a given channel.
-        
-        :param channel: Channel to get the DMA for
-        :type channel: :class:`Channel`
-        """
-        
-        return self._dac_dmas[channel.num()] if channel.is_dac else self._adc_dmas[channel.num()]
     
     # -------------- ABSTRACTIONS FOR JOINT PS-PL ROUTINES ----------- #
+
+    @staticmethod
+    def sequencer_dma_instruction_simplifier(instruction) -> bool:
+        """
+        This function should be provided as a simplifier function
+        to any STP instructions that may need to be removed due to
+        dwell optimization. At assembly time, this will check
+        whether the imm2 field of the instruction evaluates to -1, and
+        if so, it will return ``True`` to indicate that the instruction
+        should be replaced with a NOP.
+        """
+        imm2 = instruction.imm2
+        if np.issubdtype(type(imm2), int) and imm2 == -1:
+            return True
+        if isinstance(imm2, (Symbol, Operation)) and imm2.value() == -1:
+            return True
+
+        return False
     
     @requires_sequencer
-    def channel_dma_stream(self, channel, length, word_address, 
-                           decimate=0, fixed=False, blank=False):
+    def command_dma(self, 
+                    channel: Channel, 
+                    command_type: Literal[0,1,2,3,"continued arbitrary","arbitrary","continued constant","dwell"] = "arbitrary",
+                    **kwargs) -> None:
         """
-        Stream data with a channel DMA.
+        Command a channel's DMA. The DMA has four different commands that it can process, 
+        as provided by the ``command_type`` argument:
 
-        :param channel: Physical channel to capture from.
-        :type channel: :class:`Channel` or int
-        :param length: The length of the descriptor in cycles
-        :type length: int
-        :param word_address: The address of the DMA descriptor
-        :type word_address: int
-        :param decimate: Decimation amount
-        :type decimate: int, optional
-        :param fixed: If ``True``, the DMA output address will not increment
-        :type fixed: bool
-        :param blank: If ``True``, the output of the DMA never becomes valid
-            but the DMA runs as normal otherwise
-        :return: The descriptor requested for the DMA as returned by the 
-            `request_descriptor` instruction for :class:`DMA`.
-        :rtype: :class:`ProcessorInstruction`
-        """
+            - "continued arbitrary" instructs the DMA to increment its address register 
+                for a given number of cycles. The initial address value is the current 
+                value in the DMA's address register, allowing it to "continue" from a 
+                previous command.
+            - "arbitrary" instructs the DMA to first update its address register to a given value and 
+                then increment its address output for a given number of cycles.
+            - "continued constant" instructs the DMA to produce valid address outputs for a 
+                given number of cycles without incrementing its address, creating a stream of 
+                values at a constant address. The address used is the current value of the DMA
+                address register.
+            - "dwell" instructs the DMA to idle for a given number of cycles without 
+                producing any valid output, acting effectively as a delay between 
+                entries in the DMA FIFO.
 
-        if not isinstance(channel, Channel):
-            raise TypeError(f"Channel must be of type `Channel`;"
-                            f" received {channel}.")
-        
-        if isinstance(length, (int, float)) and length == 0:
-            return None
+        The arguments to the command depend on its type (when the "command" keyword is 
+        not provided; see below for corresponding syntax). For "arbitrary" commands, 
+        the keywords "address" and "length" must be provided. For all other commands, 
+        "length" must be provided. The presence of any other keyword arguments than what
+        the command requires raises an error.
+
+        When the keyword "length" is provided, one may optionally specify a keyword 
+        argument "length_is_minus_one"; if ``True``, the value of the "length" argument will be
+        interpreted as containing one less than the true length of the command. This is 
+        particularly useful for length arguments originating from real-time sources, such as cache, so
+        as to not require the sequencer to subtract one before issuing the DMA command.
+
+        As an alternative to the above keyword protocol, one may provide the raw value 
+        to be written to the DMA register by providing
+        the "command" keyword. When provided, the corresponding value is directly written to the DMA register
+        for the provided command type with no further processing. The format of the 
+        command argument depends on the command type:
+
+            - For a "continued arbitrary" command, this is a 16-bit length in cycles. 
             
-        # When we request the descriptor, we need to get the address aligned to
-        # 128 bits. We need the word address
-        dma = self._dac_dmas[channel.num()] if channel.is_dac else self._adc_dmas[channel.num()]
-        
-        descriptor = dma.request_descriptor(
-            word_address, 
-            length,
-            decimate=decimate,
-            fixed=fixed,
-            blank=blank)
-        
+            - For an "arbitrary" command, the lower 16 bits are a length in cycles 
+                and the upper 16 bits are a memory address in cycles.
+            
+            - For a "continued constant" command, this is a 32-bit length in cycles.
+            
+            - For a "dwell" command, this is a 32-bit length in cycles.
+
+        :param channel: Physical channel to command.
+        :type channel: :class:`Channel` or str
+        :param command_type: Type of command to issue to the DMA.
+        "type command_type: str or int
+        """
+
+        channel = self.channel(channel)
+
+        # Determine the command type
+        if np.issubdtype(type(command_type), int):
+            if command_type not in [0,1,2,3]:
+                raise ValueError(f"Invalid command type specifier: {command_type}")
+        elif isinstance(command_type, str):
+            if command_type == 'continued arbitrary':
+                command_type = 0
+            elif command_type == 'arbitrary':
+                command_type = 1
+            elif command_type == 'continued constant':
+                command_type = 2
+            elif command_type == 'dwell':
+                command_type = 3
+            else:
+                raise ValueError(f"Invalid command type specifier: {command_type}")
+        else:
+            raise TypeError(f"Command type specifier for command_dma must either be"
+                            f" str or int; received {type(command_type)}")
+
+        # Parse keyword arguments
+        # When "command" is provided, we can just write to the DMA regardless of what
+        # command type it is
+        if "command" in kwargs:
+            if len(kwargs) != 1:
+                raise KeyError(f"When \"command\" is specified as an argument to"
+                                f" ``command_dma``, no others may be. Found keywords"
+                                f" {list(kwargs.keys())}")
+            command = kwargs["command"]
+        else:
+            # Arbitrary command, try to extract both required arguments
+            if command_type == 1:
+                if "address" not in kwargs:
+                    raise KeyError(f"Address must be provided for arbitrary DMA command.")
+                address = kwargs.pop("address")
+
+            if "length" not in kwargs:
+                raise KeyError(f"Length must be provided for DMA command.")
+
+            length_is_minus_one = kwargs.pop("length_is_minus_one", False)
+
+            if len(kwargs) != 1:
+                raise KeyError(f"Extra keyword arguments found for command_dma: {list(kwargs.keys())}")
+
+            length_minus_one = kwargs["length"] if length_is_minus_one else kwargs["length"]-1
+            if command_type == 1:
+                command = (address << 16) | length_minus_one
+            else:
+                command = length_minus_one
+            
+    
         dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num()}_dma'
         device = self._firmware.sequencer_bus_decoder[dev_name]
-        
+
+        if np.issubdtype(type(command), int):
+            command_string = f"{command:08X}"
+        elif (isinstance(command, Symbol) and command.assigned) or (isinstance(command, Operation) and command.resolveable()):
+            command_string = f"{command.value()} (resolved from {command})"
+        else:
+            command_string = f"{command}"
+
         self._active_sequencer.bus_write(
             address=device.address().value(),
-            data=descriptor, 
-            comment=f"Add descriptor with parameters {descriptor.kwargs} to"
-                    f" FIFO for {'DAC' if channel.is_dac else 'ADC'}{channel.num()}")
-        
-        return descriptor
-    
+            data=command, 
+            simplifier=Acadia.sequencer_dma_instruction_simplifier,
+            comment=f"Command DMA for {channel}, type {command_type}: {command_string}")
+            
     def memory_region(self, 
                       specifier: Union[Channel, ManagedMemory, np.ndarray, str, StreamConfiguration, None]) -> callable:
         """
@@ -1364,39 +1759,41 @@ class Acadia:
     
     def create_waveform_memory(self,
                         channel: Channel,
-                        length: Union[int, float, np.ndarray] = 0.0,
-                        fixed_length: Union[float, Symbol, Operation] = 0.0,
-                        blank: bool = False,
-                        decimation: Union[int, None] = 1,
-                        region: Union[Channel, ManagedMemory, None, str] = None) -> ChannelWaveformMemory:
+                        length: Union[int, float, np.ndarray],
+                        decimation: int = 1,
+                        multiplicity: int = None,
+                        region: Union[Channel, ManagedMemory, None, str] = None) -> WaveformMemory:
         """
         Allocate a waveform. This function allows for a few different signatures; 
         the first argument is always a :class:`Channel` object. 
         argument ``length`` determines the required signature:
 
-        - If a ``float`` or a numpy float dtype, this should contain the length
-            of the waveform in seconds.
+        - If a ``float``, this should contain the length
+            of the waveform in seconds. The corresponding amount of memory will
+            be allocated, and potentially reduced by a decimation factor 
+            (if provided). Decimation is not allowed for DAC channels.
 
         - If a numpy array with a complex or float dtype, the waveform is 
             allocated so that the data in the array could be stored after 
             being converted to samples. The shape of the resulting waveform 
-            is also extracted from the argument. 
+            is chosen to match the argument. Decimation may not be provided.
 
         - If a numpy array with an integer dtype, the argument is assumed to
             contain the sample data that will eventually be stored in the 
             waveform. The last dimension of the array must be of length 2.
             Note that this does not store the sample data in any way; it just
-            uses it to determine the shape of aray must be allocated.
-            
+            uses it to determine the shape of aray must be allocated. 
+            Decimation may not be provided.
+
+        An optional multiplicity may be provided as either an int or a tuple,
+        in which case the waveform will be created as a multidimensional array 
+        with additional dimensions given by the multiplicity. The innermost
+        dimension(s) are still determined by the provided input as described above.
+             
         :param channel: Channel for the waveform
         :type channel: :class:`Channel`
         :param length: The length of the waveform; see description above
-        :type length: float, np.ndarray[complex], np.ndarray[float]
-        :param fixed_length: The length of the fixed part of the waveform, if any.
-        :type fixed_length: float, Symbol, or Operation
-        :param blank: Create a blank waveform. If ``True``, ``region`` must
-            be ``None``
-        :type blank: bool
+        :type length: float, np.ndarray
         :param decimation: Decimation for ADC waveforms
         :type decimation: int
         :param region: The memory region in which the WaveformMemory is stored
@@ -1423,9 +1820,9 @@ class Acadia:
         
         if decimation is None:
             decimation = 1
-        elif isinstance(decimation, float) and round(decimation) == round(decimation, 1):
+        elif np.issubdtype(type(decimation), int) or (np.issubdtype(type(decimation), float) and round(decimation) == round(decimation, 1)):
             decimation = int(round(decimation))
-        elif not isinstance(decimation, int):
+        else:
             raise TypeError(f"Decimation must be an integer;"
                                     f" received {decimation}")
         
@@ -1436,58 +1833,51 @@ class Acadia:
             raise ValueError(f"Decimation may only be 1 or a multiple of 4"
                              f" (received {decimation})")
 
+        dtype = "<i2" if decimation == 1 else "<i4"
+
         ##############################################################################
         # Convert provided lengths in time units into sample lengths and memory sizes
         ##############################################################################
 
         # Figure out how many samples will be processed at the channel interface
-        # All channels use 32 bits per sample at the FIFO, so we can infer this directly from the tile config        
         if channel.is_dac:
+            # All channels use 32 bits per sample at the FIFO, so we can infer this directly from the tile config
             channel_samples_per_cycle = self._firmware["rfdc"]["dac"]["channel_interface_width"][channel.num()] // 32
         else:
             # The source is either an ADC channel or a location in memory,
             # both of which must have interface widths equal to the path width
             channel_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
 
-        if isinstance(fixed_length, float) and fixed_length >= 0:
-            fixed_length_cycles_float = fixed_length * self._firmware["clk104_pl_clk"]["freq_hz"]
-            fixed_length_cycles = round(fixed_length_cycles_float)
-            if fixed_length_cycles != round(fixed_length_cycles_float, 1):
-                raise ValueError(f"Fixed length {fixed_length} seconds"
-                                    f" is not an integer number of cycles"
-                                    f" ({fixed_length_cycles_float} cycles)")
-        elif isinstance(fixed_length, (Symbol, Operation)):
-            logger.warning(f"Unable to validate symbolic fixed length;"
-                           " please ensure that the value provided is an"
-                           " integer number of cycles after being rounded.")
-            fixed_length_cycles_float = fixed_length * self._firmware["clk104_pl_clk"]["freq_hz"]
-            fixed_length_cycles = Operation(round, fixed_length_cycles_float)
-        else:
-            raise TypeError(f"Unable to use fixed length {fixed_length}")
-
-        # Given a length and fixed length, determine the number of samples in the array
-        # For ADC channels, this is the number of samples after decimation
-        # Also determine the number of cycles that the operation will run for
-        # These are always directly proportional, but the proportionality
-        # constant is dependent on the decimation and the type of channel
-        if isinstance(length, float):
+        if np.issubdtype(type(length), float):
             # Length of waveforms in seconds
-            length_cycles_float = length * self._firmware["clk104_pl_clk"]["freq_hz"]
-            length_cycles = round(length_cycles_float)
-            if length_cycles != round(length_cycles_float, 1):
-                raise ValueError(f"WaveformMemory length {length} seconds does not"
-                                    f" correspond to an integer number of cycles"
-                                    f" ({length_cycles_float})")
+            if length <= 0:
+                raise ValueError(f"Length of a waveform must be positive (received {length})")
             
-            input_length_samples = length_cycles * channel_samples_per_cycle
-            if decimation == 0:
-                decimation = input_length_samples
+            length_cycles = self.seconds_to_cycles(length)
 
-            elif input_length_samples % decimation != 0:
-                raise ValueError(f"Number of input samples ({input_length_samples})"
-                                 f" is not a multiple of the decimation ({decimation}) ")
-            
-            length_samples = input_length_samples // decimation
+            # The number of samples either entering or exiting the channel's FIFO
+            channel_samples = length_cycles * channel_samples_per_cycle
+
+            if channel.is_dac:
+                shape = channel_samples
+                logger.debug(f"Converted waveform for {channel} with length {length} seconds"
+                        f" into {shape} samples ({length_cycles} cycles "
+                        f" * {channel_samples_per_cycle} samples per cycle")
+
+            else:
+                if decimation == 0:
+                    decimation = channel_samples
+
+                elif channel_samples % decimation != 0:
+                    raise ValueError(f"Number of input samples ({channel_samples})"
+                                    f" is not a multiple of the decimation ({decimation}) ")
+                
+                shape = channel_samples // decimation
+                
+                logger.debug(f"Converted waveform for {channel} with length {length} seconds"
+                            f" into {shape} samples ({length_cycles} cycles"
+                            f" * {channel_samples_per_cycle} input samples per cycle"
+                            f" // {decimation} input samples per output sample)")
 
         elif isinstance(length, np.ndarray):
             # When decimation is not 1, we don't have enough information to determine
@@ -1498,7 +1888,7 @@ class Acadia:
 
             if length.dtype.kind == 'f' or length.dtype.kind == 'c':
                 # Convert float arrays to complex
-                length_samples = length.size
+                shape = length.shape
 
             elif length.dtype.kind == 'i':
                 if length.shape[-1] != 2:
@@ -1506,133 +1896,405 @@ class Acadia:
                                     f" have a shape in which the last dimension"
                                     f" is of length 2 (received array with shape"
                                     f" {length.shape})")
-                length_samples = length.size // 2
+
+                # Because WaveformMemory objects automatically add the last dimension,
+                # only include the shape up to that
+                shape = shape[:-1]
             
             else:
                 raise TypeError(f"WaveformMemory objects specified by numpy arrays must have"
                                 f" float, complex, or integer dtypes (received"
                                 f" dtype {length.dtype})")
 
-            if length_samples % channel_samples_per_cycle != 0:
-                raise ValueError(f"Number of waveform samples ({length_samples})"
-                                f" is not a multiple of the number of samples per"
-                                f" cycle ({channel_samples_per_cycle}) and no"
-                                f" decimation is used.")
+            if shape[-1] % channel_samples_per_cycle != 0:
+                raise ValueError(f"Number of waveform samples in last dimension of provided array"
+                                f" (full shape {shape}) is not a multiple of the number of samples per"
+                                f" cycle ({channel_samples_per_cycle}).")
         
-            length_cycles = length_samples // channel_samples_per_cycle
-
         else:
             raise TypeError(f"WaveformMemory length must be specified as a float"
-                            f" or as a numpy array (received {type(length)}).")
+                            f" or as a numpy array (received type {type(length)}).")
         
         ############################################################################################
         # We now know the waveform time in cycles and size in samples, so create the waveform array
         ############################################################################################
         
-        if blank:
-            return FixedChannelWaveformMemory(
-                channel, 
-                length_cycles=length_cycles + fixed_length_cycles, 
-                blank=True,
-                resource_allocator=region) 
-        
-        if length_cycles == 0:
-            if fixed_length_cycles == 0:
-                raise ValueError("WaveformMemory has total length zero.")
-            
-            # Only a fixed length was provided, so create a fixed waveform
-            logger.debug(f"Allocating FixedWaveformMemory for channel {channel} with"
-                            f" a length of {fixed_length_cycles} cycles"
-                            f" ({channel_samples_per_cycle} samples per cycle)")
-            
-            return FixedChannelWaveformMemory(
-                channel, 
-                length_cycles=fixed_length_cycles, 
-                resource_allocator=region)
-            
-        if decimation != 1:
-            if fixed_length_cycles != 0:
-                raise ValueError("Fixed length must be zero for decimated waveforms.")
-            
-            logger.debug(f"Allocating DecimatedChannelWaveformMemory for channel {channel} with"
-                        f" {length_samples} samples, which corresponds to"
-                        f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                        f" samples per cycle, decimation {decimation})")
-            
-            return DecimatedChannelWaveformMemory(
-                channel, 
-                shape=length_samples, 
-                decimation=decimation, 
-                resource_allocator=region)
-        
-        if fixed_length_cycles != 0:
-            # By this point, decimation is 1 and length_cycles != 0
-            logger.debug(f"Allocating WindowedConstantWaveformMemory for channel {channel} with"
-                            f" a fixed length of {fixed_length_cycles} cycles and"
-                        f" {length_samples} window samples, which corresponds to"
-                        f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                        f" samples per cycle)")
-            
-            return WindowedConstantWaveformMemory(
-                channel, 
-                window_length_samples=length_samples, 
-                constant_length_cycles=fixed_length_cycles, 
-                resource_allocator=region)
+        if np.issubdtype(multiplicity, np.integer):
+            shape = (multiplicity, *shape)
+        elif isinstance(multiplicity, tuple):
+            shape = (*multiplicity, *shape)
+        elif multiplicity is not None:
+            raise TypeError(f"Multiplicity must be either an int or tuple;"
+                            f" received type {type(multplicity)}")
 
-        logger.debug(f"Allocating ChannelWaveformMemory for channel {channel} with"
-                        f" {length_samples} samples, which corresponds to"
-                        f" {length_cycles} cycles ({channel_samples_per_cycle}"
-                        f" samples per cycle)")
-        
-        return ChannelWaveformMemory(
-            channel, 
-            shape=length_samples, 
-            resource_allocator=region)
+        logger.debug(f"Allocating WaveformMemory with dtype {dtype} and shape"
+                        f" {shape} samples")
+
+        return WaveformMemory(shape=shape, dtype=dtype, resource_allocator=region)
         
     @requires_sequencer
-    def schedule_waveform(self, waveform: ChannelWaveformMemory):
+    def schedule_waveform(self, 
+                        waveform: WaveformMemory, 
+                        channel: Union[Channel, str, None] = None,
+                        stretch_length: Union[float, Symbol, Operation] = None,
+                        stretch_length_is_minus_one: bool = False):
         """
-        Schedule a waveform on a channel's DMA. 
+        Schedule a waveform on a channel's DMA.
+
+        For WaveformMemory objects allocated in a DAC channel's waveform memory,
+        the channel to stream on may be inferred. However, because memory for
+        ADC capture isn't bonded with a particular channel, the DMA to command
+        cannot be inferred. Therefore, the channel must be specified explicitly.
         
+        :param waveform: Signal to stream
+        :type waveform: :class:`WaveformMemory`
         :param channel: Channel to stream
         :type channel: :class:`Channel`
-        :param waveform: Signal to stream
-        :type waveform: :class:`ChannelWaveformMemory` or any type implementing 
-            `dma_parameters()` returning a list of `dict`. Each `dict` will 
-            result in a sequential call to `channel_dma_stream` whose arguments
-            are the key/value pairs in the `dict`. 
+        :param stretch_length: The amount by which to "stretch" the
+            waveform. Stretching refers to playing the first half of a waveform,
+            then repeating only the sample in the middle for some length of time,
+            then playing the second half. This creates a "flat top" on the
+            signal. When this is not ``None``, three DMA commands are generated,
+            corresponding to the sequence described above. 
+            
+            In reality, the DMA doesn't repeat the sample in the middle, it 
+            parks at the memory address in the middle of the waveform. Because the 
+            waveform memory issues multiple samples per cycle, it is in fact a 
+            sequence of a few samples that are repeated. It is assumed that the 
+            waveform memory has been correctly populated so as to produce the 
+            correct behavior.
+
+            When a `float` is provided, this is the number of seconds by which to
+            stretch the waveform (more accurately, this corresponds to the number
+            of stretch cycles added). When a sequencer source is provided, no 
+            conversion is performed; it is assumed that the source contains the 
+            number of stretch cycles.
+        :type stretch_length: float, Register, DSP
         """
-        # Notify the synchronizer, which will add the DMA command for us
-        for params in waveform.dma_parameters():
+        if not isinstance(waveform, WaveformMemory):
+            raise TypeError("Only waveforms associated with a channel may be scheduled.")
+
+        if waveform._resource is None:
+            raise ValueError("Cannot schedule waveform without resource.")
+
+        if isinstance(channel, str):
+            channel = self.channel(channel)
+
+        if channel is None:
+            # See if we can extract the channel from the waveform region
+            if not isinstance(waveform._resource, tuple(self.DACArray)):
+                raise TypeError("Waveforms to be scheduled for DAC channels must be located in DAC waveform memory.")
+
+            channel = None
+            for idx,t in enumerate(self.DACArray):
+                if isinstance(waveform._resource, t):
+                    channel = self.DAC(idx)
+                    break
+            
+            if channel is None:
+                raise TypeError(f"Something weird failed")
+
+        elif isinstance(channel, Channel):
+            # If we have a DAC channel, ensure that the waveform we're commanding
+            # is in the correct region
+            if channel.is_dac and not isinstance(waveform._resource, self.DACArray[channel.num()]):
+                raise TypeError(f"Channel {channel} provided to schedule_waveform for a waveform"
+                                f" located in {type(waveform._resource)}")
+        else:
+            raise TypeError(f"Received invalid type for channel: {type(channel)}")
+
+        if not isinstance(stretch_length_is_minus_one, bool):
+            raise TypeError(f"In schedule_waveform, stretch_length_is_minus_one must be a bool"
+                            f" (received {type(stretch_length_is_minus_one)})")
+
+        word_address = waveform._resource._resource_id // channel.interface_width_bytes
+        length_cycles = waveform.nbytes // channel.interface_width_bytes
+
+        if stretch_length is None:
+            # Notify the synchronizer, which will add the DMA command for us
             self.channel_synchronizer.add({
-                "function": DMASynchronizer.DMA, 
+                "function": DMASynchronizer.ARBITRARY, 
                 "self": self, 
                 "args": (), 
-                "kwargs": params,
+                "kwargs": {
+                    "channel": channel, 
+                    "length": length_cycles, 
+                    "address": word_address},
                 "retval": None})
+
+            logger.debug(f"Scheduled arbitrary waveform on channel"
+                         f" {channel} of length {length_cycles}"
+                         f" at address {word_address}")
+
+            return
+
+        if np.issubdtype(type(stretch_length), float):
+            stretch_length = self.seconds_to_cycles(stretch_length)
+        elif isinstance(stretch_length, Symbol):
+            if np.issubdtype(stretch_length.value_type(), float):
+                stretch_length = Operation(Acadia.seconds_to_cycles, self, stretch_length)
+            elif np.issubdtype(stretch_length.value_type(), int):
+                pass # We can just leave this as-is
+            else:
+                raise TypeError(f"Symbolic stretch length must use either"
+                                f" int or float for a value type;"
+                                f" found {stretch_length.value_type()}")
+        elif isinstance(stretch_length, Operation):
+            logger.debug(f"Found stretch length derived from an Operation;"
+                        f" assuming that the result is in units of cycles.")
+            # No further action required
+
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.ARBITRARY, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel, 
+                "length": length_cycles // 2, 
+                "address": word_address},
+            "retval": None})
+
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.CONSTANT_CONTINUED, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel, 
+                "length": stretch_length,
+                "length_is_minus_one": stretch_length_is_minus_one},
+            "retval": None})
+
+        # If the waveform has an odd number of samples, then the second arbitrary
+        # part will be the same length as the first arbitrary part, and is equal to
+        # (length_cycles - 1) / 2 = length_cycles // 2 = (length_cycles - 1) // 2 
+        # (these equalties are only valid because length_cycles is odd)
+        # If it has an even number of samples, then the second arbitrary part
+        # has one less sample than the first, and is equal to 
+        # (length_cycles // 2) - 1 = (length_cycles - 1) // 2
+        # (this equality is only valid because length_cycles is even)
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.ARBITRARY_CONTINUED, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel, 
+                "length": (length_cycles - 1) // 2},
+            "retval": None})
+
+        logger.debug(f"Scheduled stretched waveform on channel"
+                     f" {channel} with first arbitrary part lasting"
+                     f" {length_cycles // 2} cycles, a stretch length of"
+                     f" {stretch_length}, and a second arbitrary part lasting"
+                     f" {(length_cycles - 1) // 2} cycles")
+
+    @requires_sequencer
+    def stream_direct(self, 
+                      src: Union[Channel, StreamConfiguration, WaveformMemory],
+                      dst: WaveformMemory, 
+                      length: float = None,
+                      output_offset_bytes: Union[int, Source, None] = None) -> tuple[StreamConfiguration, WaveformMemory]:
+        """
+        Stream data from an input of the stream processing path directly into memory. 
+        
+        The amount of data streamed into memory is controlled by the 
+        ``length`` parameter. If provided, this must be a float representing
+        the number of seconds for which to accept data. If not provided, the
+        amount of time is chosen so as to fill the destination.
+        """
+        
+        if isinstance(src, StreamConfiguration):
+            if src.module != "memory":
+                raise TypeError(f"The StreamConfiguration provided to"
+                                f" stream_direct must represent a"
+                                f" direct-to-memory module (received"
+                                f" configuration for module type {src.module})")
+            configuration = src
+        elif isinstance(src, (Channel, str)):
+            configuration = self._request_stream_configuration(self.channel(src), "memory")
+        elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
+            configuration = self._request_stream_configuration("memory", "memory")
+        else:
+            raise TypeError(f"Unable to create stream with source {src}")
+
+        if length is None:
+            length_cycles = 8 * dst.nbytes // self._firmware["stream_processing_path"]["width"]
+        elif np.issubdtype(type(length), float):
+            length_cycles = self.seconds_to_cycles(length)
+        else:
+            raise TypeError(f"Invalid type for direct stream length: {type(length)}")
+
+        if dst.itemsize != 2:
+            raise TypeError(f"Destinations for direct streams must have 16-bit quadratures;"
+                            f" found dtype {dst.dtype}")
+
+        # Because this is a direct stream, we can infer the output size from the length of the stream
+        output_size_bytes = length_cycles * self._firmware["stream_processing_path"]["width"] // 8
+
+        logger.debug(f"Direct stream of length {length_cycles} cycles"
+                     f" and {output_size_bytes} bytes.")
+
+        self.stream(configuration, 
+                    dst, 
+                    (src if isinstance(src, WaveformMemory) else None),
+                    length_cycles,
+                    output_size_bytes,
+                    output_offset_bytes)
+
+    @requires_sequencer
+    def stream_cmacc(self, 
+                     src: Union[Channel, StreamConfiguration, WaveformMemory],
+                     dst: WaveformMemory, 
+                     length: float = None,
+                     output_offset_bytes: Union[int, Source, None] = None,
+                     kernel: Union[np.ndarray, WaveformMemory, float, None] = None,
+                     write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
+                     last_only: bool = True, 
+                     reset_fifo: bool = False,
+                     accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
+        """
+        Stream data from an input of the stream processing path, through
+        a CMACC, and into memory. 
+
+        The complex multiplier-accumulator (CMACC) accepts a stream of data,
+        multiplies each incoming sample by the corresponding value of a 
+        "kernel", and progressively sums all of the products ("accumulates") 
+        into a register (the "accumulator"). An output port on the CMACC can
+        be configured to write the value of the accumulator or a copy of the 
+        input stream into memory, and one can configure whether the entire stream
+        is written or exclusively the last value. The amount of data processed 
+        by the CMACC, its method of processing, and the amount of data written 
+        into memory are all independently variable and are described below.
+        
+        The amount of data accepted into the CMACC is controlled by the 
+        ``length`` parameter. If provided, this must be a float representing
+        the number of seconds for which to accept data. If not provided, the
+        amount of time is chosen to match that of the accumulation kernel.
+        
+        The accumulation kernel to be used is controlled by the ``kernel`` parameter.  
+        
+        - If this is a numpy array, its shape information 
+            is used in order to determine the size of the kernel. A new kernel 
+            memory object is allocated and returned. 
+            
+        - If this is a WaveformMemory whose region is the kernel memory for the source Channel, 
+            no new kernel will be allocated, and the CMACC will be configured to use 
+            this previously-allocated kernel.
+            
+        - If this is a WaveformMemory whose region is not the kernel memory 
+            for the source Channel, a new kernel will be allocated with a
+            matching number of samples. 
+            
+        - If this is a float, this should be the length in seconds of a new kernel 
+            to be allocated. 
+            
+        - If ``None``, a single-element kernel is newly allocated to allow for 
+            boxcar accumulation. In this case, note that ``length`` must be provided.
+
+        The ``write_mode`` parameter controls which data is presented at the
+        output port of the CMACC, with the following options:
+
+        - "upper": The upper 32 bits of each quadrature in the accumulator are presented to the
+            output, and the lower 16 bits of each quadrature are discarded.
+
+        - "lower": The lower 32 bits of each quadrature in the accumulator are written to the
+            output, and the upper 16 bits of the accumulator value are discarded.
+
+        - "input": The input data is duplicated at the output (after the initial
+            factor-of-4 decimation). The accumulator still runs and its value is
+            accessible via the bus interface.
+
+        - "none" or ``None``: No data is written to the output. The accumulator 
+            still runs and its value is accessible via the bus interface.
+
+        The CMACC can be configured to present data every single cycle by setting ``last_only=False``.
+        In this situation, a stream of data equal in length (of time) to the input stream
+        is written to the output. For ``write_mode="upper"`` or ``"lower"``, the
+        output stream will consist of partial sums of the accumulated input stream.
+        That is, each sample in the output stream is the sum of all the samples before
+        it, plus the new sample accumulated in that cycle. This allows one to capture
+        the value of the accumulator throughout its operation. For ``write_mode="input"``,
+        the stream written to the output port will consist of the input stream that is
+        being accumulated by the CMACC. This is particularly useful for debugging and for
+        calibrating the accumulation kernel, as this is a direct view of the data that would
+        be multiplied against the kernel and accumulated.
+
+        Alternatively, the CMACC can be configured to write only the last value of its output
+        stream to the output port by setting ``last_only=True``. This is primarily intended 
+        for situations in which only the fully accumulated input is necessary; in this case,
+        the value of the accumulator during its operation is of no relevance, and only the
+        final value should be written. When ``last_only=True``, only a single value will be
+        written to the output port regardless of the amount of data accepted into the CMACC.
+        """
+
+        if length is None and (kernel is None or (hasattr(kernel, "size") and kernel.size == 1)):
+            raise ValueError(f"Must provide length when kernel is not"
+                                " provided or a boxcar kernel is used.")
+
+        # 32-bit quadratures are required for CMACC output
+        if dst.itemsize != 4:
+            raise TypeError(f"CMACC streams require destinations with"
+                            f" 32-bit quadratures; destination has dtype"
+                            f" {dst.dtype}")
+
+        configuration, kernel_memory = self.configure_cmacc(
+            src, kernel, write_mode, last_only, reset_fifo, accumulator_done)
+
+        if length is None:
+            # infer the length in time from the kernel (one cycle per kernel sample)
+            # we already checked whether we have a boxcar kernel, so we're good to just
+            # look at the kernel size
+            length_cycles = kernel_memory.size
+            logger.debug(f"Inferring CMACC stream length from kernel memory ({length_cycles} cycles)")
+        elif np.issubdtype(type(length), float):
+            length_cycles = self.seconds_to_cycles(length)
+            logger.debug(f"Converted float to CMACC stream length ({length_cycles} cycles)")
+        else:
+            raise TypeError(f"Received invalid type for CMACC stream length: {type(length)}")
+
+        # If we're not writing only the last sample, 
+        # then we're writing one sample every cycle
+        if last_only:
+            output_size_samples = 1
+        else:
+            output_size_samples = length_cycles
+
+        output_size_bytes = output_size_samples * (2*dst.itemsize)
+        
+        self.stream(configuration=configuration, 
+                    dst=dst,
+                    length_cycles=length_cycles,
+                    output_size_bytes=output_size_bytes,
+                    output_offset_bytes=output_offset_bytes,
+                    memory_input=(src if configuration.input_source == "memory" else None))
+
+        return configuration, kernel_memory
         
     @requires_sequencer
     def stream(self, 
-                configuration: StreamConfiguration, 
-                dst: WaveformMemory, 
-                memory_input = None,
-                length: Union[int, None] = None,
-                offset: int = 0) -> None:
+               configuration: StreamConfiguration, 
+               dst: WaveformMemory, 
+               memory_input = None,
+               length_cycles: Union[int, None] = None,
+               output_size_bytes: Union[int, None] = None,
+               offset_bytes: Union[int, Source] = 0) -> None:
         """
         Stream data from a source to a destination WaveformMemory. 
-        
-        The source of data can either be a :class:`Channel` representing an 
-        ADC, or it can be an array in memory captured by an :class:`Array`
-        object. The ``decimation`` property of ``dst`` will be used to 
-        determine whether the stream passed directly from the input into memory
-        or whether a DSP module will be used for decimating the stream.
 
-        By default, the entirety of ``dst`` is filled. Alternatively, one may
-        optionally specify ``length`` (and also optionally ``offset``) to fill
-        only a portion of ``dst``.
+        This function initiates a stream from some source into the input of the 
+        stream processing path and commands the DataMover of the receiving module. 
+        Before calling this function, the module receiving and processing the stream 
+        must have been prepared (by calling a function such as :meth:`configure_dsp` or 
+        :meth:`configure_cmacc`). 
+
+        For all configurations, an offset may be provided and will be interpreted as the 
+        number of bytes into the destination at which to start storing data. 
+        This may either be an int or a sequencer source. It is up to 
+        the user to ensure that when providing an offset, the length of the stream (either
+        provided or inferred) is chosen so that data is not written past the end of the
+        destination memory space.
 
         :param dst: Data destination
-        :type dst: :class:`ChannelWaveformMemory`
+        :type dst: :class:`WaveformMemory`
         :param length: Length of data to stream in samples. Note that this
             is the length after any decimation.
         :param offset: Offset within `dst` at which the stream will be written,
@@ -1645,58 +2307,80 @@ class Acadia:
         :rtype: :class:`StreamConfiguration`
         """
 
+        # Validate parameters
+        if not isinstance(configuration, StreamConfiguration):
+            raise TypeError(f"Received invalid type for stream configuration"
+                            f" (received type {type(configuration)})")
+
+        if isinstance(configuration.input_source, Channel):
+            if memory_input is not None:
+                raise TypeError(f"Cannot provide a memory input when using stream"
+                                " configurations with Channel inputs")
+
+        logger.debug(f"Creating stream with configuration {configuration}")
+
         if not isinstance(dst, WaveformMemory):
             raise TypeError(f"Stream destination must be a WaveformMemory;"
                             f" received {type(dst)}")
 
-        if length is None:
-            # Fill the output
-            # The waveform length will already have been validated when the waveform was created
-            length = dst.size
+        logger.debug(f"Stream destination at address {dst.byte_address:010X}")
 
-        input_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
-        output_length_bytes = length * 2*dst.dtype.itemsize
-        offset_bytes = offset * 2*dst.dtype.itemsize
-
-        # Some type checking
-        if isinstance(configuration.input_source, Channel):
-            if memory_input is not None:
-                raise TypeError(f"src_memory must be None when using stream"
-                                " configurations with Channel inputs")
-            if not isinstance(dst, ChannelWaveformMemory):
-                raise TypeError("When the input source for a stream is a Channel,"
-                                " the destination must be of type ChannelWaveformMemory"
-                                f"(received type {type(dst)})")
-
-        # Use the value of length to determine parameters for the DataMover
-        if isinstance(dst, DecimatedChannelWaveformMemory):
-            length_cycles = length * dst.cycles_per_output_sample
+        if np.issubdtype(type(length_cycles), int):
+            if length_cycles <= 0:
+                raise ValueError(f"Received invalid length_cycles: {length_cycles}")
+            logger.debug(f"Using stream length {length_cycles} cycles")
+        elif isinstance(length_cycles, self.sequencer().Register):
+            logger.debug(f"Using indeterminate stream length from {length_cycles}")
         else:
-            # When not decimating, the DataMover writes one path-width of data per cycle
-            if length % input_samples_per_cycle != 0:
-                raise ValueError(f"Stream of length {length} samples does not"
-                                 f" produce an integer number of cycles"
-                                 f" ({length / input_samples_per_cycle})")
-            length_cycles = length // input_samples_per_cycle
-        
-        logger.debug(f"Stream length {length_cycles} cycles, decimation"
-                     f" {dst._decimation if isinstance(dst, DecimatedChannelWaveformMemory) else 1},"
-                      f" of output size {output_length_bytes} bytes to address"
-                      f" 0x{dst.byte_address:010X} + 0x{offset_bytes:X}")
+            raise TypeError(f"Received object of invalid type for length_cycles:"
+                            f" {type(length_cycles)}")
+
+        if output_size_bytes is None:
+            if offset_bytes is not None:
+                raise ValueError(f"Use of an offset is not allowed when matching"
+                                f" stream size to destination size."
+                                f" (found offset {offset}).")
+
+            output_size_bytes = dst.nbytes
+            logger.debug(f"Inferring stream output size from destination ({output_size_bytes} bytes)")
+        elif np.issubdtype(type(output_size_bytes), int):
+            if output_size_bytes <= 0:
+                raise ValueError(f"Received invalid output size: {output_size_bytes}")
+
+            if output_size_bytes == dst.nbytes and offset_bytes is not None:
+                # Is this redundant?
+                raise ValueError("Detected an output size chosen to fill a destination memory"
+                                "with a non-None offset. ")
+                        
+            if output_size_bytes > dst.nbytes:
+                raise ValueError(f"Stream output size ({output_size_bytes} bytes)"
+                                f" exceeds destination size ({dst.nbytes} bytes)")
+
+            logger.debug(f"Using provided stream output size of {output_size_bytes} bytes")
+        else:
+            raise ValueError(f"Received object of invalid type for"
+                            f" output_size_bytes: {type(output_size_bytes)}")
+
+        if offset_bytes is None:
+            offset_bytes = 0
+        elif np.issubdtype(type(offset_bytes), int):
+            if offset_bytes < 0:
+                raise ValueError(f"Received invalid offset: {offset_bytes}")
+            logger.debug(f"Using output offset of {offset_bytes} bytes")
+        elif isinstance(offset_bytes, self.sequencer().Register):
+            logger.debug(f"Using indeterminate stream offset {offset_bytes}")
 
         self._command_datamover(configuration.output_datamover(), 
                                 dst.byte_address + offset_bytes,
-                                output_length_bytes)
+                                output_size_bytes)
 
         if isinstance(configuration.input_source, Channel):
             # notify the synchronizer, which will then add the DMA command for us   
-            dst_params = dst.dma_parameters()[0]
-            dst_params.update({"channel": configuration.input_source, "length": length_cycles})
             self.channel_synchronizer.add({
-                "function": DMASynchronizer.DMA, 
+                "function": DMASynchronizer.CONSTANT_CONTINUED, 
                 "self": self, 
                 "args": (), 
-                "kwargs": dst_params,
+                "kwargs": {"channel": configuration.input_source, "length": length_cycles},
                 "retval": None})
         else:
             self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
@@ -1780,7 +2464,7 @@ class Acadia:
 
     @requires_sequencer
     def configure_cmacc(self, 
-                        src: Union[Channel, WaveformMemory],
+                        src: Union[Channel, StreamConfiguration, WaveformMemory],
                         kernel: Union[np.ndarray, float, None] = None,
                         write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
                         last_only: bool = True, 
@@ -1812,7 +2496,7 @@ class Acadia:
         elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
             configuration = self._request_stream_configuration("memory", "cmacc")
         else:
-            raise TypeError(f"Unable to create stream with source {src}")
+            raise TypeError(f"Unable to create stream configuration with source {src}")
         
         kernel_type = self.CMACCKernelArray[configuration.module_resource._resource_id]
         
@@ -1828,22 +2512,26 @@ class Acadia:
             if kernel is None:
                 # Boxcar kernel
                 kernel_length_elements = 1
-            elif isinstance(kernel, float):
+            elif np.issubdtype(type(kernel), float):
                 # Use a length in seconds given by kernel
-                kernel_length_elements = kernel * self._firmware["clk104_pl_clk"]["freq_hz"]
-            elif isinstance(kernel, np.ndarray):
+                kernel_length_elements = self.seconds_to_cycles(kernel)
+            elif isinstance(kernel, (np.ndarray, WaveformMemory)):
                 # Allocate enough space to store the numpy array (after converting to samples)
-                kernel_length_elements = len(kernel)
+                kernel_length_elements = kernel.size
             else:
-                raise TypeError(f"Invalid CMACC kernel (received {kernel})")
+                raise TypeError(f"Invalid type for specifying CMACC kernel (received {type(kernel)})")
         
-            logger.debug(f"Allocating kernel WaveformMemory of length {kernel_length_elements} samples")
-            kernel = WaveformMemory(shape=kernel_length_elements, dtype="<i2", resource_allocator=kernel_type)
+            logger.debug(f"Allocating kernel WaveformMemory of length"
+                        f" {kernel_length_elements} samples")
+
+            kernel = WaveformMemory(shape=kernel_length_elements, 
+                                    dtype="<i2", 
+                                    resource_allocator=kernel_type)
 
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
 
         # resource id is the byte offset of the memory segment within its region 
-        kernel_index = kernel._resource._resource_id // (2*2) 
+        kernel_index = kernel._resource._resource_id // (2*kernel.itemsize) 
 
         # Set the kernel start and end addresses
         # The kernel uses one 32-bit element per cycle
@@ -2089,7 +2777,7 @@ class Acadia:
         """
         mask = 0
         for channel in channels:
-            mask |= self.get_dma(channel).mask
+            mask |= 1 << (channel.num() if channel.is_dac else (channel.num() + 16))
 
         dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
         self.sequencer().bus_write(address=dma_trigger_device.address().value(),
@@ -2103,7 +2791,7 @@ class Acadia:
         """
         mask = 0
         for channel in channels:
-            mask |= self.get_dma(channel).mask
+            mask |= (channel.num() if channel.is_dac else (channel.num() + 16))
 
         dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
         dma_running = self.sequencer().bus_read(address=dma_running_device.address().value(),
@@ -2151,7 +2839,7 @@ class Acadia:
 
         mask = 0
         for channel in channels:
-            mask |= self.get_dma(channel).mask
+            mask |= (channel.num() if channel.is_dac else (channel.num() + 16))
         
         bus_address = self._firmware.dma_running.address().value()
 
@@ -2231,10 +2919,6 @@ class Acadia:
         
         for s in self._sequencer_type.instances:
             s.compile_all(overwrite)
-        for dma in self._dac_dmas:
-            dma.compile_all(overwrite)
-        for dma in self._adc_dmas:
-            dma.compile_all(overwrite)
 
         outfilename = os.path.join(output_directory, "compiled.log") if output_directory is not None else "compiled.log"
         with open(outfilename, "w") as outfile:
@@ -2250,16 +2934,6 @@ class Acadia:
         """
 
         assembled = {}
-
-        for dma_type,dma_list in [("DAC", self._dac_dmas), ("ADC", self._adc_dmas)]:
-            for idx_dma,dma in enumerate(dma_list):
-                if len(dma._compiled_program) > 0:
-                    logger.debug(f"Assembling {dma_type}{idx_dma} DMA program with length {len(dma._compiled_program)}")
-                    assembled_bin = bytearray(len(dma._compiled_program) * 8)
-                    for idx_instr,instr in enumerate(dma._compiled_program):
-                        assembled_bin[idx_instr*8 : (idx_instr+1)*8] = instr.assemble()
-                    
-                    assembled[f"{dma_type}{idx_dma}@{0:08X}"] = hexlify(assembled_bin).decode("ascii")
             
         # Assemble the sequencer last so that if any DMA descriptors are resolved to have zero length,
         # the instruction driving them will be removed above
@@ -2303,15 +2977,8 @@ class Acadia:
         for segment,data in inp.items():
             region_str,offset_str = segment.split("@")
             offset = int(offset_str, base=16)
-            if region_str.startswith("ADC"):
-                channel = int(region_str[len("ADC"):])
-                buffer = self._adc_dma_descriptor_memory[channel]
-                buffer_name = f"ADC{channel} descriptor"
-            elif region_str.startswith("DAC"):
-                channel = int(region_str[len("DAC"):])
-                buffer = self._dac_dma_descriptor_memory[channel]
-                buffer_name = f"DAC{channel} descriptor"
-            elif region_str.startswith("seq"):
+
+            if region_str.startswith("seq"):
                 buffer = self._sequencer_instruction_memory
                 buffer_name = "sequencer instruction"
             else:
@@ -2333,16 +3000,6 @@ class Acadia:
                 address = (s._resource_id + idx_instr)*16
                 sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{address + self._firmware['sequencer_instruction_memory']['address']: X}, 16, 128'h{assembled}, resp);\n"
     
-        for i,dma in enumerate(self._dac_dmas):
-            for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = f"{instr.assemble():016X}"
-                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['dac_dma_descriptor_memory']['address'] + i*(self._firmware['dac_dma_descriptor_memory']['size_bits']//8) + idx_instr*8: X}, 8, 64'h{assembled}, resp);\n"
-            
-        for i,dma in enumerate(self._adc_dmas):
-            for idx_instr,instr in enumerate(dma._compiled_program):
-                assembled = f"{instr.assemble():016X}"
-                sim_string += f"acadia_tb.uut.ps.inst.write_data(32'h{self._firmware['adc_dma_descriptor_memory']['address'] + i*(self._firmware['adc_dma_descriptor_memory']['size_bits']//8) + idx_instr*8: X}, 8, 64'h{assembled}, resp);\n"      
-            
         return sim_string
 
     def sequencer_pprint(self) -> str:
@@ -2454,22 +3111,6 @@ class Acadia:
         
     
     # -------------- INTERNAL UTILITIES ----------- #
-    
-    def _create_dmas(self):
-        self._dac_dmas = []
-        bit_position = 0
-        for i in range(self._firmware.NUM_DACS):
-            dma = DMA()
-            dma.mask = 1 << bit_position
-            bit_position += 1
-            self._dac_dmas.append(dma)
-            
-        self._adc_dmas = []
-        for i in range(self._firmware.NUM_ADCS):
-            dma = DMA()
-            dma.mask = 1 << bit_position
-            bit_position += 1
-            self._adc_dmas.append(dma)
             
     def _create_cache(self):
         def _cache_getitem(cache_self, key):
@@ -2688,10 +3329,10 @@ class Acadia:
         :type address_base: int, optional
         """
 
-        if isinstance(size, int):
+        if np.issubdtype(type(size), int):
             if size > 2**23:
                 raise ValueError(f"Size must be less than 8 MB; received {size}.")
-        elif isinstance(size, Symbol) and (size.value_type() == int):
+        elif isinstance(size, Symbol) and np.issubdtype(size.value_type(), int):
             if size.assigned() and size.value() > 2**23:
                 raise ValueError(f"Size must be less than 8 MB; received {size}.")
             else:

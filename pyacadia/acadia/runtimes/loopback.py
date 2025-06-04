@@ -31,11 +31,9 @@ class LoopbackRuntime(Runtime):
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
-            capture_stream = acadia.configure_dsp(capture_channel, self.capture["memory"]["decimation"])
-
             with a.channel_synchronizer():
                 a.schedule_waveform(stimulus_waveform)
-                a.stream(capture_stream, capture_waveform)
+                a.stream_direct(capture_stream, capture_waveform)
 
         # Compile the sequence
         acadia.compile(sequence)
@@ -154,7 +152,6 @@ def run(plot=True):
 
         "memory": {
             "length": 4e-6,
-            "decimation": 1,
             "region": "plddr"
         }
     }

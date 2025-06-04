@@ -26,10 +26,10 @@ settings.DAC[1].PLLSettings.Enabled = True
 settings.DAC[2].PLLSettings.Enabled = True
 settings.DAC[3].PLLSettings.Enabled = True
 
-settings.DAC[0].PLLSettings.RefClkFreq = 250
-settings.DAC[1].PLLSettings.RefClkFreq = 250
-settings.DAC[2].PLLSettings.RefClkFreq = 250
-settings.DAC[3].PLLSettings.RefClkFreq = 250
+settings.DAC[0].PLLSettings.RefClkFreq = 200
+settings.DAC[1].PLLSettings.RefClkFreq = 200
+settings.DAC[2].PLLSettings.RefClkFreq = 200
+settings.DAC[3].PLLSettings.RefClkFreq = 200
 
 settings.DAC[0].PLLSettings.SampleRate = 6400
 settings.DAC[1].PLLSettings.SampleRate = 6400

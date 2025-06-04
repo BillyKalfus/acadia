@@ -197,32 +197,6 @@ CONFIG_200 = {
         "dac_port_input_pipeline": 1,
         "dac_port_output_pipeline": 2
     },
-
-    "dac_dma_descriptor_memory": {
-        "primitive": "block",
-        "address": 0x00_A820_0000, 
-        "size_bits": 1024*64,
-        "segment": "s_axi/reg0",
-        "synchronous": True,
-        "controller_width": 32,
-        "controller_port_input_pipeline": 2,
-        "controller_port_output_pipeline": 2,
-        "dma_port_input_pipeline": 1,
-        "dma_port_output_pipeline": 2
-    },
-        
-    "adc_dma_descriptor_memory": {
-        "primitive": "block",
-        "address": 0x00_A830_0000, 
-        "size_bits": 1024*64,
-        "segment": "s_axi/reg0",
-        "synchronous": True,
-        "controller_width": 32,
-        "controller_port_input_pipeline": 2,
-        "controller_port_output_pipeline": 2,
-        "dma_port_input_pipeline": 1,
-        "dma_port_output_pipeline": 2
-    },
     
     "stream_processing_path": {
         # The maximum allowed width of inputs to be connected to the stream
@@ -373,14 +347,14 @@ CONFIG_200 = {
              "datamover_burst_size": 128,
              "registers_bus_pipeline": True,
              "datamover_controller_bus_pipeline": True},
-            {"kind": "adder",
-             "AXI_width": 256,
-             "AXI_clock": "PS_AXI_clk",
-             "samples_fifo_depth": 512,
-             "samples_fifo_primitive": "auto",
-             "datamover_burst_size": 128,
-             "registers_bus_pipeline": True,
-             "datamover_controller_bus_pipeline": True}, 
+            # {"kind": "adder",
+            #  "AXI_width": 256,
+            #  "AXI_clock": "PS_AXI_clk",
+            #  "samples_fifo_depth": 512,
+            #  "samples_fifo_primitive": "auto",
+            #  "datamover_burst_size": 128,
+            #  "registers_bus_pipeline": True,
+            #  "datamover_controller_bus_pipeline": True}, 
         ],
         
         # Some shared settings for any CMACCs used
@@ -415,8 +389,8 @@ CONFIG_200 = {
             "channel_interface_width": [128]*16,
             "channel_pipeline_stages": [1]*16,
             "channel_nyquist_zone": [1]*16,
-            "dma_has_decimation": [False]*16,
-            "dma_has_narrowing": [False]*16,
+            "dma_fifo_depth": [32]*16,
+            "dma_fifo_latency": [3]*16,
             "tile_mts": [True]*4,
             "tile_sample_rate_hz": [6.4e9]*4,
             "tile_pll": [True]*4,
@@ -430,8 +404,8 @@ CONFIG_200 = {
             "channel_interface_width": [128]*16,
             "channel_pipeline_stages": [1]*16,
             "channel_dither": [False]*16,
-            "dma_has_decimation": [False]*16,
-            "dma_has_narrowing": [True]*16,
+            "dma_fifo_depth": [32]*16,
+            "dma_fifo_latency": [3]*16,
             "tile_mts": [True]*4,
             "tile_sample_rate_hz": [2.4e9]*4,
             "tile_pll": [True]*4,

@@ -2,7 +2,7 @@ import struct
 import operator
 import logging
 from enum import Enum
-from typing import get_type_hints, Union
+from typing import get_type_hints, Union, Callable
 from dataclasses import dataclass
 from contextlib import contextmanager
 
@@ -199,6 +199,7 @@ class STP:
     dsp_cep: Union[Source, Destination, int, None] = None
     push_return: Union[bool, int] = False
     comment: Union[str, None] = None
+    simplifier: Union[Callable, None] = None
 
     def __post_init__(self):
         # Check types
@@ -316,19 +317,6 @@ class STP:
                 if len(imm.compiled) == 0:
                     raise ValueError(f"Attempted to assemble uncompiled instruction: {imm}")
                 
-                # If the instruction was assembled and determined to be a NOP for a DMA,
-                # we need to indicate that nothing should be pushed to the DMA's FIFO for
-                # this instruction
-                # Additionally, DMA instructions will only ever be compiled to a single
-                # Descriptor object, so we only need to check the first element of the compiled
-                # list
-                # TODO: this feels like a bad band-aid to support DMAs only, this should be
-                # implemented in a way that's more general. Can't just add a universal NOP flag
-                # an optimize out any NOPs, because NOPs are often used for delays in the sequencer
-                if hasattr(imm.compiled[0], "null") and imm.compiled[0].null:
-                    logger.debug(f"Converting null DMA descriptor to sequencer NOP: {imm}")
-                    return None
-                
                 imm = imm.address
             elif hasattr(imm, "value"):
                 imm = imm.value() if callable(imm.value) else imm.value
@@ -343,6 +331,12 @@ class STP:
         :return: A binary word representing the machine instruction.
         :rtype: int
         """
+
+        # If we provided a simplification function, check whether this
+        # instruction should be converted to a NOP
+        if self.simplifier is not None and self.simplifier(self):
+            logger.debug("Identified STP to be converted to NOP")
+            return struct.pack("<IIQ", 0, 0, 0)
 
         tmp = 0
         # Opcode = 0 for STP
@@ -364,16 +358,7 @@ class STP:
             tmp |= (self.dsp_cep.value() | 0x8) << (64-64)
 
         imm1_value = STP.assemble_imm(self.imm1)
-        if imm1_value is None:
-            # A null DMA descriptor was translated, convert to NOP
-            logger.debug(f"Identified null DMA descriptor in imm1 for sequencer instruction: {self}")
-            return struct.pack("<IIQ", 0, 0, 0)
-
         imm2_value = STP.assemble_imm(self.imm2)
-        if imm2_value is None:
-            # A null DMA descriptor was translated, convert to NOP
-            logger.debug(f"Identified null DMA descriptor in imm2 for sequencer instruction: {self}")
-            return struct.pack("<IIQ", 0, 0, 0)
         
         logger.debug(f"Assembled instruction: IMM1=0x{imm1_value:08X} IMM2=0x{imm2_value:08X} upper=0x{tmp:08X} from {self}")
         return struct.pack("<IIQ", imm2_value, imm1_value, tmp)
