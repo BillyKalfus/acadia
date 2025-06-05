@@ -33,7 +33,7 @@ class LoopbackRuntime(Runtime):
         def sequence(a: Acadia):
             with a.channel_synchronizer():
                 a.schedule_waveform(stimulus_waveform)
-                a.stream_direct(capture_stream, capture_waveform)
+                a.stream_direct(capture_channel, capture_waveform)
 
         # Compile the sequence
         acadia.compile(sequence)
@@ -133,21 +133,21 @@ def run(plot=True):
         "datapath": {
             "vop": 4000,
             "mix_reconstruction": True,
-            "nco_frequency": 4.4e9
+            "nco_frequency": 4.5e9
         },
 
         "memory": {
             "length": 1e-6,
         },
         
-        "waveform_scale": 0.999
+        "waveform_scale": 0.2
     }
 
     capture: dict = {
         "channel": "ADC1",
 
         "datapath": {
-            "nco_frequency": -4.4e9
+            "nco_frequency": -4.5e9
         },
 
         "memory": {
@@ -162,7 +162,7 @@ def run(plot=True):
         get_ipython().run_line_magic("matplotlib", "widget")
 
     rt = LoopbackRuntime(stimulus, capture, plot=plot, iterations=100000)
-    rt.deploy("192.168.2.69")    
+    rt.deploy("192.168.2.69", log_debug=True)    
     rt.display()
 
     return rt

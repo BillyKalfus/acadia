@@ -518,7 +518,7 @@ class DMASynchronizer(Synchronizer):
                     command = channel_schedule[i]
                     self._acadia.command_dma(channel=channel, **command)
 
-        dma_mask = reduce(or_, [((1 << c.num()) + (0 if c.is_dac else 16)) for c in combined_schedules.keys()])
+        dma_mask = reduce(or_, [(1 << (c.num() + (0 if c.is_dac else 16))) for c in combined_schedules.keys()])
 
         if self._dma_trigger:
             nops = DMASynchronizer.calculate_trigger_delay(
@@ -1681,7 +1681,7 @@ class Acadia:
             command_string = f"{command}"
 
         self._active_sequencer.bus_write(
-            address=device.address().value(),
+            address=device.address().value() + command_type,
             data=command, 
             simplifier=Acadia.sequencer_dma_instruction_simplifier,
             comment=f"Command DMA for {channel}, type {command_type}: {command_string}")
@@ -2147,6 +2147,7 @@ class Acadia:
                      length: float = None,
                      output_offset_bytes: Union[int, Source, None] = None,
                      kernel: Union[np.ndarray, WaveformMemory, float, None] = None,
+                     preload: Union[tuple[int], None] = (0,0),
                      write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
                      last_only: bool = True, 
                      reset_fifo: bool = False,
@@ -2224,6 +2225,13 @@ class Acadia:
         the value of the accumulator during its operation is of no relevance, and only the
         final value should be written. When ``last_only=True``, only a single value will be
         written to the output port regardless of the amount of data accepted into the CMACC.
+
+        When beginning a capture, the hardware does not adjust the value stored in the 
+        accumulator. This means that incoming samples will be accumulated on top of whatever
+        value was already there; however, by providing a value for ``preload``, a known value will
+        be loaded into the CMACC before beginning the capture. The format for ``preload`` is a tuple
+        of two ``int``s, corresponding to the values to be loaded into the real and imaginary parts of
+        the accumulator. 
         """
 
         if length is None and (kernel is None or (hasattr(kernel, "size") and kernel.size == 1)):
@@ -2238,6 +2246,9 @@ class Acadia:
 
         configuration, kernel_memory = self.configure_cmacc(
             src, kernel, write_mode, last_only, reset_fifo, accumulator_done)
+
+        if preload is not None:
+            self.cmacc_load(configuration, preload)
 
         if length is None:
             # infer the length in time from the kernel (one cycle per kernel sample)
@@ -2264,7 +2275,7 @@ class Acadia:
                     dst=dst,
                     length_cycles=length_cycles,
                     output_size_bytes=output_size_bytes,
-                    output_offset_bytes=output_offset_bytes,
+                    offset_bytes=output_offset_bytes,
                     memory_input=(src if configuration.input_source == "memory" else None))
 
         return configuration, kernel_memory
@@ -2276,7 +2287,7 @@ class Acadia:
                memory_input = None,
                length_cycles: Union[int, None] = None,
                output_size_bytes: Union[int, None] = None,
-               offset_bytes: Union[int, Source] = 0) -> None:
+               offset_bytes: Union[int, Source] = None) -> None:
         """
         Stream data from a source to a destination WaveformMemory. 
 
@@ -2339,7 +2350,7 @@ class Acadia:
             if offset_bytes is not None:
                 raise ValueError(f"Use of an offset is not allowed when matching"
                                 f" stream size to destination size."
-                                f" (found offset {offset}).")
+                                f" (found offset {offset_bytes}).")
 
             output_size_bytes = dst.nbytes
             logger.debug(f"Inferring stream output size from destination ({output_size_bytes} bytes)")

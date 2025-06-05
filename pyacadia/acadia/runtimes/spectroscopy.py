@@ -14,6 +14,10 @@ class SpectroscopyRuntime(Runtime):
     stimulus: dict
     capture: dict
 
+    full_traces: bool = False
+    write_mode: str = "lower"
+    kernel_scale: float = 0.1
+
     plot: bool = False
     
     # If ``0``, automatically fit phase data to 
@@ -37,7 +41,10 @@ class SpectroscopyRuntime(Runtime):
 
         # For the capture waveform, we need to set decimation to zero so that
         # the output will be a single sample
-        capture_waveform = acadia.create_waveform_memory(capture_channel, decimation=0, **self.capture["memory"]) 
+        capture_waveform = acadia.create_waveform_memory(
+            capture_channel, 
+            decimation=(4 if self.full_traces else 0), 
+            **self.capture["memory"]) 
                 
         # Create a data record group for storing the data that we collect
         # we can mark it as uniform because we know that every record we collect
@@ -45,24 +52,18 @@ class SpectroscopyRuntime(Runtime):
         self.data.add_group("traces", uniform=True)
                 
         def sequence(a: Acadia):
-            # Configure the CMACC to integrate the data arriving on the capture channel
-            # When we want to integrate the signal against a kernel, we would provide it here.
-            # However, when a kernel array is not provided, a single-sample array will be 
-            # returned to be populated with the amplitude for a boxcar kernel.
-            capture_stream, kernel = acadia.configure_cmacc(capture_channel, reset_fifo=True)
-
-            # By default, the CMACC accumulator will contain whatever value it last held. 
-            # Here we set it to zero, but we could set it to any complex value in order to
-            # apply an implicit offset to the resulting integrated value.
-            acadia.cmacc_load(capture_stream, 0)
-
             # Create a synchronizer block to arrange cycle-accurate pulse scheduling
             with a.channel_synchronizer():
                 # Play the stimulus out of the DAC
                 a.schedule_waveform(stimulus_waveform)
 
                 # Trigger the ADC and collect data into the array
-                a.stream(capture_stream, capture_waveform)
+                capture_stream, kernel = a.stream_cmacc(
+                    capture_channel, 
+                    capture_waveform, 
+                    length=self.capture["memory"]["length"], 
+                    write_mode=self.write_mode,
+                    last_only=(not self.full_traces))
 
             # We can return anything here and it will be returned by Acadia.compile
             # Here, we'll return the kernel that was allocated by configure_cmacc
@@ -82,10 +83,10 @@ class SpectroscopyRuntime(Runtime):
 
         # Load the stimulus waveform memory with a hann window
         from scipy.signal.windows import hann
-        stimulus_waveform.load(hann(stimulus_waveform.size), self.stimulus["memory_scale"])
+        stimulus_waveform.load(hann(stimulus_waveform.size), scale=self.stimulus["waveform_scale"])
 
         # Set the amplitude of the boxcar integration kernel 
-        kernel.load(np.float64(0.9))
+        kernel.load(self.kernel_scale)
 
         # Assemble the sequence and load it into sequencer instruction memory
         acadia.assemble()
@@ -101,7 +102,7 @@ class SpectroscopyRuntime(Runtime):
                 acadia.update_ncos_synchronized()
 
                 # Run the sequencer                    
-                acadia.run()
+                acadia.run(minimum_delay=1000000)
 
                 # When the sequencer was run, the integrated signal was stored into
                 # capture_waveform because it was provided to acadia.stream()
@@ -164,11 +165,13 @@ class SpectroscopyRuntime(Runtime):
         import numpy as np
         self.data_summed = None
         self.electrical_delay_phases = np.exp(2*np.pi*1j*self.frequencies*self.electrical_delay)
+        self.fit_electrical_delay = 0.0
+        self.fit_electrical_delay_error = 0.0
 
     def update(self):
         import numpy as np
         from scipy.optimize import curve_fit
-        from acadia import WaveformMemory
+        from acadia.sample_arithmetic import sample_to_complex
 
         # First make sure that we actually have new data to process
         if "traces" not in self.data:
@@ -207,8 +210,8 @@ class SpectroscopyRuntime(Runtime):
             # the scale so that we turn the sum into a mean
             # Simultaneously, choose the scale so that the result is independent
             # of amplitude
-            scale = (self.stimulus["signal"]["scale"] / completed_iterations)
-            self.data_complex = WaveformMemory.sample_to_complex(self.data_summed, scale=scale)
+            scale = (self.stimulus["waveform_scale"] / completed_iterations)
+            self.data_complex = sample_to_complex(self.data_summed, scale=scale)
 
             # Apply the electrical delay
             self.data_complex *= self.electrical_delay_phases
@@ -250,7 +253,7 @@ def run(plot=True):
     import numpy as np
 
     stimulus: dict = {
-        "channel": "DAC4",
+        "channel": "DAC1",
 
         "datapath": {
             "vop": 4000,
@@ -258,15 +261,14 @@ def run(plot=True):
         },
 
         "memory": {
-            "length": 64e-9,
-            "fixed_length": 2e-6
+            "length": 2400e-9,
         },
         
-        "waveform_scale": 0.8
+        "waveform_scale": 0.1
     }
     
     capture: dict = {
-        "channel": "ADC4",
+        "channel": "ADC1",
 
         "datapath": {
             "mix_reconstruction": True
@@ -281,7 +283,7 @@ def run(plot=True):
         }
     }
 
-    frequencies = np.linspace(9.15e9, 9.25e9, 201)
+    frequencies = np.linspace(4.2e9, 4.5e9, 201)
 
     # Run the program on the target
     rt = SpectroscopyRuntime(
@@ -290,14 +292,17 @@ def run(plot=True):
         capture=capture,
         iterations=1000,
         plot=plot,
-        electrical_delay=108e-9)
+        electrical_delay=-57e-9,
+        write_mode="upper",
+        full_traces=False,
+        kernel_scale=0.9)
     
     if plot:
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-    rt.deploy("192.168.2.70")    
+    rt.deploy("192.168.2.69", log_debug=True)    
     rt.display()
     
     return rt
