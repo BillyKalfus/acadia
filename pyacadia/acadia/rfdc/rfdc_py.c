@@ -1566,6 +1566,64 @@ static PyObject* PyRfdc_status(PyObject* unused)
     #endif
 }
 
+#ifdef __aarch64__
+static int parse_tile_string(const char* s, unsigned int* tile_type, unsigned int* tile_id)
+{
+    if((strcmp(s, "ADCTile0") == 0) || (strcmp(s, "ADCTile1") == 0) || (strcmp(s, "ADCTile2") == 0) || (strcmp(s, "ADCTile3") == 0))
+    {
+        *tile_type = XRFDC_ADC_TILE;
+    }
+    else if((strcmp(s, "DACTile0") == 0) || (strcmp(s, "DACTile1") == 0) || (strcmp(s, "DACTile2") == 0) || (strcmp(s, "DACTile3") == 0))
+    {
+        *tile_type = XRFDC_DAC_TILE;
+    }
+    else 
+    {
+        return 1;
+    }
+
+    *tile_id = (unsigned int)(s[7] - '0');
+    return 0;
+}
+#endif
+
+static const char RFDC_READ_TILE_REG_DOCSTRING[] = "Reads a register from the control/status register set of a tile.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n"
+    ":param address: Register address to read from, expressed as an offset from the base address.\n";
+static PyObject* PyRfdc_read_tile_reg(PyObject* self, PyObject* args, PyObject* kwargs)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    unsigned int address;
+    unsigned int tile_type;
+    unsigned int tile_id;
+    unsigned int data;
+
+    static char* kwlist[] = {"tile", "address", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "sI", kwlist, 
+        &tile, 
+        &address))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+	data = XRFdc_ReadReg((&xrfdc), 
+                            XRFDC_CTRL_STS_BASE(tile_type, tile_id), 
+                            address);
+
+    return PyLong_FromUnsignedLong(data);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
 static const char RFDC_STARTUP_DOCSTRING[] = "Reset all tiles without clearing the register settings.";
 static PyObject* PyRfdc_startup(PyObject* self)
 {
@@ -1579,6 +1637,28 @@ static PyObject* PyRfdc_startup(PyObject* self)
     if(XRFdc_StartUp((&xrfdc), 1, -1) != XRFDC_SUCCESS)
     {
         return PyErr_Format(PyExc_ValueError, "Call to XRFdc_StartUp for DACs in %s failed.", __FUNCTION__);
+    }
+
+    Py_RETURN_NONE;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char RFDC_SHUTDOWN_DOCSTRING[] = "Shutdown all tiles without clearing the register settings.";
+static PyObject* PyRfdc_shutdown(PyObject* self)
+{
+    #ifdef __aarch64__
+
+    if(XRFdc_Shutdown((&xrfdc), 0, -1) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Call to XRFdc_Shutdown for ADCs in %s failed.", __FUNCTION__);
+    }
+
+    if(XRFdc_Shutdown((&xrfdc), 1, -1) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Call to XRFdc_Shutdown for DACs in %s failed.", __FUNCTION__);
     }
 
     Py_RETURN_NONE;
@@ -1905,20 +1985,10 @@ static PyObject* PyRfdc_set_analog_sample_rate(PyObject* self, PyObject* args, P
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
 
-    if((strcmp(tile, "ADCTile0") == 0) || (strcmp(tile, "ADCTile1") == 0) || (strcmp(tile, "ADCTile2") == 0) || (strcmp(tile, "ADCTile3") == 0))
-    {
-        tile_type = XRFDC_ADC_TILE;
-    }
-    else if((strcmp(tile, "DACTile0") == 0) || (strcmp(tile, "DACTile1") == 0) || (strcmp(tile, "DACTile2") == 0) || (strcmp(tile, "DACTile3") == 0))
-    {
-        tile_type = XRFDC_DAC_TILE;
-    }
-    else 
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
     {
         return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
     }
-
-    tile_id = tile[7] - '0';
 
     // Determine the interpolation/decimation factor
     // To do this we first need the interface sample rate
@@ -2025,20 +2095,10 @@ static PyObject* PyRfdc_get_multiband_config(PyObject* self, PyObject* tile_obj)
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
 
-    if((strcmp(tile, "ADCTile0") == 0) || (strcmp(tile, "ADCTile1") == 0) || (strcmp(tile, "ADCTile2") == 0) || (strcmp(tile, "ADCTile3") == 0))
-    {
-        tile_type = XRFDC_ADC_TILE;
-    }
-    else if((strcmp(tile, "DACTile0") == 0) || (strcmp(tile, "DACTile1") == 0) || (strcmp(tile, "DACTile2") == 0) || (strcmp(tile, "DACTile3") == 0))
-    {
-        tile_type = XRFDC_DAC_TILE;
-    }
-    else 
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
     {
         return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
     }
-
-    tile_id = tile[7] - '0';
 
     retval = XRFdc_GetMultibandConfig((&xrfdc), tile_type, tile_id);
 
@@ -2072,20 +2132,10 @@ static PyObject* PyRfdc_set_multiband_config(PyObject* self, PyObject* args, PyO
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
 
-    if((strcmp(tile, "ADCTile0") == 0) || (strcmp(tile, "ADCTile1") == 0) || (strcmp(tile, "ADCTile2") == 0) || (strcmp(tile, "ADCTile3") == 0))
-    {
-        tile_type = XRFDC_ADC_TILE;
-    }
-    else if((strcmp(tile, "DACTile0") == 0) || (strcmp(tile, "DACTile1") == 0) || (strcmp(tile, "DACTile2") == 0) || (strcmp(tile, "DACTile3") == 0))
-    {
-        tile_type = XRFDC_DAC_TILE;
-    }
-    else 
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
     {
         return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
     }
-
-    tile_id = tile[7] - '0';
 
     if(XRFdc_MultiBand((&xrfdc), tile_type, tile_id, digital_datapath_mask, XRFDC_MB_DATATYPE_C2R, data_converter_mask) != XRFDC_SUCCESS)
     {
@@ -2202,7 +2252,9 @@ static PyObject* PyRfdc_mts_sync(PyObject* self)
 static PyMethodDef PyRfdcMethods[] = {
     {"attach", (PyCFunction)PyRfdc_attach, METH_NOARGS, RFDC_ATTACH_DOCSTRING},
     {"status", (PyCFunction)PyRfdc_status, METH_NOARGS, RFDC_STATUS_DOCSTRING},
+    {"read_tile_reg", (PyCFunction)PyRfdc_read_tile_reg, METH_KEYWORDS | METH_VARARGS, RFDC_READ_TILE_REG_DOCSTRING},
     {"startup", (PyCFunction)PyRfdc_startup, METH_NOARGS, RFDC_STARTUP_DOCSTRING},
+    {"shutdown", (PyCFunction)PyRfdc_shutdown, METH_NOARGS, RFDC_SHUTDOWN_DOCSTRING},
     {"reset", (PyCFunction)PyRfdc_reset, METH_NOARGS, RFDC_RESET_DOCSTRING},
     {"get_clock_distribution", (PyCFunction)PyRfdc_get_clock_distribution, METH_NOARGS, RFDC_GET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_clock_distribution", (PyCFunction)PyRfdc_set_clock_distribution, METH_KEYWORDS | METH_VARARGS, RFDC_SET_CLOCK_DISTRIBUTION_DOCSTRING},

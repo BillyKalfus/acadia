@@ -33,6 +33,45 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Check for the presence of some required programs
+if ! $(which ftp > /dev/null) ; then
+    echo "FTP client must be installed to use this script."
+    exit 1
+fi
+
+if ! $(which expect > /dev/null) ; then
+    echo "expect must be installed to use this script."
+    exit 1
+fi
+
+if ! $(which wget > /dev/null) ; then
+    echo "wget must be installed to use this script."
+    exit 1
+fi
+
+deploy_ssh_key () {
+    ssh-keygen -f ~/.ssh/known_hosts -R $IP
+
+    # Copy the key to the remote host
+    # This will ask for the password, so we can use an expect script to automatically provide it
+    echo "Sending acadia SSH key to target..."
+    cmd="ssh-copy-id -f -i $HOME/.ssh/id_acadia -oStrictHostKeyChecking=no root@$IP"
+    expect -c "eval spawn $cmd; expect \"password:\"; send \"root\r\"; interact"
+}
+
+# In all cases we'll use the dedicated acadia SSH key, so no matter
+# what kind of install we're trying to do, create the key if it doesn't exist
+if [ ! -f ~/.ssh/id_acadia ]; then
+    # Create a dedicated ID for acadia operations that has no passphrase
+    echo "Creating dedicated acadia SSH key..."
+    ssh-keygen -Z aes128-ctr -f ~/.ssh/id_acadia -N ""
+fi
+
+# Deploy the key to the host if it's an initial install or we've never seen them
+if $INITIAL || ! (ssh-keygen -F $IP > /dev/null) ; then
+    deploy_ssh_key
+fi
+
 if $FIRMWARE; then
     # Retrieve the firmware
     echo "Retrieving firmware..."
@@ -46,30 +85,17 @@ if $FIRMWARE; then
 EOS
 
     echo "Deploying firmware..."
-    scp ./{BOOT.BIN,image.ub,boot.scr} root@$IP:/run/media/mmcblk0p1
+    scp -i $HOME/.ssh/id_acadia ./{BOOT.BIN,image.ub,boot.scr} root@$IP:/run/media/mmcblk0p1
     rm ./{BOOT.BIN,image.ub,boot.scr}
     
     echo "Rebooting target..."
-    ssh -oStrictHostKeyChecking=no -i $HOME/.ssh/id_acadia root@$IP "reboot; exit"
+    ssh -i $HOME/.ssh/id_acadia root@$IP "reboot; exit"
 
     echo "Waiting for target availability..."
     sleep 100
-fi
-
-if $INITIAL; then
-    ssh-keygen -f ~/.ssh/known_hosts -R $IP
-
-    if [ ! -f ~/.ssh/id_acadia ]; then
-        # Create a dedicated ID for acadia operations that has no passphrase
-        echo "Creating dedicated acadia SSH key..."
-        ssh-keygen -Z aes128-ctr -f ~/.ssh/id_acadia -N ""
-    fi
     
-    # Copy the key to the remote host
-    # This will ask for the password, so we can use an expect script to automatically provide it
-    echo "Sending acadia SSH key to target..."
-    cmd="ssh-copy-id -f -i $HOME/.ssh/id_acadia -oStrictHostKeyChecking=no root@$IP"
-    expect -c "eval spawn $cmd; expect \"password:\"; send \"root\r\"; interact"
+    # The target rebooted, so we need to deploy the SSH key again
+    deploy_ssh_key
 fi
 
 echo "Killing active screens..."

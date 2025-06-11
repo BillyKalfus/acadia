@@ -32,7 +32,7 @@ class LoopbackRuntime(Runtime):
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
             with a.channel_synchronizer():
-                a.schedule_waveform(stimulus_waveform)
+                a.schedule_waveform(stimulus_waveform, stretch_length=1e-6)
                 a.stream_direct(capture_channel, capture_waveform)
 
         # Compile the sequence

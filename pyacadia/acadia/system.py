@@ -1561,6 +1561,38 @@ class Acadia:
             return True
 
         return False
+
+    def waveform_dma_command(self, waveform: WaveformMemory) -> Union[int, Symbol]:
+        """
+        Create the command word which, when issued to a DMA, will play the 
+        provided waveform.
+
+        :type waveform: WaveformMemory
+        """
+
+        if not isinstance(waveform, WaveformMemory):
+            raise TypeError(f"Waveform must be of type WaveformMemory;"
+                            f" received type {type(waveform)}")
+
+        if type(waveform._resource) not in self.DACArray:
+            raise TypeError(f"Waveform commands may only be generated for waveforms"
+                            f" located in DAC waveform memory")
+
+        channel = None
+        for idx,array_type in enumerate(self.DACArray):
+            if type(waveform._resource) == array_type:
+                channel = self.DAC(idx)
+                break
+
+        if channel is None:
+            raise ValueError(f"Could not locate channel type; something weird happened.")
+
+        word_address = waveform._resource._resource_id // channel.interface_width_bytes
+        length_cycles = waveform.nbytes // channel.interface_width_bytes
+        command = (word_address << 16) | (length_cycles - 1)
+
+        return command
+
     
     @requires_sequencer
     def command_dma(self, 
@@ -1970,6 +2002,9 @@ class Acadia:
             conversion is performed; it is assumed that the source contains the 
             number of stretch cycles.
         :type stretch_length: float, Register, DSP
+        :param stretch_length_is_minus_one: If ``True``, the provided length is understood 
+            to be one less than the actual length to be included in the command. 
+        :type stretch_length_is_minus_one: bool
         """
         if not isinstance(waveform, WaveformMemory):
             raise TypeError("Only waveforms associated with a channel may be scheduled.")
@@ -2043,6 +2078,8 @@ class Acadia:
             logger.debug(f"Found stretch length derived from an Operation;"
                         f" assuming that the result is in units of cycles.")
             # No further action required
+        else:
+            raise TypeError(f"Invalid type for stretch length: {type(stretch_length)}")
 
         self.channel_synchronizer.add({
             "function": DMASynchronizer.ARBITRARY, 
@@ -2086,6 +2123,54 @@ class Acadia:
                      f" {length_cycles // 2} cycles, a stretch length of"
                      f" {stretch_length}, and a second arbitrary part lasting"
                      f" {(length_cycles - 1) // 2} cycles")
+
+    @requires_sequencer
+    def dwell(self,
+                channel: Union[Channel, str, None] = None,
+                length: Union[float, Symbol, Operation] = None,
+                length_is_minus_one: bool = False) -> None:
+        """
+        Schedule a dwell on a channel's DMA.
+
+        :param channel: Channel to stream
+        :type channel: :class:`Channel`
+        :param length: The length of the dwell.
+            When a `float` is provided, this is the number of seconds for the dwell.
+            When a sequencer source is provided, no conversion is performed; it is 
+            assumed that the source contains the length in units of cycles.
+        :type length: float, Register, DSP
+        :param length_is_minus_one: If ``True``, the provided length is understood 
+            to be one less than the actual length to be included in the command. 
+        :type length_is_minus_one: bool
+        """
+
+        if np.issubdtype(type(length), float):
+            length = self.seconds_to_cycles(length)
+        elif isinstance(length, Symbol):
+            if np.issubdtype(length.value_type(), float):
+                length = Operation(Acadia.seconds_to_cycles, self, length)
+            elif np.issubdtype(length.value_type(), int):
+                pass # We can just leave this as-is
+            else:
+                raise TypeError(f"Symbolic length must use either"
+                                f" int or float for a value type;"
+                                f" found {length.value_type()}")
+        elif isinstance(length, Operation):
+            logger.debug(f"Found length derived from an Operation;"
+                        f" assuming that the result is in units of cycles.")
+            # No further action required
+        else:
+            raise TypeError(f"Invalid type for length: {type(length)}")
+
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.DWELL, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel, 
+                "length": length,
+                "length_is_minus_one": length_is_minus_one},
+            "retval": None})
 
     @requires_sequencer
     def stream_direct(self, 
@@ -2811,32 +2896,81 @@ class Acadia:
             pass
         
     @requires_sequencer
-    def channel_reset(self, channel):
+    def dma_reset(self, channel: Union[str, Channel]):
         """
-        Reset the DMAs associated with the provided channel
+        Reset the DMA associated with the provided channel
         """
+        channel = self.channel(channel)
         dma_name = f"{'dac' if channel.is_dac else 'adc'}{channel.num()}_dma"
-        dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value() + 1
-        self.sequencer().bus_write(address=dma_regs_address,
+        dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value() 
+        self.sequencer().bus_write(address=dma_regs_address + (1 << 2),
                                  data=0x00000001,
                                  comment=f"Reset DMA {dma_name}")
         
     @requires_sequencer
-    def channel_occupancy(self, channel):
+    def dma_status(self, channel: Union[str, Channel]):
         """
-        Get the number of commands queued for the DMA of the given channel.
+        Retrieve the status information for the DMA associated with the provided channel.
+        
+        The result is a 32-bit word with the following bit flags:
+            Bit 0: running
+            Bit 1: FIFO empty
+            Bit 2: FIFO full
+            Bit 3: FIFO almost empty
+            Bit 4: FIFO almost full
+
+        :param channel: Channel to interrogate
+        :type channel: :class:`Channel`
+        """
+        channel = self.channel(channel)
+        dma_name = f'{"dac" if channel.is_dac else "adc"}{channel.num()}_dma'
+        dma_regs_address = self._firmware.sequencer_bus_decoder[dma_name].address().value()
+        bus_op = self.sequencer().bus_read(dma_regs_address, latency=self._bus_latency(dma_name))
+        return bus_op
+
+    @requires_sequencer
+    def channel_is_fifo_empty(self, channel: Union[str, Channel]):
+        """
+        Check whether the FIFO for the provided channel's DMA is empty.
 
         :param channel: Channel to check
         :type channel: :class:`Channel`
         """
+        # Mask away the irrelevant_bits
+        return self.dma_status(channel) & (1 << 1) != 0
 
-        dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num()}_dma'
-        device = self._firmware.sequencer_bus_decoder[dev_name]
+    @requires_sequencer
+    def channel_is_fifo_full(self, channel: Union[str, Channel]):
+        """
+        Check whether the FIFO for the provided channel's DMA is full.
 
-        bus_op = self.sequencer().bus_read(device.address().value(), 
-                                                 latency=self._bus_latency(dev_name))
-        # Mask away the running bit
-        return bus_op & 0b1111 != 0
+        :param channel: Channel to check
+        :type channel: :class:`Channel`
+        """
+        # Mask away the irrelevant_bits
+        return self.dma_status(channel) & (1 << 2) != 0
+
+    @requires_sequencer
+    def channel_is_fifo_almost_full(self, channel: Union[str, Channel]):
+        """
+        Check whether the FIFO for the provided channel's DMA is almost full.
+
+        :param channel: Channel to check
+        :type channel: :class:`Channel`
+        """
+        # Mask away the irrelevant_bits
+        return self.dma_status(channel) & (1 << 3) != 0
+
+    @requires_sequencer
+    def channel_is_fifo_almost_empty(self, channel: Union[str, Channel]):
+        """
+        Check whether the FIFO for the provided channel's DMA is almost empty.
+
+        :param channel: Channel to check
+        :type channel: :class:`Channel`
+        """
+        # Mask away the irrelevant_bits
+        return self.dma_status(channel) & (1 << 4) != 0
     
     @requires_sequencer
     def channels_running(self, *channels):

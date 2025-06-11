@@ -23,17 +23,15 @@ class ContinuousSynthesisRuntime(Runtime):
     def main(self):        
         from acadia import Acadia
         import time
-        logger = logging.getLogger("acadia")
         
         acadia = Acadia()
-
         channel = acadia.channel(self.channel)
-        pulse = acadia.create_waveform_memory(channel, fixed_length=1e-6)
+        pulse = acadia.create_waveform_memory(channel, length=1e-6)
         
         def sequence(a: Acadia):
             with a.sequencer().loop():
                 # If there are no pulses queued for the channel, play another
-                with a.sequencer().test(a.channel_occupancy(channel) == 0):
+                with a.sequencer().test(a.channel_is_fifo_empty(channel)):
                     with a.channel_synchronizer(block=False):
                         a.schedule_waveform(pulse)
 
@@ -58,13 +56,13 @@ class ContinuousSynthesisRuntime(Runtime):
         utils.sequencer_halt_and_reset()
 
 def run():
-    rt = ContinuousSynthesisRuntime(channel="DAC6", 
-                                    amplitude = 0.5,
+    rt = ContinuousSynthesisRuntime(channel="DAC2", 
+                                    amplitude = 0.9,
                                     mix_reconstruction=True,
-                                    frequency=1.9e9, 
-                                    vop=20000)
+                                    frequency=6e9, 
+                                    vop=10000)
 
-    rt.deploy("10.66.3.198", "continuous_synthesis", files=[__file__])    
+    rt.deploy("10.66.3.224", "continuous_synthesis", files=[__file__])    
     rt.display()
 
     return rt
