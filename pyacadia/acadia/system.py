@@ -238,7 +238,7 @@ class DMASynchronizer(Synchronizer):
                     logger.debug(f"Found indeterminate command from source {str(length)}")
                     indeterminate_commands[channel].append(command)
                     
-                elif np.issubdtype(type(length), int) or isinstance(length, (Symbol, Operation)):
+                elif np.issubdtype(type(length), int) or isinstance(length, (np.uint32, np.int32)) or isinstance(length, (Symbol, Operation)):
                     if command["length_is_minus_one"]:
                         determinate_lengths[channel] += length + 1
                     else:
@@ -1415,7 +1415,7 @@ class Acadia:
         return self._firmware["clk104_pl_clk"]["freq_hz"]
 
     def seconds_to_cycles(self, 
-                        t: float, 
+                        t: Union[float, np.ndarray], 
                         rounding_raise: bool = True, 
                         eps: float = 1e-6) -> Union[np.int32, np.ndarray]:
         """
@@ -1426,22 +1426,35 @@ class Acadia:
         ``eps`` away from the nearest integer. When ``False``, 
         all values are blindly rounded to the nearest integer.
         """
-        if not np.issubdtype(type(t), float):
-            raise TypeError(f"Input to seconds_to_cycles must be a float;"
-                            f" received {type(t)}")
+
+        input_type = t.dtype if isinstance(t, np.ndarray) else type(t)
+
+        if not np.issubdtype(input_type, float):
+            raise TypeError(f"Input to seconds_to_cycles must be a float or numpy array of floats;"
+                            f" received {input_type}")
 
         cycles = t * self.sequencer_clock_frequency()
-        rounded = int(round(cycles))
-
-        if rounding_raise and abs(rounded - cycles) > eps:
-            raise ValueError(f"Time value {t} does not equal an integer"
-                            f" number of cycles (found {cycles}).")
+        rounded = np.rint(cycles).astype(np.uint32)
+        
+        if rounding_raise:
+            violating_indices = np.argwhere(np.abs(rounded - cycles) > eps)
+            if violating_indices.shape[0] > 0:
+                if isinstance(t, float):
+                    raise ValueError(f"The following value does not equate to an integer number of cycles:"
+                                    f" {t} (cycles: {cycles})")
+                else:
+                    violating_values = [t[tuple(violating_indices[i,:])] for i in range(violating_indices.shape[0])]
+                    violating_cycles = [cycles[tuple(violating_indices[i,:])] for i in range(violating_indices.shape[0])]
+                    violating_strings = [f"{v} ({c} cycles)" for v,c in zip(violating_values, violating_cycles)]
+                    raise ValueError(f"The following values do not equate to an integer number of cycles:"
+                                    f" {', '.join(violating_strings)}")
 
         return rounded
 
     def delay_times_to_counter_values(self, 
                                     t: np.ndarray, 
-                                    waveform_memory: Union[WaveformMemory, None] = None) -> np.ndarray:
+                                    waveform_memory: Union[WaveformMemory, None] = None,
+                                    waveform_channel: Union[Channel, str, None] = None) -> np.ndarray:
         """
         Calculates counter values for sequencer DSPs for the design pattern of 
         loading the DSP with a counter value, playing a waveform, waiting some 
@@ -1463,7 +1476,8 @@ class Acadia:
         the second pulse is far in the future, on another channel, or is 
         non-existent, this condition may be safely ignored. However, this condition
         may be automatically checked by providing the waveform memory for the first
-        pulse in the ``waveform_memory`` parameter.
+        pulse in the ``waveform_memory`` parameter and the channel it's played on in
+        the ``waveform_channel`` parameter.
         """
 
         # We need to take into account the few-cycle overhead associated with 
@@ -1476,11 +1490,12 @@ class Acadia:
         # First, convert all the time values into cycles
         delay_cycles = self.seconds_to_cycles(t)
 
+        # TODO: Confirm this number still applies as of v8, it's likely shorter now
         # Subtract off the 50 ns (10 cycle) offset, so that a delay of 60 ns 
         # corresponds to a count value of 2
         dsp_count_values = delay_cycles - 10 
         amin = np.argmin(dsp_count_values)
-        if np.any(dsp_count_values < 2):
+        if dsp_count_values[amin] < 2:
             raise ValueError(f"Counter value {dsp_count_values[amin]}"
                             f" for time {t[amin]} is too small")
 
@@ -1491,8 +1506,16 @@ class Acadia:
         # the length of the pulse + 5, we don't have to do anything
         # If there's no second pulse on this channel or it's known to start 
         # way in the future, this can be omitted
-        if waveform_memory is not None:
-            waveform_length_cycles = sum([p["length"] for p in waveform_memory.dma_parameters()])
+        if waveform_memory is None:
+            if waveform_channel is not None:
+                raise ValueError(f"waveform_channel must be None if waveform_memory is None.")
+        else:
+            if waveform_channel is None:
+                raise ValueError(f"Must provide waveform channel when calculating waveform memory length in cycles.")
+
+            waveform_length_cycles = waveform_memory.nbytes // waveform_channel.interface_width_bytes
+
+            # TODO: Confirm that this still applies for v8, it's likely shorter now
             if delay_cycles[amin] < waveform_length_cycles + 5:
                 raise ValueError(f"Delay is too short for separating two waveforms on"
                                 f" the same channel using a dynamic delay; first"
@@ -1555,7 +1578,7 @@ class Acadia:
         should be replaced with a NOP.
         """
         imm2 = instruction.imm2
-        if np.issubdtype(type(imm2), int) and imm2 == -1:
+        if (np.issubdtype(type(imm2), int) or isinstance(imm2, (np.uint32, np.int32))) and imm2 == -1:
             return True
         if isinstance(imm2, (Symbol, Operation)) and imm2.value() == -1:
             return True
@@ -1653,7 +1676,7 @@ class Acadia:
         channel = self.channel(channel)
 
         # Determine the command type
-        if np.issubdtype(type(command_type), int):
+        if np.issubdtype(type(command_type), int) or isinstance(command_type, (np.uint32, np.int32)):
             if command_type not in [0,1,2,3]:
                 raise ValueError(f"Invalid command type specifier: {command_type}")
         elif isinstance(command_type, str):
@@ -1705,7 +1728,7 @@ class Acadia:
         dev_name = f'{"dac" if channel.is_dac else "adc"}{channel.num()}_dma'
         device = self._firmware.sequencer_bus_decoder[dev_name]
 
-        if np.issubdtype(type(command), int):
+        if np.issubdtype(type(command), int) or isinstance(command, (np.uint32, np.int32)):
             command_string = f"{command:08X}"
         elif (isinstance(command, Symbol) and command.assigned) or (isinstance(command, Operation) and command.resolveable()):
             command_string = f"{command.value()} (resolved from {command})"
@@ -1791,7 +1814,7 @@ class Acadia:
     
     def create_waveform_memory(self,
                         channel: Channel,
-                        length: Union[int, float, np.ndarray],
+                        length: Union[int, float, np.ndarray] = None,
                         decimation: int = 1,
                         multiplicity: int = None,
                         region: Union[Channel, ManagedMemory, None, str] = None) -> WaveformMemory:
@@ -1816,6 +1839,9 @@ class Acadia:
             Note that this does not store the sample data in any way; it just
             uses it to determine the shape of aray must be allocated. 
             Decimation may not be provided.
+
+        - If ``None``, then a single sample for a decimated waveform is created.
+            ``decimation`` must be set to 0.
 
         An optional multiplicity may be provided as either an int or a tuple,
         in which case the waveform will be created as a multidimensional array 
@@ -1862,7 +1888,7 @@ class Acadia:
             raise ValueError(f"Decimation must be 1 for DAC channels.")
         
         if decimation != 1 and decimation % 4 != 0:
-            raise ValueError(f"Decimation may only be 1 or a multiple of 4"
+            raise ValueError(f"Decimation may only be 0, 1, or a multiple of 4"
                              f" (received {decimation})")
 
         dtype = "<i2" if decimation == 1 else "<i4"
@@ -1880,7 +1906,14 @@ class Acadia:
             # both of which must have interface widths equal to the path width
             channel_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
 
-        if np.issubdtype(type(length), float):
+        if length is None:
+            if decimation != 0:
+                raise ValueError(f"Decimation must be 0 when length is None (found {decimation})")
+            
+            shape = 1
+            logger.debug(f"Allocating single decimated sample for channel {channel}")
+
+        elif np.issubdtype(type(length), float):
             # Length of waveforms in seconds
             if length <= 0:
                 raise ValueError(f"Length of a waveform must be positive (received {length})")
@@ -1942,7 +1975,7 @@ class Acadia:
                 raise ValueError(f"Number of waveform samples in last dimension of provided array"
                                 f" (full shape {shape}) is not a multiple of the number of samples per"
                                 f" cycle ({channel_samples_per_cycle}).")
-        
+
         else:
             raise TypeError(f"WaveformMemory length must be specified as a float"
                             f" or as a numpy array (received type {type(length)}).")
@@ -2065,10 +2098,19 @@ class Acadia:
 
         if np.issubdtype(type(stretch_length), float):
             stretch_length = self.seconds_to_cycles(stretch_length)
+        elif isinstance(stretch_length, self.sequencer().Register):
+            # Do nothing, registers can be passed directly into the synchronizer
+            logger.debug(f"Adding indeterminate stretch length on channel {channel} from {stretch_length}")
+        elif isinstance(stretch_length, self.sequencer().DSP):
+            # Need to be more cautious, but is acceptable
+            logger.warning(f"Scheduling stretch on channel {channel} from {length};"
+                            f" ensure that the DSP is not automatically updating,"
+                            f" as this can lead undefined behavior when the DSP"
+                            f" value is reused during alignment.")
         elif isinstance(stretch_length, Symbol):
             if np.issubdtype(stretch_length.value_type(), float):
                 stretch_length = Operation(Acadia.seconds_to_cycles, self, stretch_length)
-            elif np.issubdtype(stretch_length.value_type(), int):
+            elif np.issubdtype(stretch_length.value_type(), int) or stretch_length.value_type() in [np.int32, np.uint32]:
                 pass # We can just leave this as-is
             else:
                 raise TypeError(f"Symbolic stretch length must use either"
@@ -2146,10 +2188,19 @@ class Acadia:
 
         if np.issubdtype(type(length), float):
             length = self.seconds_to_cycles(length)
+        elif isinstance(length, self.sequencer().Register):
+            # Do nothing, registers can be passed directly into the synchronizer
+            logger.debug(f"Scheduling dwell on channel {channel} from {length}")
+        elif isinstance(length, self.sequencer().DSP):
+            # Need to be more cautious, but is acceptable
+            logger.warning(f"Scheduling dwell on channel {channel} from {length};"
+                            f" ensure that the DSP is not automatically updating,"
+                            f" as this can lead undefined behavior when the DSP"
+                            f" value is reused during alignment.")
         elif isinstance(length, Symbol):
             if np.issubdtype(length.value_type(), float):
                 length = Operation(Acadia.seconds_to_cycles, self, length)
-            elif np.issubdtype(length.value_type(), int):
+            elif np.issubdtype(length.value_type(), int) or length.value_type() in [np.uint32, np.int32]:
                 pass # We can just leave this as-is
             else:
                 raise TypeError(f"Symbolic length must use either"
@@ -2167,7 +2218,7 @@ class Acadia:
             "self": self, 
             "args": (), 
             "kwargs": {
-                "channel": channel, 
+                "channel": self.channel(channel), 
                 "length": length,
                 "length_is_minus_one": length_is_minus_one},
             "retval": None})
@@ -2227,7 +2278,7 @@ class Acadia:
 
     @requires_sequencer
     def stream_cmacc(self, 
-                     src: Union[Channel, StreamConfiguration, WaveformMemory],
+                     src: Union[Channel, str, StreamConfiguration, WaveformMemory],
                      dst: WaveformMemory, 
                      length: float = None,
                      output_offset_bytes: Union[int, Source, None] = None,
@@ -2421,12 +2472,17 @@ class Acadia:
 
         logger.debug(f"Stream destination at address {dst.byte_address:010X}")
 
-        if np.issubdtype(type(length_cycles), int):
+        if np.issubdtype(type(length_cycles), int) or isinstance(length_cycles, (np.uint32, np.int32)):
             if length_cycles <= 0:
                 raise ValueError(f"Received invalid length_cycles: {length_cycles}")
             logger.debug(f"Using stream length {length_cycles} cycles")
         elif isinstance(length_cycles, self.sequencer().Register):
             logger.debug(f"Using indeterminate stream length from {length_cycles}")
+        elif isinstance(length_cycles, self.sequencer().DSP):
+            logger.warning(f"Scheduling stream from {length};"
+                            f" ensure that the DSP is not automatically updating,"
+                            f" as this can lead undefined behavior when the DSP"
+                            f" value is reused during alignment.")
         else:
             raise TypeError(f"Received object of invalid type for length_cycles:"
                             f" {type(length_cycles)}")
@@ -2439,7 +2495,7 @@ class Acadia:
 
             output_size_bytes = dst.nbytes
             logger.debug(f"Inferring stream output size from destination ({output_size_bytes} bytes)")
-        elif np.issubdtype(type(output_size_bytes), int):
+        elif np.issubdtype(type(output_size_bytes), int) or isinstance(output_size_bytes, (np.uint32, np.int32)):
             if output_size_bytes <= 0:
                 raise ValueError(f"Received invalid output size: {output_size_bytes}")
 
@@ -2459,7 +2515,7 @@ class Acadia:
 
         if offset_bytes is None:
             offset_bytes = 0
-        elif np.issubdtype(type(offset_bytes), int):
+        elif np.issubdtype(type(offset_bytes), int) or isinstance(offset_bytes, (np.uint32, np.int32)):
             if offset_bytes < 0:
                 raise ValueError(f"Received invalid offset: {offset_bytes}")
             logger.debug(f"Using output offset of {offset_bytes} bytes")
@@ -2560,7 +2616,7 @@ class Acadia:
 
     @requires_sequencer
     def configure_cmacc(self, 
-                        src: Union[Channel, StreamConfiguration, WaveformMemory],
+                        src: Union[Channel, str, StreamConfiguration, WaveformMemory],
                         kernel: Union[np.ndarray, float, None] = None,
                         write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
                         last_only: bool = True, 
@@ -3474,10 +3530,10 @@ class Acadia:
         :type address_base: int, optional
         """
 
-        if np.issubdtype(type(size), int):
+        if np.issubdtype(type(size), int) or isinstance(size, (np.uint32, np.int32)):
             if size > 2**23:
                 raise ValueError(f"Size must be less than 8 MB; received {size}.")
-        elif isinstance(size, Symbol) and np.issubdtype(size.value_type(), int):
+        elif isinstance(size, Symbol) and (np.issubdtype(size.value_type(), int) or size.value_type() in [np.uint32, np.int32]):
             if size.assigned() and size.value() > 2**23:
                 raise ValueError(f"Size must be less than 8 MB; received {size}.")
             else:

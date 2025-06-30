@@ -21,6 +21,7 @@ def is_numeric(obj):
     :rtype: ``bool``
     """
 
+    # Check for a few valid types or Symbols that contain them
     for t in [int, bool, DSPConfiguration, ProcessorInstruction]:
         if (isinstance(obj, t) 
             or (isinstance(obj, Symbol) 
@@ -28,6 +29,10 @@ def is_numeric(obj):
                     or t in obj.value_type().__bases__))):
             return True
         
+    # Recursively check Operations and their arguments
+    # Note that we don't check the function that it will implement,
+    # so it's critical to make sure that functions used in numeric
+    # situations return numeric arguments
     if isinstance(obj, Operation):
         if obj._op not in Operable.NUMERIC_OPERATORS:
             return False
@@ -38,6 +43,14 @@ def is_numeric(obj):
             if not is_numeric(value):
                 return False
         return True
+
+    # If it's convertible to an integer, we consider that valid
+    try:
+        _ = int(obj)
+        return True
+    except:
+        pass
+
     return False    
 
 @dataclass
@@ -207,7 +220,7 @@ class STP:
         if self.src1 is None:
             self.src1 = Source(Source.Major.REG)
         elif is_numeric(self.src1):
-            self.imm1 = self.src1
+            self.imm1 = self.src1 if isinstance(self.src1, (Symbol, Operation)) else int(self.src1)
             self.src1 = Source(Source.Major.IMM)
         elif not isinstance(self.src1, Source):
             raise TypeError(f"STP field src1 must be of type Source;"
@@ -216,7 +229,7 @@ class STP:
         if self.src2 is None:
             self.src2 = Source(Source.Major.REG)
         elif is_numeric(self.src2):
-            self.imm2 = self.src2
+            self.imm2 = self.src2 if isinstance(self.src2, (Symbol, Operation)) else int(self.src2)
             self.src2 = Source(Source.Major.IMM)
         elif not isinstance(self.src2, Source):
             raise TypeError(f"STP field src2 must be of type Source;"
@@ -227,7 +240,7 @@ class STP:
             field_value = getattr(self, field)
             if not isinstance(field_value, field_type):
                 raise TypeError(f"Field {field} must be of type {field_type};"
-                                f" received {field_value}.")
+                                f" received {field_value} (type {field_type}).")
                 
     def pprint(self):
         """
