@@ -149,20 +149,24 @@ Please note that the first installation of Acadia must be carried out using a Li
 
 ## Installing Pre-built Firmware
 
-1. Change directories to the mount path of the SD card (if you just completed the SD card setup, this will be the path that `udisksctl` reports).
+1. Obtain the firmware files. This section assumes that you have access to a firmware distribution server (for details on setting this up, see below), but please note that this is not a requirement - it is completely acceptible to retrieve the relevant files (listed below) by any other means, such as shared physical media. 
 
-1. Retrieve the latest firmware image by running the following (note that this must be run as one single command, not one line at a time):
+  1. Change directories to the mount path of the SD card (if you just completed the SD card setup, this will be the path that `udisksctl` reports).
 
-```
-ftp -i -n barharbor.stdusr.yale.internal <<EOS
-   user anonymous none
-   cd firmware-latest
-   get BOOT.BIN
-   get image.ub
-   get boot.scr
-   bye
-EOS
-```
+  1. Store the hostname of the server in a bash variable called `ACADIA_FIRMWARE_SERVER`. In RSL, this is `barharbor.stdusr.yale.internal`, so you should run `export ACADIA_FIRMWARE_SERVER="barharbor.stdusr.yale.internal"`.
+
+  1. Retrieve the latest firmware image by running the following (note that this must be run as one single command, not one line at a time):
+
+  ```
+  ftp -i -n $ACADIA_FIRMWARE_SERVER <<EOS
+    user anonymous none
+    cd firmware-latest
+    get BOOT.BIN
+    get image.ub
+    get boot.scr
+    bye
+  EOS
+  ```
 
 1. Copy the boot configuration script from the Acadia directory by running `cp acadia/petalinux/autostart.sh .`. The path will need to be modified according to where you downloaded this repository on your PC.
 
@@ -184,7 +188,7 @@ Either replace `$HOSTNAME` and `$MAC` with the appropriate values or populate th
 
 ### Updating firmware
 
-On the host PC, enter the acadia directory and run `./misc/remote_install.sh --firmware --ip IP` where `IP` is the domain name or IP address of the board. This will update the firmware on the SD card of the board, and then install the `acadia` software (meaning that the steps below can be skipped).
+On the host PC, enter the acadia directory and run `./misc/remote_install.sh --firmware --ip IP` where `IP` is the domain name or IP address of the board. This will update the firmware on the SD card of the board, and then install the `acadia` software (meaning that the steps below can be skipped). If you are located outside of RSL, you will need to update the `FIRMWARE_FTP_SERVER` variable defined at the top of `remote_install.sh`.
 
 ### Initial software installation
 
@@ -197,15 +201,9 @@ The following instructions establish a workflow for building an FPGA bitstream a
 ### Requirements
 1. Vivado 2023.2 with a valid license for the RFSoC Gen 3 devices (included with ZCU216 purchase).
 1. Xilinx PetaLinux Tools
-1. The PetaLinux Tools directory is available at the environment variable `PETALINUX`
-1. The Xilinx DTG source repository is downloaded locally and checked out to the 2023.2 branch
-
-```
-git clone https://github.com/Xilinx/device-tree-xlnx
-cd device-tree-xlnx
-git checkout xilinx-v2023.2
-cd ..
-```
+1. The PetaLinux Tools directory is available at the environment variable `PETALINUX_TOOLS`
+1. The ZCU216 board support package (BSP) for PetaLinux has been downloaded locally
+1. The Xilinx DTG source repository is downloaded locally and checked out to the 2023.2 branch, which can be obtained by running `git clone -b xlnx_rel_v2023.2 https://github.com/Xilinx/device-tree-xlnx`
 
 ### Build Procedure
 
@@ -230,6 +228,7 @@ cd ..
    1. When the build finishes you'll be returned to the Vivado command line. Run the following to verify that it met timing:
 
    ```
+   open_run impl_1
    set timing_report [report_timing_summary -no_header -no_detailed_paths -return_string]
    if {! [string match -nocase {*timing constraints are met*} $timing_report]} {
       error "ERROR: timing not met"
@@ -285,3 +284,20 @@ cd ..
       ```
 
 Once this is complete, load the SD card with the image by following the steps above in "First-time SD card preparation", but rather than pulling the firmware files from the server over FTP, copy them onto the SD card from the directory `images/linux` in the Petalinux project.
+
+## Setting up a firmware distribution server
+
+For a lab environment with multiple Acadia systems, updating firmware manually can be cumbersome. Because they are somewhat large (a few hundred MB), distributing the firmware in a convenient (and automation-friendly) way is non-trivial; they're too large for Yale's Git servers, and may be for yours as well. Therefore, Acadia's default means of distributing firmware is to host the files on a local FTP server. Note that this is an explicit choice to favor convenience over security; FTP transfers data in the clear, and the server will be configured to allow anonymous connections. This procedure should only be followed for a machine on a local intranet or in some other secure environment; proceed at your own risk. 
+
+1. On a machine designated as the distribution server, install the FTP server daemon using `sudo apt install vsftpd`.
+
+1. Configure the server to allow anonymous connections by editing `/etc/vsftpd.conf` (as root) and uncommenting/adding the following line: `anonymous_enable=YES`
+
+1. Restart the FTP server by running `sudo service vsftpd restart`.
+
+1. By default, the FTP server will have its root directory be `/srv/ftp`. In this directory, create a folder named `firmware-latest`.
+
+1. Locate the firmware files BOOT.BIN, boot.scr, and image.ub. These can be retrieved either from a Petalinux build (in the `images/linux` directory) or from the SD card of another system.
+
+1. Place the firmware files in the `firmware-latest` folder.
+

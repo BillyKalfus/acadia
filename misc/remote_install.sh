@@ -84,6 +84,11 @@ if $FIRMWARE; then
         bye
 EOS
 
+    if [ ! -f BOOT.BIN ] || [ ! -f image.ub ] || [ ! -f boot.scr ]; then
+        echo "Failed to retrieve firmware files from the server."
+        exit 1
+    fi
+
     echo "Deploying firmware..."
     scp -i $HOME/.ssh/id_acadia ./{BOOT.BIN,image.ub,boot.scr} root@$IP:/run/media/mmcblk0p1
     rm ./{BOOT.BIN,image.ub,boot.scr}
