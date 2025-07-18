@@ -615,6 +615,9 @@ class Runtime:
             logger = logging.getLogger("acadia")
 
             while True:
+                if os.path.exists(os.path.join(self.local_directory, ".stop")):
+                    self._stop_flag.set()
+                    
                 if self._stop_flag.is_set():
                     logger.debug("Stop requested")
                     break
