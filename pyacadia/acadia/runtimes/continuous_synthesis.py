@@ -62,9 +62,10 @@ class ContinuousSynthesisRuntime(Runtime):
         while time.time() < tstart + self.timeout:
             if self.data.serve() == DataManager.serve_hangup():
                 self.data.disconnect()
-                break
+                utils.sequencer_halt_and_reset()
+                return
         
-        # Time ran out or we were instructed to stop, so stop the sequencer
+        # Time ran out, so stop the sequencer
         utils.sequencer_halt_and_reset()
         
         # Indicate to the host that we completed properly
