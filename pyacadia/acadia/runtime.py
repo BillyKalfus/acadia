@@ -617,7 +617,7 @@ class Runtime:
             while True:
                 if os.path.exists(os.path.join(self.local_directory, ".stop")):
                     self._stop_flag.set()
-                    
+
                 if self._stop_flag.is_set():
                     logger.debug("Stop requested")
                     break
@@ -679,8 +679,21 @@ class Runtime:
                 self._retrieve_logs()
 
                 # Ensure that at least event_loop_period seconds have passed
-                while time.time() < t_loop + event_loop_period:
-                    pass
+                # There's a weird TypeError that can occur here, trying to catch it
+                # Update: there seems to be something weird with how python passes
+                # variables into threads with a closure. If the loop below runs
+                # without a sleep, there can be a weird TypeError saying that
+                # you can't compare objects of type 'cell' and 'bool', which
+                # none of the arguments are. There will also sometimes be a segfault.
+                # this is resolved by putting a small sleep in the loop
+                try:
+                    while time.time() < t_loop + event_loop_period:
+                        time.sleep(0.1)
+                except TypeError as e:
+                    print(e)
+                    print(str(type(t_loop)))
+                    print(str(type(event_loop_period)))
+                    print(str(type(time.time())))
 
                 t_loop = time.time()
 
