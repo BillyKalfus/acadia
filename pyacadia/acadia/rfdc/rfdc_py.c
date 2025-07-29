@@ -81,11 +81,15 @@ static PyObject* PyChannel_status(PyObject* self)
 
     PyObject* d = PyDict_New();
 
-    key = PyUnicode_FromString("sampling_freq");
-    value = PyFloat_FromDouble(status.SamplingFreq);
-    PyDict_SetItem(d, key, value);
-    Py_DECREF(key);
-    Py_DECREF(value);
+    // Removed because this isn't accurate after changing sampling rate
+    // This just returns the sampling rate currently stored in the 
+    // cached instance pointer for the block (see XRFdc_GetDACBlockStatus)
+    // whereas the actual samplinbg frequency can be retrieved with GetPLLConfig
+    // key = PyUnicode_FromString("sampling_freq");
+    // value = PyFloat_FromDouble(status.SamplingFreq);
+    // PyDict_SetItem(d, key, value);
+    // Py_DECREF(key);
+    // Py_DECREF(value);
 
     key = PyUnicode_FromString("datapath_clocks_status");
     value = PyBool_FromLong((long)(status.DataPathClocksStatus));
@@ -798,8 +802,8 @@ static PyObject* PyChannel_set_mix_reconstruction(PyObject* self, PyObject* use_
     #ifdef __aarch64__
 
     ChannelObject* self_channel = (ChannelObject*)self;
-    uint8_t use_mix;
-    if(!PyArg_Parse(use_mix_obj, "B", &use_mix))
+    uint32_t use_mix;
+    if(!PyArg_Parse(use_mix_obj, "p", &use_mix))
     {
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
@@ -848,8 +852,8 @@ static PyObject* PyChannel_set_high_linearity_mode(PyObject* self, PyObject* mod
 {
     #ifdef __aarch64__
     ChannelObject* self_channel = (ChannelObject*)self;
-    uint8_t mode;
-    if(!PyArg_Parse(mode_obj, "B", &mode))
+    uint32_t mode;
+    if(!PyArg_Parse(mode_obj, "p", &mode))
     {
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
@@ -904,7 +908,7 @@ static PyObject* PyChannel_set_imr_highpass(PyObject* self, PyObject* mode_obj)
 
     ChannelObject* self_channel = (ChannelObject*)self;
     uint32_t mode;
-    if(!PyArg_Parse(mode_obj, "I", &mode))
+    if(!PyArg_Parse(mode_obj, "p", &mode))
     {
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
@@ -1008,7 +1012,7 @@ static PyObject* PyChannel_set_dither(PyObject* self, PyObject* dither_obj)
 
     ChannelObject* self_channel = (ChannelObject*)self;
     uint32_t dither;
-    if(!PyArg_Parse(dither_obj, "I", &dither))
+    if(!PyArg_Parse(dither_obj, "p", &dither))
     {
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
@@ -1952,18 +1956,158 @@ static PyObject* PyRfdc_set_sysref_enabled(PyObject* self, PyObject* en)
     #endif
 }
 
-static const char RFDC_SET_ANALOG_SAMPLE_RATE_DOCSTRING[] = "Reconfigures the settings of the RF tile PLL to set a new analog sample rate.\n"
-    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n"
-    ":param bypass_pll: If True, indicates that the PLL should be disabled and that the tile should use an externally-provided high-frequency sampling clock.\n"
-    ":param reference_frequency: Frequency in Hz of the reference clock input to the tile.\n"
-    ":param sample_frequency: Desired sample frequency in Hz for the tile.\n";
-static PyObject* PyRfdc_set_analog_sample_rate(PyObject* self, PyObject* args, PyObject* kwargs)
+static const char RFDC_GET_MIN_SAMPLE_RATE_DOCSTRING[] = "Retrieves the minimum sample rate that the PLL can be set to.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n";
+static PyObject* PyRfdc_get_min_sample_rate(PyObject* self, PyObject* tile_obj)
 {
     #ifdef __aarch64__
 
     const char* tile;
-    int bypass_pll;
-    double reference_frequency;
+    unsigned int tile_type;
+    unsigned int tile_id;
+    double f;
+
+    if(!PyArg_Parse(tile_obj, "s", &tile))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+    if(XRFdc_GetMinSampleRate((&xrfdc), tile_type, tile_id, &f) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve max sample rate in %s", __FUNCTION__);
+    }
+
+    return PyFloat_FromDouble(f*1e6);
+    
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char RFDC_GET_MAX_SAMPLE_RATE_DOCSTRING[] = "Retrieves the maximum sample rate that the PLL can be set to.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n";
+static PyObject* PyRfdc_get_max_sample_rate(PyObject* self, PyObject* tile_obj)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    unsigned int tile_type;
+    unsigned int tile_id;
+    double f;
+
+    if(!PyArg_Parse(tile_obj, "s", &tile))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+    if(XRFdc_GetMaxSampleRate((&xrfdc), tile_type, tile_id, &f) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve max sample rate in %s", __FUNCTION__);
+    }
+
+    return PyFloat_FromDouble(f*1e6);
+    
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char RFDC_GET_PLL_CONFIGURATION_DOCSTRING[] = "Retrieves the current PLL settings.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n";
+static PyObject* PyRfdc_get_pll_configuration(PyObject* self, PyObject* tile_obj)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    unsigned int tile_type;
+    unsigned int tile_id;
+    PyObject* key;
+    PyObject* value;
+    PyObject* dict;
+    XRFdc_PLL_Settings pll_settings;
+
+    if(!PyArg_Parse(tile_obj, "s", &tile))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if(parse_tile_string(tile, &tile_type, &tile_id)) 
+    {
+        return PyErr_Format(PyExc_ValueError, "Invalid tile specification %s", tile);
+    }
+
+    if(XRFdc_GetPLLConfig((&xrfdc), tile_type, tile_id, &pll_settings) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve PLL settings in %s", __FUNCTION__);
+    }
+
+    dict = PyDict_New();
+
+    key = PyUnicode_FromFormat("enabled");
+    value = PyBool_FromLong((long)(pll_settings.Enabled));
+    PyDict_SetItem(dict, key, value);
+    Py_DECREF(key);
+    Py_DECREF(value);  
+
+    key = PyUnicode_FromFormat("reference_frequency");
+    value = PyFloat_FromDouble(pll_settings.RefClkFreq*1e6);
+    PyDict_SetItem(dict, key, value);
+    Py_DECREF(key);
+    Py_DECREF(value);  
+
+    key = PyUnicode_FromFormat("sample_frequency");
+    value = PyFloat_FromDouble(pll_settings.SampleRate*1e9);
+    PyDict_SetItem(dict, key, value);
+    Py_DECREF(key);
+    Py_DECREF(value); 
+
+    key = PyUnicode_FromFormat("reference_clock_divider");
+    value = PyLong_FromLong((long)(pll_settings.RefClkDivider));
+    PyDict_SetItem(dict, key, value);
+    Py_DECREF(key);
+    Py_DECREF(value); 
+
+    key = PyUnicode_FromFormat("feedback_divider");
+    value = PyLong_FromLong((long)(pll_settings.FeedbackDivider));
+    PyDict_SetItem(dict, key, value);
+    Py_DECREF(key);
+    Py_DECREF(value); 
+
+    key = PyUnicode_FromFormat("output_divider");
+    value = PyLong_FromLong((long)(pll_settings.OutputDivider));
+    PyDict_SetItem(dict, key, value);
+    Py_DECREF(key);
+    Py_DECREF(value); 
+
+    return dict;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char RFDC_SET_PLL_CONFIGURATION_DOCSTRING[] = "Configures (and optionally bypasses) the settings of the RF tile PLL.\n"
+    ":param tile: Tile to configure. Valid options are 'ADCTilex' or 'DACTilex', where 'x' can be 0-3.\n"
+    ":param sample_frequency: Desired sample frequency in Hz for the tile.\n"
+    ":param reference_frequency: Frequency in Hz of the reference clock input to the tile. If not provided, the current reference frequency is used.\n"
+    ":param bypass: If True, the PLL will be disabled and that the tile will use an externally-provided high-frequency sampling clock.\n";
+static PyObject* PyRfdc_set_pll_configuration(PyObject* self, PyObject* args, PyObject* kwargs)
+{
+    #ifdef __aarch64__
+
+    const char* tile;
+    int bypass_pll = 0;
+    double reference_frequency = 0.0;
     double sample_frequency;
 
     unsigned int tile_type;
@@ -1974,13 +2118,14 @@ static PyObject* PyRfdc_set_analog_sample_rate(PyObject* self, PyObject* args, P
     double interface_sample_rate;
     uint32_t conversion_factor;
     uint32_t datapath_mode;
+    XRFdc_PLL_Settings pll_settings;
 
-    static char* kwlist[] = {"tile", "bypass_pll", "reference_frequency", "sample_frequency", NULL};
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "spdd", kwlist, 
-        &tile, 
-        &bypass_pll, 
+    static char* kwlist[] = {"tile", "sample_frequency", "reference_frequency", "bypass", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "sd|dp", kwlist, 
+        &tile,  
+        &sample_frequency,
         &reference_frequency,
-        &sample_frequency))
+        &bypass_pll))
     {
         return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
     }
@@ -2059,6 +2204,17 @@ static PyObject* PyRfdc_set_analog_sample_rate(PyObject* self, PyObject* args, P
                 return PyErr_Format(PyExc_ValueError, "Call to XRFdc_SetDecimationFactor in %s failed.", __FUNCTION__);
             }
         }
+    }
+
+    // If we weren't given the reference frequency, we need to retrieve it
+    if(reference_frequency == 0)
+    {
+        if(XRFdc_GetPLLConfig((&xrfdc), tile_type, tile_id, &pll_settings) != XRFDC_SUCCESS)
+        {
+            return PyErr_Format(PyExc_ValueError, "Failed to retrieve PLL settings in %s", __FUNCTION__);
+        }
+
+        reference_frequency = pll_settings.RefClkFreq*1e6;
     }
 
     if(XRFdc_DynamicPLLConfig(
@@ -2259,7 +2415,10 @@ static PyMethodDef PyRfdcMethods[] = {
     {"get_clock_distribution", (PyCFunction)PyRfdc_get_clock_distribution, METH_NOARGS, RFDC_GET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_clock_distribution", (PyCFunction)PyRfdc_set_clock_distribution, METH_KEYWORDS | METH_VARARGS, RFDC_SET_CLOCK_DISTRIBUTION_DOCSTRING},
     {"set_sysref_enabled", (PyCFunction)PyRfdc_set_sysref_enabled, METH_O, RFDC_SET_SYSREF_ENABLED_DOCSTRING},
-    {"set_analog_sample_rate", (PyCFunction)PyRfdc_set_analog_sample_rate, METH_KEYWORDS | METH_VARARGS, RFDC_SET_ANALOG_SAMPLE_RATE_DOCSTRING},
+    {"get_min_sample_rate", (PyCFunction)PyRfdc_get_min_sample_rate, METH_O, RFDC_GET_MIN_SAMPLE_RATE_DOCSTRING},
+    {"get_max_sample_rate", (PyCFunction)PyRfdc_get_max_sample_rate, METH_O, RFDC_GET_MAX_SAMPLE_RATE_DOCSTRING},
+    {"get_pll_configuration", (PyCFunction)PyRfdc_get_pll_configuration, METH_O, RFDC_GET_PLL_CONFIGURATION_DOCSTRING},
+    {"set_pll_configuration", (PyCFunction)PyRfdc_set_pll_configuration, METH_KEYWORDS | METH_VARARGS, RFDC_SET_PLL_CONFIGURATION_DOCSTRING},
     {"get_multiband_config", (PyCFunction)PyRfdc_get_multiband_config, METH_O, RFDC_GET_MULTIBAND_CONFIG_DOCSTRING},
     {"set_multiband_config", (PyCFunction)PyRfdc_set_multiband_config, METH_KEYWORDS | METH_VARARGS, RFDC_SET_MULTIBAND_CONFIG_DOCSTRING},
     {"mts_init", (PyCFunction)PyRfdc_mts_init, METH_NOARGS, RFDC_MTS_INIT_DOCSTRING},

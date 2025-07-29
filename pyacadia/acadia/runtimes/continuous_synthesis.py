@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from acadia import Runtime
+from typing import Union
 import acadia.utils as utils
 import logging
 
@@ -14,6 +15,7 @@ class ContinuousSynthesisRuntime(Runtime):
     frequency: float = 0
     mix_reconstruction: bool = True
     vop: int = 12000
+    imr_highpass: Union[bool, None] = None
 
     # Amount of time in seconds to run for
     timeout: float = 20
@@ -48,6 +50,11 @@ class ContinuousSynthesisRuntime(Runtime):
             vop=self.vop, 
             nco_frequency=self.frequency)
         channel.nco_immediate_update_event()
+
+        # We set this one separately because if we're not in IMR mode,
+        # we don't want to call set_imr_highpass at all
+        if self.imr_highpass is not None:
+            channel.set_imr_highpass(self.imr_highpass)
         
         # Load a constant into the pulse memory
         pulse.load(self.amplitude)

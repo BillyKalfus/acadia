@@ -1698,8 +1698,8 @@ u32 XRFdc_DynamicPLLConfig(XRFdc *InstancePtr, u32 Type, u32 Tile_Id, u8 Source,
 	u32 BaseAddr;
 	u32 PLLEnable = 0x0U;
 	u32 InitialPowerUpState;
-	double MaxSampleRate = 0.0;
-	double MinSampleRate = 0.0;
+	// double MaxSampleRate = 0.0;
+	// double MinSampleRate = 0.0;
 	u32 OpDiv;
 	u32 PLLFreq;
 	u32 PLLFS;
@@ -1738,20 +1738,22 @@ u32 XRFdc_DynamicPLLConfig(XRFdc *InstancePtr, u32 Type, u32 Tile_Id, u8 Source,
 		goto RETURN_PATH;
 	}
 
-	if (XRFdc_GetMaxSampleRate(InstancePtr, Type, Tile_Id, &MaxSampleRate) != XRFDC_SUCCESS) {
-		Status = XRFDC_FAILURE;
-		goto RETURN_PATH;
-	}
-	if (XRFdc_GetMinSampleRate(InstancePtr, Type, Tile_Id, &MinSampleRate) != XRFDC_SUCCESS) {
-		Status = XRFDC_FAILURE;
-		goto RETURN_PATH;
-	}
-	if ((SamplingRate < MinSampleRate) || (SamplingRate > MaxSampleRate)) {
-		metal_log(METAL_LOG_ERROR, "\n Invalid sampling rate value (%lf) for %s %u in %s\r\n", SamplingRate,
-			  (Type == XRFDC_ADC_TILE) ? "ADC" : "DAC", Tile_Id, __func__);
-		Status = XRFDC_FAILURE;
-		goto RETURN_PATH;
-	}
+	// When we change datapath modes, the minimum and maximum allowed sample rates are not updated,
+	// so this will throw an error even if we're now in a mode that allows higher sample rates than before
+	// if (XRFdc_GetMaxSampleRate(InstancePtr, Type, Tile_Id, &MaxSampleRate) != XRFDC_SUCCESS) {
+	// 	Status = XRFDC_FAILURE;
+	// 	goto RETURN_PATH;
+	// }
+	// if (XRFdc_GetMinSampleRate(InstancePtr, Type, Tile_Id, &MinSampleRate) != XRFDC_SUCCESS) {
+	// 	Status = XRFDC_FAILURE;
+	// 	goto RETURN_PATH;
+	// }
+	// if ((SamplingRate < MinSampleRate) || (SamplingRate > MaxSampleRate)) {
+	// 	metal_log(METAL_LOG_ERROR, "\n Invalid sampling rate value (%lf) for %s %u in %s\r\n", SamplingRate,
+	// 		  (Type == XRFDC_ADC_TILE) ? "ADC" : "DAC", Tile_Id, __func__);
+	// 	Status = XRFDC_FAILURE;
+	// 	goto RETURN_PATH;
+	// }
 
 	PLLFreq = (u32)((RefClkFreq + 0.0005) * XRFDC_MILLI);
 	PLLFS = (u32)((SamplingRate + 0.0005) * XRFDC_MILLI);
