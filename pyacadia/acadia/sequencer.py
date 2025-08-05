@@ -240,7 +240,7 @@ class STP:
             field_value = getattr(self, field)
             if not isinstance(field_value, field_type):
                 raise TypeError(f"Field {field} must be of type {field_type};"
-                                f" received {field_value} (type {field_type}).")
+                                f" received {field_value} (type {type(field_value)}).")
                 
     def pprint(self):
         """
@@ -368,6 +368,7 @@ class STP:
             tmp |= 1 << (69-64)
         tmp |= self.premask_invert << (68-64)
         if self.dsp_cep is not None:
+            # This also sets the dsp_cep_en bit
             tmp |= (self.dsp_cep.value() | 0x8) << (64-64)
 
         imm1_value = STP.assemble_imm(self.imm1)
@@ -508,6 +509,14 @@ class Sequencer(Processor):
             self.store(src=DSPConfiguration(dsp_cep="reset"), 
                        dest=Destination(major=Destination.Major.DSP_CFG,
                                         minor=dsp_self._resource_id))
+
+        def dsp_configure(dsp_self, **kwargs):
+            self.store(src=DSPConfiguration(**kwargs), 
+                       dest=Destination(major=Destination.Major.DSP_CFG,
+                                        minor=dsp_self._resource_id))
+
+        def dsp_pulse_cep(dsp_self):
+            self.store(src=Source(Source.Major.IMM), dest=None, dsp_cep=dsp_self)
         
         @contextmanager
         def dsp_enabled(dsp_self):
@@ -526,6 +535,8 @@ class Sequencer(Processor):
                      "start_count": dsp_start_count,
                      "stop_count": dsp_stop_count,
                      "enabled": dsp_enabled,
+                     "configure": dsp_configure,
+                     "pulse_cep": dsp_pulse_cep,
                      "source": dsp_source}
         
         dsp_dct.update(Operable.make_operator_functions(["eq", "ne", "gt", "lt", "ge", "le", 

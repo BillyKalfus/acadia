@@ -41,6 +41,7 @@ class DMASynchronizer(Synchronizer):
     CONSTANT_CONTINUED = 2
     DWELL = 3
     BARRIER = 4
+    DIRECT = 5
     
     def __call__(self, *args, **kwargs):
         if not isinstance(Processor.active_processor(), Sequencer):
@@ -66,6 +67,10 @@ class DMASynchronizer(Synchronizer):
         for commanding the DMA.
         """
         schedules = [{}]
+
+        # A direct write to the DMA command FIFO prevents us from scheduling anything after it,
+        # so let's keep track of whether we found one
+        has_direct = False 
 
         for idx_call,call in enumerate(calls):
             function,acadia,args,kwargs,retval = call.values()
@@ -107,9 +112,29 @@ class DMASynchronizer(Synchronizer):
                     schedule_dict[channel] = [command_dict]
                 
             elif function == DMASynchronizer.BARRIER:
+                # We can't put a barrier after a direct command
+                if has_direct:
+                    raise ValueError(f"Can't place barrier after a DMA direct command")
+
                 # Start a new subschedule, new commands are automatically
                 # added to the last one in the list
                 schedules.append({})
+
+            elif function == DMASynchronizer.DIRECT:
+                if "channel" not in kwargs:
+                    raise KeyError(f"Unable to locate channel in kwargs {kwargs}")
+
+                has_direct = True
+                command_dict = {
+                    "command_type": function,
+                    "command": kwargs["command"]
+                }
+
+                schedule_dict = schedules[-1]
+                if kwargs["channel"] in schedule_dict:
+                    schedule_dict[kwargs["channel"]].append(command_dict)
+                else:
+                    schedule_dict[kwargs["channel"]] = [command_dict]
 
             else:
                 raise ValueError(f"Synchronizer called with unrecognized"
@@ -222,6 +247,13 @@ class DMASynchronizer(Synchronizer):
             for command in channel_schedule:
                 if not isinstance(command, dict):
                     raise TypeError(f"Found command of invalid type: {type(command)}")  
+
+                # We know that if we receive a direct command, there can't be a barrier after it
+                # this means that we must be in the last subschedule. However, we shouldn't call
+                # calculate_subschedule_dwells for the last subschedule
+                if command["command_type"] == DMASynchronizer.DIRECT:
+                    raise ValueError(f"Found a DIRECT command in a subschedule passed to"
+                                     f" calculate_subschedule_dwells: {command}")
                 
                 if "length" not in command:
                     raise KeyError(f"Command missing length")
@@ -336,7 +368,9 @@ class DMASynchronizer(Synchronizer):
         involved in any provided schedules.
         """
         # Determine the dwells associated with each sub-schedule 
-        # (except for the last one, since no dwell is needed for that)
+        # except for the last one, since no dwell is needed for that.
+        # We can also safely call calculate_subschedule_dwells on every 
+        # subschedule we iterate over, since direct commands can only be in the last one
         logger.debug(f"Merging {len(schedules)} subschedules")
         for idx_schedule in range(len(schedules)-1):
             logger.debug(f"Calculating dwells for subschedule {idx_schedule}")
@@ -348,8 +382,8 @@ class DMASynchronizer(Synchronizer):
                 logger.debug(f"{str(channel)}: {len(channel_dwells)} dwells")
                 schedules[idx_schedule][channel].extend(channel_dwells)
 
-            # Take the list of dwells created for this sub-schedule and
-            # add dwells for channels used in future sub-schedules that 
+            # Take the list of dwells created for this subschedule and
+            # add dwells for channels used in future subschedules that 
             # didn't have anything scheduled here
             logger.debug(f"Adding dwells to channels in future subschedules")
             for idx_next_schedule in range(idx_schedule+1, len(schedules)):
@@ -382,7 +416,7 @@ class DMASynchronizer(Synchronizer):
                         # we can just assign it here
                         schedules[idx_schedule][channel] = new_schedule
         
-        # We've now properly aligned every sub-schedule and added dwells to them, so we can combine them all
+        # We've now properly aligned every subschedule and added dwells to them, so we can combine them all
         logger.debug(f"Combining all compensated subschedules")
         combined_schedules = {}
         for idx_schedule,schedule in enumerate(schedules):
@@ -516,6 +550,12 @@ class DMASynchronizer(Synchronizer):
             for channel, channel_schedule in combined_schedules.items():
                 if i < len(channel_schedule):
                     command = channel_schedule[i]
+
+                    # Convert direct commands to arbitrary, 
+                    # since the direct commands is only needed for scheduling and validation
+                    if command["command_type"] == DMASynchronizer.DIRECT:
+                        command["command_type"] = DMASynchronizer.ARBITRARY
+                        
                     self._acadia.command_dma(channel=channel, **command)
 
         dma_mask = reduce(or_, [(1 << (c.num() + (0 if c.is_dac else 16))) for c in combined_schedules.keys()])
@@ -1585,7 +1625,7 @@ class Acadia:
 
         return False
 
-    def waveform_dma_command(self, waveform: WaveformMemory) -> Union[int, Symbol]:
+    def waveform_dma_command(self, waveform: WaveformMemory) -> Union[int, Symbol, Operation]:
         """
         Create the command word which, when issued to a DMA, will play the 
         provided waveform.
@@ -1616,7 +1656,6 @@ class Acadia:
 
         return command
 
-    
     @requires_sequencer
     def command_dma(self, 
                     channel: Channel, 
@@ -2165,6 +2204,28 @@ class Acadia:
                      f" {length_cycles // 2} cycles, a stretch length of"
                      f" {stretch_length}, and a second arbitrary part lasting"
                      f" {(length_cycles - 1) // 2} cycles")
+
+    @requires_sequencer
+    def schedule_direct(self, 
+                        channel: Union[Channel, str], 
+                        command_source):
+        """
+        Schedules a DMA command constructed elsewhere.
+
+        For certain kinds of dynamic sequences, it's desirable to be able to play a pulse
+        chosen at runtime. Therefore, we need to be able to fetch a DMA command from a source
+        and issue it to the DMA without knowing what its fields contain. That is, we fetch a word
+        of data from some source assuming that it was assembled properly into a DMA command, and 
+        we write it directly to the DMA FIFO.  
+        """
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.DIRECT, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel, 
+                "command": command_source},
+            "retval": None})
 
     @requires_sequencer
     def dwell(self,
