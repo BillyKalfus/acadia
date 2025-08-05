@@ -644,12 +644,6 @@ class Sequencer(Processor):
                 comment=kwargs.get("comment", None),
                 push_return=kwargs.get("push_return", False))
         )
-        
-
-        # Propagate any provided comment to the compiled instructions
-        if "comment" in kwargs:
-            for instr in instructions:
-                instr.comment = kwargs["comment"]
 
         instruction_resource.compiled = instructions
 
@@ -680,38 +674,64 @@ class Sequencer(Processor):
                              f" keyword argument."
                              f" Received {instruction_resource.args}.")
             
-        # We need src and dest; these will throw KeyError if they aren't 
-        # present, which is basically our desired behavior so no need to 
-        # manually add key checking for this
         kwargs = instruction_resource.kwargs
-        src = kwargs["src"]
-        dest = kwargs["dest"]
         
-        if dest is None:
-            logger.debug(f"Optimizing store() without destination to NOP: {instruction_resource}")
-            instruction_resource.compiled = [STP()]
-            return
-            
+        # For dsp_cep and push_return, we want these flags to propagate 
+        # even if we end up converting into a NOP
+        if "dsp_cep" in kwargs:
+            if isinstance(kwargs["dsp_cep"], self.DSP):
+                logger.debug(f"CEP will be pulsed for {kwargs['dsp_cep']}")
+                dsp_cep = kwargs["dsp_cep"].source()
+            else:
+                raise TypeError(f"Argument for dsp_cep in an instruction must be"
+                                f" an instance of DSP (received {type(kwargs['dsp_cep'])})")
+        else:
+            dsp_cep = None
+
+        if "push_return" in kwargs:
+            if isinstance(kwargs["push_return"], bool):
+                logger.debug(f"Manual return push specified")
+                push_return = kwargs["push_return"]
+            else:
+                raise TypeError(f"Argument for push_return in an instruction must be"
+                                f" of type bool (received {type(kwargs['push_return'])})")
+        else:
+            push_return = False
+
+        # Create a master list that we'll use to collect instructions that the store compiles into
+        instructions = []
+
+        if "dest" not in kwargs:
+            raise ValueError(f"Missing destination in arguments to store() (arguments: {kwargs})")
+
         # Check that we have valid destinations
-        if isinstance(dest, self.Register):
-            dest = Destination(major=Destination.Major.REG, 
-                               minor=dest._resource_id)
+        dest = kwargs["dest"]
+        if dest is None:
+            logger.debug(f"Detected store without destination: {instruction_resource}")
+        elif isinstance(dest, self.Register):            
+            dest = Destination(major=Destination.Major.REG, minor=dest._resource_id)
         elif not isinstance(dest, (self.DSP, Destination)):
             raise TypeError("The `dest` field must be either a `Register`,"
                             " `DSP`, or `Destination`.")
                                                                         
-        if "dsp_cep" in kwargs and isinstance(kwargs["dsp_cep"], self.DSP):
-            dsp_cep = dsp_cep.source()
-        
-        instructions = []
+        # Determine whether this is a conditional store
         if kwargs.get("condition", None) is not None:
+            is_conditional = True
+            if dest is None:
+                logger.warning(f"Detected conditional NOP in instruction {instruction_resource}. Is there a logical error?")
             condition_kwargs,condition_instructions,condition_resources = self.compile_condition(kwargs["condition"], kwargs.get("mask", None))
             logger.debug(f"Compiled condition for store(): {kwargs['condition']} -> {condition_instructions}")
             instructions += condition_instructions
         else:
+            is_conditional = False
             condition_kwargs = {}
             condition_resources = []
         
+        # Detect (and compute, if necessary) the source
+        if "src" not in kwargs:
+            raise ValueError(f"Missing source in arguments to store() (arguments: {kwargs})")
+
+        src = kwargs["src"]
         if isinstance(src, Operation):    
             # If the destination is a DSP, we may be able to do the calculation in-place
             if isinstance(dest, self.DSP):    
@@ -740,10 +760,7 @@ class Sequencer(Processor):
             else:
                 compiled_src,src_instructions,src_resources = self.compile_source(src)
                 instructions += src_instructions
-                instructions.append(STP(src1=compiled_src, 
-                                         dest1=dest,
-                                         dsp_cep=kwargs.get("dsp_cep", None),
-                                         push_return=kwargs.get("push_return", False)))
+                instructions.append(STP(src1=compiled_src, dest1=dest))
         else:
             # Otherwise, we can just directly generate a single write 
             # instruction (the dataclass will enforce types in __post_init__)     
@@ -751,34 +768,29 @@ class Sequencer(Processor):
             instructions += src_instructions
             
             if isinstance(dest, self.DSP):
-                if kwargs.get("condition", None) is not None:
+                if is_conditional:
                     raise ValueError(f"Cannot conditionally write to DSP P port.")
                     
                 # Load P through AB
                 instructions.append(STP(src1=Source(Source.Major.IMM), 
                                          dest1=dest["CFG"], 
-                                         imm1=DSPConfiguration(mode="AB", 
-                                                               dsp_cep="pulse"),
+                                         imm1=DSPConfiguration(mode="AB", dsp_cep="pulse"),
                                          src2=compiled_src, 
-                                         dest2=dest["AB"],
-                                         dsp_cep=kwargs.get("dsp_cep", None),
-                                         push_return=kwargs.get("push_return", False)))
+                                         dest2=dest["AB"]))
             else:                
                 instructions.append(STP(src1=compiled_src, 
                                         dest1=dest,
-                                        dsp_cep=kwargs.get("dsp_cep", None),
-                                        push_return=kwargs.get("push_return", False),
-                                        conditional=(kwargs.get("condition", None) is not None),
+                                        conditional=is_conditional,
                                         **condition_kwargs))
         for res in condition_resources:
             res._released = True
-                
-        if "comment" in kwargs:
-            if len(instructions) == 1:
-                instructions[0].comment = kwargs["comment"]
-            else:
-                for idx_instr,instr in enumerate(instructions):
-                    instr.comment = f"({idx_instr+1}) " + kwargs["comment"]
+
+        # Add the dsp_cep and push_return flags to only the first instruction 
+        # in the total list so that if the store is compiled into multiple instructions,
+        # we don't trigger these side effects multiple times
+        instructions[0].dsp_cep = dsp_cep
+        instructions[0].push_return = push_return
+        instructions[0].comment = kwargs.get("comment", None)
 
         instruction_resource.compiled = instructions
         
