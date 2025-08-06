@@ -3068,9 +3068,9 @@ class Acadia:
         return self.dma_status(channel) & (1 << 2) != 0
 
     @requires_sequencer
-    def channel_is_fifo_almost_full(self, channel: Union[str, Channel]):
+    def channel_is_fifo_almost_empty(self, channel: Union[str, Channel]):
         """
-        Check whether the FIFO for the provided channel's DMA is almost full.
+        Check whether the FIFO for the provided channel's DMA is almost empty.
 
         :param channel: Channel to check
         :type channel: :class:`Channel`
@@ -3079,9 +3079,9 @@ class Acadia:
         return self.dma_status(channel) & (1 << 3) != 0
 
     @requires_sequencer
-    def channel_is_fifo_almost_empty(self, channel: Union[str, Channel]):
+    def channel_is_fifo_almost_full(self, channel: Union[str, Channel]):
         """
-        Check whether the FIFO for the provided channel's DMA is almost empty.
+        Check whether the FIFO for the provided channel's DMA is almost full.
 
         :param channel: Channel to check
         :type channel: :class:`Channel`
