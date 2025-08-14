@@ -199,6 +199,7 @@ class DSPConfiguration:
 # Create dataclasses for abstracting machine code
 @dataclass
 class STP:
+    # Bitfields
     src1: Union[Source, None] = None
     src2: Union[Source, None] = None
     dest1: Union[Destination, None] = None
@@ -211,8 +212,12 @@ class STP:
     imm2: Union[int, bool, Symbol, Operation, DSPConfiguration, ProcessorInstruction] = 0
     dsp_cep: Union[Source, Destination, int, None] = None
     push_return: Union[bool, int] = False
+    
+    # Compiler flags / additional processing
     comment: Union[str, None] = None
     simplifier: Union[Callable, None] = None
+    dsp_dependency_protection: bool = True
+    dsp_modification_protection: bool = True
 
     def __post_init__(self):
         # Check types
@@ -633,16 +638,14 @@ class Sequencer(Processor):
         if len(srcs) != len(dests):
             raise ValueError(f"Found {len(srcs)} sources and {len(dests)} destinations.")
 
+        other_kwargs = {k:v for k,v in kwargs.items() if k not in ["src1", "dest1", "src2", "dest2", "dsp_cep"]}
         instructions.append(
             STP(src1=srcs[0],
                 dest1=dests[0],
                 src2=(srcs[1] if len(srcs) > 1 else Source(Source.Major.REG)),
                 dest2=(dests[1] if len(dests) > 1 else Destination(Destination.Major.NONE)),
-                op=kwargs.get("op", None),
-                conditional=kwargs.get("conditional", False),
-                dsp_cep=(kwargs["dsp_cep"].source() if "dsp_cep" in kwargs else None),
-                comment=kwargs.get("comment", None),
-                push_return=kwargs.get("push_return", False))
+                dsp_cep=(kwargs["dsp_cep"].source() if kwargs.get("dsp_cep", None) is not None else None),
+                **other_kwargs)
         )
 
         instruction_resource.compiled = instructions
@@ -1138,98 +1141,6 @@ class Sequencer(Processor):
         condition_kwargs["src2"] = compiled_src
         instructions += src_instructions
         return condition_kwargs,instructions,src_resources
-    
-    def add_latencies(self):
-        """
-        Iterates through a compiled program and ensures that operations requiring
-        manually-added latency are correctly buffered. Note that this will only work
-        in situations where the compiler is able to determine that the relevant 
-        resources are being modified, so it is encouraged for the user to verify
-        the timings of expected procedures.
-
-        :return: ``True`` if the program was modified, otherwise ``False``
-        :rtype: bool
-        """
-
-        # If we used any DSP slices, we need to make sure that we add delays
-        # to account for the computation latency
-        # We'll do this by associating a counter with every DSP slice. When
-        # a DSP slice has its CEP pin activated, the counter will get set to
-        # the required latency amount and will decrement every cycle thereafter
-        # (unless the CEP pin is pulsed again, in which case it is reset). 
-        # When an instruction encountered that depends on the value of a given
-        # DSP slice, if the counter for that slice is non-zero, that many NOPs
-        # are added.
-        dsp_count_init = 2
-        counts = {f"DSP{i}": 0 for i in range(8)}
-        
-        for idx_instr,instr in enumerate(self._compiled_program):  
-            # Decrement all counts to indicate that a cycle has passed
-            for k in counts.keys():
-                if counts[k] > 0:
-                    counts[k] -= 1
-                    
-            if instr.dsp_cep is not None:
-                if isinstance(instr.dsp_cep, SequencerDatapathPort):
-                    counts[instr.dsp_cep.minor] = dsp_count_init
-                elif isinstance(instr.dsp_cep, int):
-                    counts[instr.dsp_cep] = dsp_count_init
-                else:
-                    raise TypeError(f"DSP CEP field must be of type"
-                                    f" `SequencerDatapathPort` or `int`;"
-                                    f" received {instr.dsp_cep}.")
-
-            for src,dest,imm in [(instr.src1, instr.dest1, instr.imm1), 
-                                 (instr.src2, instr.dest2, instr.imm2)]:
-                # If we're configuring a DSP CFG register, it's very likely 
-                # that its CEP pin will be affected, so we'll reset the counter
-                # just in case
-                
-                # If a source of the operation we're configuring the DSP for
-                # depends on PCIN, we may need to add delays
-                # If we can't figure it out, assume the user was cautious
-                # (probably a bad assumption but we'll need a smarter way to
-                # detect issues with this)
-                # we also won't add delays if we've detected that we need to
-                # restart the search, since the insertion of delays elsewhere
-                # could lead to adding too many delays
-                if dest is not None:
-                    if dest.major is Destination.Major.DSP_CFG:
-                        counts[f"DSP{dest.minor}"] = dsp_count_init
-                        if ( (isinstance(src, DSPConfiguration) and "PCIN" in src.mode)
-                          or (src.major is Source.Major.IMM 
-                              and isinstance(imm, DSPConfiguration)
-                              and "PCIN" in imm.mode)):
-
-                            if counts[f"DSP{dest.minor-1}"] > 0:
-                                nops = [STP(comment=f"Pipeline latency for DSP{dest.minor-1}")]*counts[f"DSP{dest.minor-1}"]
-                                self.insert_compiled_instructions(idx_instr, nops)
-                                return True
-
-                # Now check the sources. If we are depending on the value 
-                # of a DSP slice, we need to make sure that we've given it 
-                # enough time to complete the computation
-                if src.major is Source.Major.DSP_P:
-                    if counts[f"DSP{src.minor}"] > 0:
-                        nops = [STP(comment=f"Pipeline latency for DSP{src.minor}")]*counts[f"DSP{src.minor}"]
-                        self.insert_compiled_instructions(idx_instr, nops)
-                        return True
-                
-        return False
-
-    def compile_all(self, overwrite=False):
-        """
-        Invokes the typical compilation procedure and then verifies that any
-        intermediate computations are buffered with an appropriate amount of
-        pipeline cycles.
-        """
-
-        super().compile_all(overwrite)
-
-        # Add necessary latencies until it can be confirmed that no more are
-        # needed
-        while self.add_latencies():
-            pass
     
     @contextmanager
     def test(self, condition, mask=None, speculation=True):

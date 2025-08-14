@@ -15,7 +15,7 @@ import numpy as np
 
 from .waveforms import WaveformMemory
 from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
-from .sequencer import Sequencer, Source, is_numeric
+from .sequencer import Sequencer, Source, Destination, STP, DSPConfiguration, SequencerDatapathPort, is_numeric
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
 from .firmware import Firmware
 from .firmware_configurations import CONFIG_200
@@ -3171,8 +3171,128 @@ class Acadia:
         if configuration.adc_switch_master is not None:
             self._ADC_input_switch.connect(configuration.adc_switch_slave, 
                                            configuration.adc_switch_master)
+
+    def add_sequencer_latencies(self, sequencer):
+        """
+        Iterates through a compiled program and ensures that operations requiring
+        manually-added latency are correctly buffered. Note that this will only work
+        in situations where the compiler is able to determine that the relevant 
+        resources are being modified, so it is encouraged for the user to verify
+        the timings of expected procedures.
+
+        :return: ``True`` if the program was modified, otherwise ``False``
+        :rtype: bool
+        """
+
+        # If we used any DSP slices, we need to make sure that we add delays
+        # to account for the computation latency
+        # We'll do this by associating a counter with every DSP slice. When
+        # a DSP slice has its CEP pin activated, the counter will get set to
+        # the required latency amount and will decrement every cycle thereafter
+        # (unless the CEP pin is pulsed again, in which case it is reset). 
+        # When an instruction encountered that depends on the value of a given
+        # DSP slice, if the counter for that slice is non-zero, that many NOPs
+        # are added.
+        # Note that we need to check the sources for an instruction for dependencies first, since a common 
+        # programming pattern will be to use a DSP's value and pulse CEP in the same cycle
+        # so that it's updated without an additional instruction. However, this can lead to undesired 
+        # behavior; we need to avoid the situation where this function detects that an instruction depends 
+        # on a DSP value but also modifies it, thereby trying to insert delays "between" the modification and 
+        # dependency. 
+        # We resolve this by checking for dependency first, inserting any required NOPs before the instruction, 
+        # and THEN resetting the delay cycle counter for the instructions that come next. If we did this in the 
+        # reverse order, the counter would be reset before inserting the NOPs, so every time we encountered this 
+        # instruction it reset the counter first, detect the dependency, insert NOPs, and return. Then when the 
+        # function is re-entered it will get up to the instruction, reset the counter again (even though NOPs were
+        # already added, because we're erroneously resetting the counter before checking dependency), detect the 
+        # dependency, try to add NOPs before the instruction, and repeat, leading to an infinite loop.
         
-    def compile(self, sequence, overwrite=False, output_directory: str = None):
+        dsp_cfg_latency = 2
+        dsp_cep_latency = 1
+        counts = {f"DSP{i}": 0 for i in range(8)}
+
+        logger.debug(f"Adding latencies (program length {len(sequencer._compiled_program)})")
+        
+        for idx_instr,instr in enumerate(sequencer._compiled_program): 
+            logger.debug(f"Checking instr. {idx_instr}\n"
+                         f" - Initial counts: {list(counts.values())})\n"
+                         f" - 1: {instr.src1} ({instr.src1.major}, {instr.src1.minor}) -> {instr.dest1}\n"
+                         f" - 2: {instr.src2} ({instr.src2.major}, {instr.src2.minor}) -> {instr.dest2}\n") 
+            # Decrement all counts to indicate that a cycle has passed
+            for k in counts.keys():
+                if counts[k] > 0:
+                    counts[k] -= 1
+
+            # As we go through the instruction's fields, we'll keep track of how many 
+            # delay cycles we need to add BEFORE it so that all its dependencies are available
+            # We'll keep track of the highest number of required cycles so that if there are multiple
+            # dependencies, we only wait as long as we need to for them all to arrive, 
+            # with the ones requiring fewer cycles arriving earlier than needed
+            required_delay = 0
+            for src,dest,imm in [(instr.src1, instr.dest1, instr.imm1), 
+                                 (instr.src2, instr.dest2, instr.imm2)]:
+                # Check the sources for dependencies on DSP values; 
+                # have we waited a sufficient amount of time since the last time the DSP was modified?
+                if src.major is Source.Major.DSP_P and counts[f"DSP{src.minor}"] > 0:
+                    if instr.dsp_dependency_protection:
+                        required_delay = max(required_delay, counts[f"DSP{src.minor}"])
+                        logger.debug(f"Instruction depends on DSP P, new required delay: {required_delay}")
+                    else:
+                        logger.debug(f"Instruction depends on DSP P, but required delay"
+                                     f" not updated due to dsp_dependency_protection=False")
+
+                # If we're configuring a DSP CFG register, it's very likely 
+                # that its CEP pin will be affected, so we'll reset the counter
+                # just in case
+                if dest is not None and dest.major is Destination.Major.DSP_CFG:
+                    if instr.dsp_modification_protection:
+                        logger.debug(f"Resetting dependency delay for {dest} due to DSP CFG update")
+                        counts[f"DSP{dest.minor}"] = max(counts[f"DSP{dest.minor}"], dsp_cfg_latency)
+
+                        # If a source of the operation we're configuring the DSP for
+                        # depends on PCIN, it implicitly depends on the DSP below it.
+                        involves_pcin = ((isinstance(src, DSPConfiguration) and "PCIN" in src.mode)
+                            or (src.major is Source.Major.IMM 
+                                and isinstance(imm, DSPConfiguration)
+                                and "PCIN" in imm.mode))
+                        if involves_pcin:
+                            required_delay = max(required_delay, counts[f"DSP{dest.minor-1}"])
+                            logger.debug(f"Configuration depends on DSP PCIN, new required delay: {required_delay}")
+                    else:
+                        logger.debug(f"Found instruction configuring DSP {dest},"
+                                " but dependency delay not reset due to"
+                                " dsp_modification_protection=False")
+
+            # Insert NOPs if needed
+            if required_delay > 0:
+                logger.debug(f"Inserting {required_delay} NOPs for DSP dependencies")
+                nops = []
+                for i in range(required_delay):
+                    nops.append(STP(comment=f"Pipeline latency for DSP{src.minor} ({i+1} / {required_delay})"))
+                sequencer.insert_compiled_instructions(idx_instr, nops)
+                return True
+
+            # Now that we've added any potential delay that we need before the instruction,
+            # reset counts for instructions that may come next
+            if instr.dsp_cep is not None:
+                if instr.dsp_modification_protection:
+                    logger.debug(f"Resetting dependency delay for {instr.dsp_cep} due to DSP CEP pulse")
+                    if isinstance(instr.dsp_cep, SequencerDatapathPort):
+                        counts[f"DSP{instr.dsp_cep.minor}"] = max(counts[f"DSP{instr.dsp_cep.minor}"], dsp_cep_latency)
+                    elif isinstance(instr.dsp_cep, int):
+                        counts[f"DSP{instr.dsp_cep}"] = max(counts[f"DSP{instr.dsp_cep.minor}"], dsp_cep_latency)
+                    else:
+                        raise TypeError(f"DSP CEP field must be of type"
+                                        f" `SequencerDatapathPort` or `int`;"
+                                        f" received {instr.dsp_cep}.")
+                else:
+                    logger.debug(f"Found instruction with DSP CEP for {instr.dsp_cep},"
+                                " but dependency delay not reset due to"
+                                " dsp_modification_protection=False")
+
+        return False
+        
+    def compile(self, sequence, overwrite: bool = False, output_directory: str = None):
         """
         Compiles the programs for all internally-stored :class:`Processor` 
         objects.
@@ -3181,6 +3301,11 @@ class Acadia:
         
         for s in self._sequencer_type.instances:
             s.compile_all(overwrite)
+
+            # Add necessary latencies until it can be confirmed that no more are
+            # needed
+            while self.add_sequencer_latencies(s):
+                pass
 
         outfilename = os.path.join(output_directory, "compiled.log") if output_directory is not None else "compiled.log"
         with open(outfilename, "w") as outfile:
