@@ -79,14 +79,14 @@ class ContinuousSynthesisRuntime(Runtime):
         self.final_serve()
 
 def run():
-    rt = ContinuousSynthesisRuntime(channel="DAC2", 
-                                    amplitude = 0.9,
+    rt = ContinuousSynthesisRuntime(channel="DAC6", 
+                                    amplitude = 0.2,
                                     mix_reconstruction=True,
-                                    frequency=6e9, 
+                                    frequency=4.2e9, 
                                     vop=10000)
 
-    rt.deploy("10.66.3.224", "continuous_synthesis", files=[__file__])    
-    rt.display()
+    rt.deploy("192.168.2.69", "continuous_synthesis", files=[__file__])    
+    # rt.display()
 
     return rt
     

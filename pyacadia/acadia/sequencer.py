@@ -1315,6 +1315,6 @@ class Sequencer(Processor):
                         dest=Destination(Destination.Major.PC, 
                                         Destination.PC_ABSOLUTE_BRANCH), 
                         condition=jump_condition,
-                        dsp_cep=dsp.source(),
+                        dsp_cep=dsp,
                         comment="Branch back to loop start")
 
