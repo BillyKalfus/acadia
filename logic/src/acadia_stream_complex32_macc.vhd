@@ -109,6 +109,7 @@ entity acadia_stream_complex32_macc is
         kernel_memory_dout : out std_logic_vector(KERNEL_MEMORY_EXTERNAL_PORT_DATA_WIDTH-1 downto 0);
         kernel_memory_addr : in  std_logic_vector(KERNEL_MEMORY_EXTERNAL_PORT_ADDRESS_WIDTH-1 downto 0);
         kernel_memory_we   : in  std_logic_vector((KERNEL_MEMORY_EXTERNAL_PORT_DATA_WIDTH/8)-1 downto 0);
+        kernel_memory_en   : in  std_logic;
         kernel_memory_clk  : in  std_logic;
             
         -- Output data stream
@@ -151,6 +152,7 @@ architecture rtl of acadia_stream_complex32_macc is
     ATTRIBUTE X_INTERFACE_INFO of kernel_memory_addr: SIGNAL is "xilinx.com:interface:bram:1.0 kernel_memory ADDR";
     ATTRIBUTE X_INTERFACE_INFO of kernel_memory_we  : SIGNAL is "xilinx.com:interface:bram:1.0 kernel_memory WE";
     ATTRIBUTE X_INTERFACE_INFO of kernel_memory_clk : SIGNAL is "xilinx.com:interface:bram:1.0 kernel_memory CLK";
+    ATTRIBUTE X_INTERFACE_INFO of kernel_memory_en  : SIGNAL is "xilinx.com:interface:bram:1.0 kernel_memory EN";
     
     ATTRIBUTE X_INTERFACE_PARAMETER of data_out_aclk: SIGNAL is "ASSOCIATED_BUSIF data_out";
     ATTRIBUTE X_INTERFACE_INFO of data_out_tdata  : SIGNAL is "xilinx.com:interface:axis:1.0 data_out TDATA";
@@ -271,7 +273,7 @@ begin
             dinb => kernel_memory_din,
             doutb => kernel_memory_dout,
             web => kernel_memory_we,
-            enb => '1',
+            enb => kernel_memory_en,
             rstb => '0',
             regceb => '1',
 

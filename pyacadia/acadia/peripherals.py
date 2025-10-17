@@ -5,7 +5,6 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from .compiler import Processor
 from .sequencer import Sequencer
 
 import acadia.rfclk as rfclk
@@ -960,20 +959,17 @@ class ZDMA:
         for reg,value in self._regs.items():
             self._mem[reg] = value
     
-    def start_transfer(self):
+    def start_transfer(self, sequencer: Sequencer = None):
         """
         Starts the configured transfer.
         """
 
-        proc = Processor.active_processor()
-        if proc is None:
-            self._mem[ZDMA.CH_CTRL2] = 1
-        elif isinstance(proc, Sequencer):
+        if sequencer is not None:
             # Use the flow control interface to start the copy
-            return proc.bus_write(address=self.fci_bus_address,
+            return sequencer.bus_write(address=self.fci_bus_address,
                                  data=(1 << self.channel))
         else:
-            raise ValueError(f"Unable to start DMA transfer from processor {proc}.")
+            self._mem[ZDMA.CH_CTRL2] = 1
             
     def byte_count(self, clear=False):
         """
@@ -988,7 +984,7 @@ class ZDMA:
             self._mem[ZDMA.CH_TOTAL_BYTE] = 0
         return count
     
-    def status(self):
+    def status(self, sequencer: Sequencer = None):
         """
         Get the status of the DMA. On the PS, this is the value of the STATUS
         bitfield, and on the sequencer this is the value of the credit 
@@ -999,16 +995,13 @@ class ZDMA:
         :rtype: int
         """
 
-        proc = Processor.active_processor()
-        if proc is None:
-            return self._mem[ZDMA.CH_STATUS]
-        elif isinstance(proc, Sequencer):
+        if sequencer is not None:
             # Get the internally-stored credit acknowledgement
             return proc.bus_read(self.bus_address + self.channel)
         else:
-            raise ValueError(f"Unable to query status from processor {proc}.") 
+            return self._mem[ZDMA.CH_STATUS]
     
-    def is_complete(self):
+    def is_complete(self, sequencer: Sequencer = None):
         """
         Read the completion status of the DMA. On the PS, this compares the 
         DMA status value to that associated with successful completion. On the
@@ -1018,32 +1011,28 @@ class ZDMA:
         :rtype: int
         """
 
-        proc = Processor.active_processor()
-        if proc is None:
+        if sequencer is not None:
+            # Check the internally-stored transaction acknowledgement
+            return sequencer.bus_read(self.bus_address + 32 + self.channel)
+        else:
             status = self.status()
             return (status == 0) or (status == 3)
-        elif isinstance(proc, Sequencer):
-            # Check the internally-stored transaction acknowledgement
-            return proc.bus_read(self.bus_address + 32 + self.channel)
-        else:
-            raise ValueError(f"Unable to query completion from processor {proc}.")    
             
-    def clear_fci_counters(self):
+    def clear_fci_counters(self, sequencer: Sequencer = None):
         """
         Clear the counters for managing the FCI in the ZDMA controller.
         """
 
-        proc = Processor.active_processor()
-        if isinstance(proc, Sequencer):
+        if sequencer is not None:
             # Clear credit acknowledgement counter
-            proc.bus_write(address=self.bus_address + 1,
+            sequencer.bus_write(address=self.bus_address + 1,
                            data=(1 << self.channel))
             
             # Clear transaction valid counter
-            proc.bus_write(address=self.bus_address + 2,
+            sequencer.bus_write(address=self.bus_address + 2,
                            data=(1 << self.channel))
         else:
-            raise ValueError(f"Unable to clear FCI counters from processor {proc}.")
+            raise ValueError(f"FCI counters can only be cleared from a sequencer.")
         
 class AXISSwitch:
     """

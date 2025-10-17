@@ -14,7 +14,7 @@ from operator import or_
 import numpy as np
 
 from .waveforms import WaveformMemory
-from .compiler import ManagedResource, ManagedMemory, Processor, Synchronizer, Operation, Symbol
+from .compiler import ManagedResource, ManagedMemory, Synchronizer, Operation, Symbol
 from .sequencer import Sequencer, Source, Destination, STP, DSPConfiguration, SequencerDatapathPort, is_numeric
 from .peripherals import RFClk, PSGPIO, ZDMA, AXISSwitch
 from .firmware import Firmware
@@ -44,13 +44,6 @@ class DMASynchronizer(Synchronizer):
     DIRECT = 5
     
     def __call__(self, *args, **kwargs):
-        if not isinstance(Processor.active_processor(), Sequencer):
-            raise TypeError("Synchronization is only supported for contexts of"
-                            " a `Sequencer` object. Either enter an appropriate"
-                            " context to enforce synchronization or call the"
-                            " appropriate method to act directly on the"
-                            " hardware.")
-            
         self._dma_trigger = kwargs.pop("trigger", True)
         self._dma_block = kwargs.pop("block", self._dma_trigger) # don't block if we don't trigger
         return super().__call__(*args, **kwargs)
@@ -525,6 +518,9 @@ class DMASynchronizer(Synchronizer):
                 raise ValueError(f"Unable to synchronize different instances"
                                  f" of `Acadia`")
 
+        if self._acadia._active_sequencer is None:
+            raise ValueError(f"Synchronizers may only be used on the sequencer.")
+
         # Create individual subschedules from the total list of calls
         logger.debug("Creating subschedules")
         schedules = DMASynchronizer.create_schedules(self._calls)
@@ -609,20 +605,10 @@ class RFDCSynchronizer(Synchronizer):
     TDD = 7
     
     def __call__(self, *args, **kwargs):
-        if not isinstance(Processor.active_processor(), Sequencer):
-            raise TypeError("Synchronization is only supported for contexts of"
-                            " a `Sequencer` object. Either enter an appropriate"
-                            " context to enforce synchronization or call the"
-                            " appropriate method to act directly on the"
-                            " hardware.")
-
         self._nco_pl_event = kwargs.pop("nco_pl_event", False)
         return super().__call__(*args, **kwargs)
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # Get a reference to the Sequencer
-        proc = Processor.active_processor()
-        
+    def __exit__(self, exc_type, exc_val, exc_tb):        
         # Keep track of the aggregate values of all the calls
         nco_phase_reset = 0
         nco_update_enables = [0]*8
@@ -646,6 +632,9 @@ class RFDCSynchronizer(Synchronizer):
             elif acadia is not self._acadia:
                 raise ValueError(f"Unable to synchronize different instances of `Acadia`")
 
+            if self._acadia._active_sequencer is None:
+                raise ValueError(f"RFDC calls may only be synchronized on the sequencer.")
+
             channel = kwargs["channel"] if "channel" in kwargs else args[0]
             if not isinstance(channel, Channel):
                 raise TypeError(f"Unable to identify channel (received {channel}).")
@@ -654,84 +643,75 @@ class RFDCSynchronizer(Synchronizer):
             rfdc_bit_position = 1 << (channel.num() if channel.is_dac else channel.num()+16)
                 
             if function == RFDCSynchronizer.NCO_FREQUENCY:
-                if isinstance(proc, Sequencer):
-                    # The bit position for the channel in the update request and 
-                    # phase reset registers
-                    nco_update_request |= 1 << ((channel.tile+4) if not channel.is_dac else channel.tile)
+                # The bit position for the channel in the update request and 
+                # phase reset registers
+                nco_update_request |= 1 << ((channel.tile+4) if not channel.is_dac else channel.tile)
 
-                    # Which register for setting the update enable pins does this 
-                    # channel belong to?
-                    update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
+                # Which register for setting the update enable pins does this 
+                # channel belong to?
+                update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
 
-                    # if kwargs["low"]:
-                    nco_update_enables[update_enable_reg] |= (1 << 0) << (6*channel.block)
-                    # if kwargs["mid"]:
-                    nco_update_enables[update_enable_reg] |= (1 << 1) << (6*channel.block)
-                    # if kwargs["high"]:
-                    nco_update_enables[update_enable_reg] |= (1 << 2) << (6*channel.block)
+                # if kwargs["low"]:
+                nco_update_enables[update_enable_reg] |= (1 << 0) << (6*channel.block)
+                # if kwargs["mid"]:
+                nco_update_enables[update_enable_reg] |= (1 << 1) << (6*channel.block)
+                # if kwargs["high"]:
+                nco_update_enables[update_enable_reg] |= (1 << 2) << (6*channel.block)
 
             elif function == RFDCSynchronizer.NCO_PHASE:
-                if isinstance(proc, Sequencer):
-                    # The bit position for the channel in the update request and 
-                    # phase reset registers
-                    nco_update_request |= 1 << ((channel.tile+4) if not channel.is_dac else channel.tile)
+                # The bit position for the channel in the update request and 
+                # phase reset registers
+                nco_update_request |= 1 << ((channel.tile+4) if not channel.is_dac else channel.tile)
 
-                    # Which register for setting the update enable pins does this 
-                    # channel belong to?
-                    update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
+                # Which register for setting the update enable pins does this 
+                # channel belong to?
+                update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
 
-                    # if kwargs["low"]:
-                    nco_update_enables[update_enable_reg] |= (1 << 3) << (6*channel.block)
-                    # if kwargs["high"]:
-                    nco_update_enables[update_enable_reg] |= (1 << 4) << (6*channel.block)
+                # if kwargs["low"]:
+                nco_update_enables[update_enable_reg] |= (1 << 3) << (6*channel.block)
+                # if kwargs["high"]:
+                nco_update_enables[update_enable_reg] |= (1 << 4) << (6*channel.block)
 
             elif function == RFDCSynchronizer.NCO_PHASE_RESET:
-                if isinstance(proc, Sequencer):
-                    # The bit position for the channel in the update request and 
-                    # phase reset registers
-                    nco_update_request |= 1 << ((channel.tile+4) if not channel.is_dac else channel.tile)
+                # The bit position for the channel in the update request and 
+                # phase reset registers
+                nco_update_request |= 1 << ((channel.tile+4) if not channel.is_dac else channel.tile)
 
-                    # Which register for setting the update enable pins does this 
-                    # channel belong to?
-                    update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
+                # Which register for setting the update enable pins does this 
+                # channel belong to?
+                update_enable_reg = 4*channel.tile + (4 if not channel.is_dac else 0)
 
-                    nco_phase_reset |= rfdc_bit_position
-                    nco_update_enables[update_enable_reg] |= (1 << 5) << (6*channel.block)
+                nco_phase_reset |= rfdc_bit_position
+                nco_update_enables[update_enable_reg] |= (1 << 5) << (6*channel.block)
                 
             elif function == RFDCSynchronizer.VOP:
-                if isinstance(proc, Sequencer):
-                    vop_dsa_update_reg |= 1 << (4*channel.tile + channel.block)
+                vop_dsa_update_reg |= 1 << (4*channel.tile + channel.block)
                 
             elif function == RFDCSynchronizer.DSA:
-                if isinstance(proc, Sequencer):
-                    vop_dsa_update_reg |= 1 << (16 + channel.tile)
-                    data = args[0] << (channel.block*5)
-                    mask = 0b11111 << (channel.block*5)
-                    tile_dsa_codes[channel.tile] = (tile_dsa_codes[channel.tile] & ~mask) | data
+                vop_dsa_update_reg |= 1 << (16 + channel.tile)
+                data = args[0] << (channel.block*5)
+                mask = 0b11111 << (channel.block*5)
+                tile_dsa_codes[channel.tile] = (tile_dsa_codes[channel.tile] & ~mask) | data
                 
             elif function == RFDCSynchronizer.TDD:
-                if isinstance(proc, Sequencer):
-                    if args[0]:
-                        tdd_mode_set_reg |= rfdc_bit_position
-                    else:
-                        tdd_mode_clear_reg |= rfdc_bit_position
+                if args[0]:
+                    tdd_mode_set_reg |= rfdc_bit_position
                 else:
-                    raise TypeError("TDD mode may only be controlled by the"
-                                    " Sequencer. Enter the corresponding"
-                                    " context to control TDD mode.")
+                    tdd_mode_clear_reg |= rfdc_bit_position
         
         rts_address = self._acadia._firmware.rfdc_rts_regs.address().value()
+        seq = self._acadia._active_sequencer
 
         # Generate register writes for all the NCO updates that need to happen
         if nco_update_request != 0:
             for tile in range(8):
                 if nco_update_enables[tile] != 0:
-                    proc.bus_write(address=rts_address + 0x60 + tile,
+                    seq.bus_write(address=rts_address + 0x60 + tile,
                                     data=nco_update_enables[tile], 
                                     comment=f"Set update enable for tile {tile}")
 
             if nco_phase_reset != 0:
-                proc.bus_write(address=rts_address + 0x68, 
+                seq.bus_write(address=rts_address + 0x68, 
                                 data=nco_phase_reset,
                                 comment="Set phase reset register")
 
@@ -739,51 +719,51 @@ class RFDCSynchronizer(Synchronizer):
             # We'll assume that the SYSREF is already being generated continuously
 
             # 1. Set dac0_sysref_int_gating high and pulse dac0_nco_update_req
-            proc.bus_write(address=rts_address + 0x69, 
+            seq.bus_write(address=rts_address + 0x69, 
                             data=((1 << 8) | (1 << 0)),
                             comment="Set sysref_gating high and dac0_nco_update_req")
-            proc.nop()
-            proc.bus_write(address=rts_address + 0x69, 
+            seq.nop()
+            seq.bus_write(address=rts_address + 0x69, 
                             data=(1 << 8),
                             comment="Clear dac0_nco_update_req")
 
             # 2. Wait until dac0_nco_update_busy[1] goes high, indicating that
             #    SYSREF has been properly gated
-            with proc.repeat_until(proc.bus_read(rts_address) & (1 << 1) != 0):
+            with seq.repeat_until(seq.bus_read(rts_address) & (1 << 1) != 0):
                 pass
 
             # 3. Pulse the rest of the nco_update_req signals if necessary
             #    (and make sure to keep dac0_sysref_int_gating high)
             if (nco_update_request & ~(1 << 0)) != 0:
-                proc.bus_write(address=rts_address + 0x69, 
+                seq.bus_write(address=rts_address + 0x69, 
                             data=((1 << 8) | nco_update_request),
                             comment="Set the other nco_update_req signals")
-                proc.nop()
-                proc.bus_write(address=rts_address + 0x69, 
+                seq.nop()
+                seq.bus_write(address=rts_address + 0x69, 
                                 data=(1 << 8),
                                 comment="Clear the other nco_update_req signals")
 
             # 4. Wait until all the busy outputs (except for dac0_nco_update_busy[1])
             #    are low
             m = 0xFFFF & ~(1 << 1)
-            with proc.repeat_until(proc.bus_read(rts_address) & m == 0):
+            with seq.repeat_until(seq.bus_read(rts_address) & m == 0):
                 pass
 
             # 5. Re-enable SYSREF by pulsing dac0_sysref_int_reenable
-            proc.bus_write(address=rts_address + 0x69, 
+            seq.bus_write(address=rts_address + 0x69, 
                             data=((1 << 9)|(1 << 8)),
                             comment="Set dac0_sysref_int_reenable")
-            proc.nop()
-            proc.bus_write(address=rts_address + 0x69, 
+            seq.nop()
+            seq.bus_write(address=rts_address + 0x69, 
                             data=(1 << 8),
                             comment="Clear dac0_sysref_int_reenable")
 
             # 6. Wait until dac0_nco_update_busy[1] goes low
-            with proc.repeat_until(proc.bus_read(rts_address) & 0xFFFF == 0):
+            with seq.repeat_until(seq.bus_read(rts_address) & 0xFFFF == 0):
                 pass
 
             # Do we ever need to set dac0_nco_sysref_int_gating low? If so, do it here
-            proc.bus_write(address=rts_address + 0x69, 
+            seq.bus_write(address=rts_address + 0x69, 
                             data=0,
                             comment="Clear sysref_gating")
 
@@ -792,33 +772,33 @@ class RFDCSynchronizer(Synchronizer):
                 # The bit pattern is the same as for the update request register
                 # and the blocks we want to drive events for will be the same
                 # Pulse it for one cycle
-                proc.bus_write(address=rts_address + 0x6C, 
+                seq.bus_write(address=rts_address + 0x6C, 
                                 data=nco_update_request,
                                 comment="Set the pl_event register")
-                proc.nop()
-                proc.bus_write(address=rts_address + 0x6C, 
+                seq.nop()
+                seq.bus_write(address=rts_address + 0x6C, 
                                 data=0,
                                 comment="Clear the pl_event register")
 
         # Write any DSA updates
         for i in range(4):
             if vop_dsa_update_reg & (1 << (16+i)):
-                proc.bus_write(address=rts_address + 0x80, 
+                seq.bus_write(address=rts_address + 0x80, 
                                 data=tile_dsa_codes[i],
                                 comment=f"Set DSA register for tile {i}")
 
         # Update VOP if necessary
         if vop_dsa_update_reg != 0:
-            proc.bus_write(address=rts_address + 0x6D, 
+            seq.bus_write(address=rts_address + 0x6D, 
                             data=vop_dsa_update_reg,
                             comment=f"Set VOP/DSA update register")
 
         if tdd_mode_set_reg != 0:
-            proc.bus_write(address=rts_address + 0x6B, 
+            seq.bus_write(address=rts_address + 0x6B, 
                             data=tdd_mode_set_reg,
                             comment="Write TDD mode set register")
         if tdd_mode_clear_reg != 0:
-            proc.bus_write(address=rts_address + 0x6C, 
+            seq.bus_write(address=rts_address + 0x6C, 
                             data=tdd_mode_clear_reg,
                             comment="Write TDD mode clear register")
             
@@ -895,7 +875,7 @@ class Acadia:
         
         self._stream_configurations = []
         
-        # Create various Processors
+        # Create a Processor obhect for the sequencer
         # Note that the Processors cannot be ManagedMemory (and therefore, have the
         # Processor objects keep track of their instruction memory usage) 
         # because when Instruction objects are requested, the number of native
@@ -1160,12 +1140,8 @@ class Acadia:
         """     
         
         frequency_word = channel.frequency_to_nco_word(frequency)
-        
-        proc = Processor.active_processor()
-        if proc is None:
-            channel.set_nco_frequency_word(frequency_word)
-                
-        elif isinstance(proc, Sequencer):    
+         
+        if self._active_sequencer is not None:    
             frequency_base_reg = self._firmware.rfdc_rts_regs.address().value() + channel.num()*2
             
             if not channel.is_dac:
@@ -1185,7 +1161,7 @@ class Acadia:
                 "retval": None})
         
         else:
-            raise TypeError("NCO frequency can only be set in `Sequencer` contexts or on the PS.")
+            channel.set_nco_frequency_word(frequency_word)
     
     def update_nco_phase(self, channel: Channel, phase: float):
         """
@@ -1195,11 +1171,8 @@ class Acadia:
         :type phase: float
         """
         phase_word = channel.phase_to_nco_word(phase)
-        proc = Processor.active_processor()
-        if proc is None:
-            channel.set_nco_phase_word(phase_word)
-                
-        elif isinstance(proc, Sequencer):
+
+        if self._active_sequencer is not None:
             phase_reg = self._firmware.rfdc_rts_regs.address().value() + 0x40 + channel.num()
             
             if not channel.is_dac:
@@ -1217,18 +1190,14 @@ class Acadia:
                 "retval": None})
             
         else:
-            raise TypeError("NCO phase can only be set in `Sequencer` contexts or on the PS.")
+            channel.set_nco_phase_word(phase_word)
 
     def reset_nco_phase(self, channel: Channel):
         """
         Reset the value of the NCO phase accumulator.
         """
 
-        proc = Processor.active_processor()
-        if proc is None:
-            channel.reset_nco_phase()
-                
-        elif isinstance(proc, Sequencer):
+        if self._active_sequencer is not None:
             # Do nothing, the synchronizer will set the bit in the register
             self.tile_synchronizer.add({
                 "function": RFDCSynchronizer.NCO_PHASE_RESET, 
@@ -1238,8 +1207,7 @@ class Acadia:
                 "retval": None})
             
         else:
-            raise TypeError("NCO accumulator phase can only be reset in"
-                            " `PythonProcessor` or `Sequencer` contexts.")
+            channel.reset_nco_phase()
     
     def configure_clocks(self, reference="internal"):
         """
@@ -3294,8 +3262,7 @@ class Acadia:
         
     def compile(self, sequence, overwrite: bool = False, output_directory: str = None):
         """
-        Compiles the programs for all internally-stored :class:`Processor` 
-        objects.
+        Compiles the sequencer programs.
         """
         retval = self.sequence(sequence)
         
@@ -3429,6 +3396,9 @@ class Acadia:
         Resets the PL logic.
         """
 
+        if self._active_sequencer is not None:
+            raise TypeError(f"Unable to reset PL logic on the sequencer.")
+
         gpio = self._firmware["ps_gpio"]["sysfs_offset"] + 95
         PSGPIO.sysfs_export(gpio)
         PSGPIO.sysfs_set_direction(gpio, "out")
@@ -3447,12 +3417,12 @@ class Acadia:
         :type directions: int
         """
 
-        proc = Processor.active_processor()
-        if proc is None:
-            self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3] = directions
-            self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3 + 1] = directions
-        else:
-            raise TypeError(f"Unable to configure GPIO on processor {proc}.")
+        if self._active_sequencer is not None:
+            raise TypeError(f"Unable to configure GPIO on the sequencer.")
+
+        self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3] = directions
+        self._psgpio_mem[(PSGPIO.PSGPIO3_DIR_PSREG >> 2) + port - 3 + 1] = directions
+            
         
     def gpio_read(self, port):
         """
@@ -3464,14 +3434,12 @@ class Acadia:
 
         if port not in [3,4]:
             raise ValueError(f"Invalid GPIO port {port}.")
-        proc = Processor.active_processor()
-        if proc is None:
+        
+        if self._active_sequencer is None:
             return self._psgpio_mem[(PSGPIO.PSGPIO3_IN_PSREG >> 2) + port - 3]
-        elif isinstance(proc, Sequencer):
+        else:
             addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
             return proc.bus_read(addr, latency=self._bus_latency(f"ps_gpio{port}"))
-        else:
-            raise TypeError(f"Unable to access GPIO on processor {proc}.")
         
     def gpio_write(self, port, data):
         """
@@ -3485,46 +3453,39 @@ class Acadia:
 
         if port not in [3,4]:
             raise ValueError(f"Invalid GPIO port {port}.")
-        proc = Processor.active_processor()
-        if proc is None:
+
+        if self._active_sequencer is None:
             self._psgpio_mem[(PSGPIO.PSGPIO3_OUT_PSREG >> 2) + port - 3] = data
-        elif isinstance(proc, Sequencer):
+        else:
             addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
             return proc.bus_write(address=addr, 
                                   data=data,
                                   comment=f"Write to GPIO port {port}")
-        else:
-            raise TypeError(f"Unable to access GPIO on processor {proc}.")
         
     
     # -------------- INTERNAL UTILITIES ----------- #
             
     def _create_cache(self):
-        def _cache_getitem(cache_self, key):
-            proc = Processor.active_processor()
-            if proc is None:
-                if cache_self.__array_interface__ is None:
-                    raise AttributeError(f"Attempted to get item from unattached memory.")
-                return cache_self._array[key]
-            elif isinstance(proc, Sequencer):
+        def _cache_getitem(cache_self, key):            
+            if self._active_sequencer is not None:
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
                 return proc.bus_read(base_address + cache_self.index + key, 
                                      latency=self._bus_latency("cache"))
-            return Operation("getitem", cache_self, key)
+            else:
+                if cache_self.__array_interface__ is None:
+                    raise AttributeError(f"Attempted to get item from unattached memory.")
+                return cache_self._array[key]
             
         def _cache_setitem(cache_self, key, value):
-            proc = Processor.active_processor()
-            if proc is None:
-                if cache_self.__array_interface__ is None:
-                    raise AttributeError(f"Attempted to set item of unattached memory.")
-                cache_self._array[key] = value
-            elif isinstance(proc, Sequencer):
+            if self._active_sequencer is not None:
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
                 proc.bus_write(address=base_address + cache_self.index + key,
                                data=value,
                                comment=f"Write to cache address {key}")
             else:
-                raise TypeError(f"Unable to access cache on processor {proc}.")
+                if cache_self.__array_interface__ is None:
+                    raise AttributeError(f"Attempted to set item of unattached memory.")
+                cache_self._array[key] = value
         
         self.CacheArray = ManagedMemory("CacheArray", 
             (), 
