@@ -1146,10 +1146,10 @@ class Acadia:
             
             if not channel.is_dac:
                 frequency_base_reg += 16*2 
-            proc.bus_write(address=frequency_base_reg, 
+            self._active_sequencer.bus_write(address=frequency_base_reg, 
                             data=(frequency_word >> 16) & 0xFFFFFFFF,
                             comment="Write NCO frequency high bits")
-            proc.bus_write(address=frequency_base_reg+1, 
+            self._active_sequencer.bus_write(address=frequency_base_reg+1, 
                             data=frequency_word & 0xFFFF,
                             comment="Write NCO frequency low bits")
 
@@ -1178,7 +1178,7 @@ class Acadia:
             if not channel.is_dac:
                 phase_reg += 16
                 
-            proc.bus_write(address=phase_reg, 
+            self._active_sequencer.bus_write(address=phase_reg, 
                            data=phase_word & 0x0003FFFF,
                            comment=f"Write to NCO phase register for {channel}")
 
@@ -3439,7 +3439,7 @@ class Acadia:
             return self._psgpio_mem[(PSGPIO.PSGPIO3_IN_PSREG >> 2) + port - 3]
         else:
             addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
-            return proc.bus_read(addr, latency=self._bus_latency(f"ps_gpio{port}"))
+            return self._active_sequencer.bus_read(addr, latency=self._bus_latency(f"ps_gpio{port}"))
         
     def gpio_write(self, port, data):
         """
@@ -3458,7 +3458,7 @@ class Acadia:
             self._psgpio_mem[(PSGPIO.PSGPIO3_OUT_PSREG >> 2) + port - 3] = data
         else:
             addr = self._firmware.sequencer_bus_decoder[f"ps_gpio{port}"].address().value()
-            return proc.bus_write(address=addr, 
+            return self._active_sequencer.bus_write(address=addr, 
                                   data=data,
                                   comment=f"Write to GPIO port {port}")
         
@@ -3469,7 +3469,7 @@ class Acadia:
         def _cache_getitem(cache_self, key):            
             if self._active_sequencer is not None:
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
-                return proc.bus_read(base_address + cache_self.index + key, 
+                return self._active_sequencer.bus_read(base_address + cache_self.index + key, 
                                      latency=self._bus_latency("cache"))
             else:
                 if cache_self.__array_interface__ is None:
@@ -3479,7 +3479,7 @@ class Acadia:
         def _cache_setitem(cache_self, key, value):
             if self._active_sequencer is not None:
                 base_address = self._firmware.sequencer_bus_decoder["cache"].address().value()
-                proc.bus_write(address=base_address + cache_self.index + key,
+                self._active_sequencer.bus_write(address=base_address + cache_self.index + key,
                                data=value,
                                comment=f"Write to cache address {key}")
             else:
