@@ -3,7 +3,7 @@
 SCRIPT=$0
 INITIAL=false
 FIRMWARE=false
-FIRMWARE_FTP_SERVER="barharbor.stdusr.yale.internal"
+FIRMWARE_FTP_SERVER="10.66.231.25"
 IP=''
 
 while [[ $# -gt 0 ]]; do
