@@ -239,6 +239,12 @@ class STP:
         elif not isinstance(self.src2, Source):
             raise TypeError(f"STP field src2 must be of type Source;"
                             f" received {self.src2}.")
+
+        if self.dest1 is None:
+            self.dest1 = Destination(Destination.Major.NONE)
+        
+        if self.dest2 is None:
+            self.dest2 = Destination(Destination.Major.NONE)
             
         # Do basic type-checking
         for field,field_type in get_type_hints(self).items(): 
@@ -362,10 +368,8 @@ class STP:
         tmp |= self.push_return << (104-64)
         tmp |= self.src1.value() << (96-64)
         tmp |= self.src2.value() << (88-64)
-        if self.dest1 is not None:
-            tmp |= self.dest1.value() << (80-64)
-        if self.dest2 is not None:
-            tmp |= self.dest2.value() << (72-64)
+        tmp |= self.dest1.value() << (80-64)
+        tmp |= self.dest2.value() << (72-64)
         tmp |= self.condition_invert << (71-64)
         if self.op == "and":
             tmp |= 1 << (70-64)
@@ -608,43 +612,68 @@ class Sequencer(Processor):
         instructions = []
         resources = []
 
-        # We'll use lists to aggregate the two separate assignments so that
-        # in case only src2/dest2 is specified, it gets prioritized to src1/dest1
-        srcs = []
-        dests = []
-    
-        for num in range(1,3):
-            # Compile the source
-            if f"src{num}" in kwargs:
-                if f"dest{num}" not in kwargs:
-                    raise ValueError(f"src{num} missing destination.")
-                src,src_instrs,src_resources = self.compile_source(kwargs[f"src{num}"])
-                srcs.append(src)
-                instructions += src_instrs
-                resources += src_resources
+        conditional = kwargs.get("conditional", False)
 
-            # Resolve the destination if necessary
-            if f"dest{num}" in kwargs:
-                if f"src{num}" not in kwargs:
-                    raise ValueError(f"dest{num} missing source.")
-                
-                dest = kwargs[f"dest{num}"]
-                if isinstance(dest, self.Register) or isinstance(dest, self.DSP):
-                    dests.append(dest.destination()) 
-                else:
-                    dests.append(dest)
+        # We must have src1 and dest1 regardless of whether we're conditional or not
+        # Compile src1
+        if f"src1" not in kwargs:
+            raise ValueError(f"STP missing src1 (kwargs: {kwargs})")
 
-        # Make sure that we didn't mess anything up
-        if len(srcs) != len(dests):
-            raise ValueError(f"Found {len(srcs)} sources and {len(dests)} destinations.")
+        src1,src_instrs,src_resources = self.compile_source(kwargs[f"src1"])
+        instructions += src_instrs
+        resources += src_resources
 
+        if "dest1" not in kwargs:
+            raise ValueError(f"STP missing dest1 (kwargs: {kwargs})")
+
+        dest1 = kwargs[f"dest1"]
+        if isinstance(dest1, self.Register) or isinstance(dest1, self.DSP):
+            dest1 = dest1.destination()
+
+        if conditional:
+            # For a conditional STP, src1 and dest1 must be specified, 
+            # and src2 must be specified but dest2 must not
+            if f"src2" not in kwargs:
+                raise ValueError(f"Conditional STP missing src2 (kwargs: {kwargs})")
+            
+            src2,src_instrs,src_resources = self.compile_source(kwargs[f"src2"])
+            instructions += src_instrs
+            resources += src_resources
+
+            if "dest2" in kwargs:
+                raise ValueError(f"Conditional STP must not specify dest2 (kwargs: {kwargs})")
+
+            dest2 = None
+
+        elif "src2" in kwargs:
+            # Unconditional double store
+            if "dest2" not in kwargs:
+                raise ValueError(f"STP specifies src2 but is missing dest2 (kwargs: {kwargs})")
+
+            src2,src_instrs,src_resources = self.compile_source(kwargs[f"src2"])
+            instructions += src_instrs
+            resources += src_resources
+
+            dest2 = kwargs[f"dest2"]
+            if isinstance(dest2, self.Register) or isinstance(dest2, self.DSP):
+                dest2 = dest2.destination()
+
+        else:
+            # Unconditional single store
+            if "dest2" in kwargs:
+                raise ValueError(f"STP specifies dest2 but is missing src2 (kwargs: {kwargs})")
+            
+            src2 = None
+            dest2 = None
+
+        dsp_cep = kwargs["dsp_cep"].source() if kwargs.get("dsp_cep", None) is not None else None
         other_kwargs = {k:v for k,v in kwargs.items() if k not in ["src1", "dest1", "src2", "dest2", "dsp_cep"]}
         instructions.append(
-            STP(src1=srcs[0],
-                dest1=dests[0],
-                src2=(srcs[1] if len(srcs) > 1 else Source(Source.Major.REG)),
-                dest2=(dests[1] if len(dests) > 1 else Destination(Destination.Major.NONE)),
-                dsp_cep=(kwargs["dsp_cep"].source() if kwargs.get("dsp_cep", None) is not None else None),
+            STP(src1=src1,
+                dest1=dest1,
+                src2=src2,
+                dest2=dest2,
+                dsp_cep=dsp_cep,
                 **other_kwargs)
         )
 
@@ -685,6 +714,9 @@ class Sequencer(Processor):
             if isinstance(kwargs["dsp_cep"], self.DSP):
                 logger.debug(f"CEP will be pulsed for {kwargs['dsp_cep']}")
                 dsp_cep = kwargs["dsp_cep"].source()
+            elif isinstance(kwargs["dsp_cep"], Source):
+                logger.debug(f"CEP will be pulsed for DSP{kwargs['dsp_cep'].minor}")
+                dsp_cep = kwargs["dsp_cep"]
             else:
                 raise TypeError(f"Argument for dsp_cep in an instruction must be"
                                 f" an instance of DSP (received {type(kwargs['dsp_cep'])})")
