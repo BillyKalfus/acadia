@@ -143,12 +143,13 @@ begin
         
         -- Reset the FIFO
         wait until rising_edge(clk);
-        registers_addr <= x"00000003";
-        registers_mosi <= x"00000000";
+        registers_addr <= x"00000002";
+        registers_mosi <= x"10000000";
         registers_we   <= '1';
         registers_en   <= '1';
         
-        -- Write to kernal pointer buffer register
+        -- Write to kernel pointer start/end register
+        -- both are zero in order to have a single-sample kernel
         wait until rising_edge(clk);
         registers_addr <= x"00000003";
         registers_mosi <= x"00000000";
@@ -158,9 +159,10 @@ begin
         wait until rising_edge(clk);
 
         -- Control register
-        -- write_last, lower, load kernel pointer
+        -- accumulator_update_mode = 01, accumulator_latch_write = 01, stream_port_write_mode = 10, arm_preload = 1
+        -- (1 << 18) | (1 << 20) | (1 << 27) | (1 << 30) = 0x48140000
         registers_addr <= x"00000002";
-        registers_mosi <= x"01C00001";
+        registers_mosi <= x"48140000";
         registers_we   <= '1';
         registers_en   <= '1';
 
@@ -175,14 +177,14 @@ begin
         wait until rising_edge(clk);
 
         -- Imag preload
-        registers_addr <= x"00000001";
+        registers_addr <= x"00000004";
         registers_mosi <= x"00000000";
         registers_we   <= '1';
         registers_en   <= '1';
 
         wait until rising_edge(clk);
 
-        registers_addr <= x"00000000";
+        registers_addr <= x"00000005";
         registers_mosi <= x"00000000";
         registers_we   <= '0';
         registers_en   <= '0';

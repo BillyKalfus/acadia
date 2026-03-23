@@ -41,7 +41,7 @@ rfclk_module = Extension("acadia.rfclk",
     sources=["acadia/rfclk/xrfclk.c", "acadia/rfclk/rfclk_py.c"])
                 
 setup (name = 'pyacadia',
-       version = '8.0',
+       version = '9.0',
        description = 'Assembler, hardware interface, and firmware management for the Acadia quantum control system.',
        author = 'William Kalfus',
        author_email = 'william.kalfus@yale.edu',

@@ -2452,7 +2452,8 @@ class Acadia:
                memory_input = None,
                length_cycles: Union[int, None] = None,
                output_size_bytes: Union[int, None] = None,
-               offset_bytes: Union[int, Source] = None) -> None:
+               offset_bytes: Union[int, Source] = None,
+               command_datamover: bool = True) -> None:
         """
         Stream data from a source to a destination WaveformMemory. 
 
@@ -2469,18 +2470,23 @@ class Acadia:
         provided or inferred) is chosen so that data is not written past the end of the
         destination memory space.
 
+        :param configuration: Stream configuration to use
+        :type configuration: :class:`StreamConfiguration`
         :param dst: Data destination
         :type dst: :class:`WaveformMemory`
-        :param length: Length of data to stream in samples. Note that this
-            is the length after any decimation.
-        :param offset: Offset within `dst` at which the stream will be written,
+        :param memory_input: The input for memory-to-memory streams
+        :type dst: :class:`WaveformMemory`
+        :param length_cycles: Length of stream in cycles.
+        :type length_cycles: int
+        :param output_size_bytes: Output stream size in bytes
+        :type output_size_bytes: int
+        :param offset_bytes: Offset within `dst` at which the stream will be written,
             in units of samples. Note that this offset is applied after any 
             decimation.
-        :param configuration: Stream configuration to use. If `None`, a new one
-            will be requested.
-        :type configuration: :class:`StreamConfiguration`
-        :return: The configuration used for streaming
-        :rtype: :class:`StreamConfiguration`
+        :param command_datamover: If `False`, the DataMover will not be commanded.
+            This can be particularly useful for large streams, where the DataMover 
+            commands must be manually managed.
+        :type command_datamover: bool
         """
 
         # Validate parameters
@@ -2515,6 +2521,25 @@ class Acadia:
         else:
             raise TypeError(f"Received object of invalid type for length_cycles:"
                             f" {type(length_cycles)}")
+
+        # We can now add instructions to start the input stream 
+        if isinstance(configuration.input_source, Channel):
+            # notify the synchronizer, which will then add the DMA command for us   
+            self.channel_synchronizer.add({
+                "function": DMASynchronizer.CONSTANT_CONTINUED, 
+                "self": self, 
+                "args": (), 
+                "kwargs": {"channel": configuration.input_source, "length": length_cycles},
+                "retval": None})
+        else:
+            self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
+                                   memory_input.byte_address,
+                                   memory_input.nbytes)
+
+        # Set up the output
+        # If we're not going to command the DataMover, we don't need anything that follows
+        if not command_datamover:
+            return
 
         if output_size_bytes is None:
             if offset_bytes is not None:
@@ -2555,18 +2580,7 @@ class Acadia:
                                 dst.byte_address + offset_bytes,
                                 output_size_bytes)
 
-        if isinstance(configuration.input_source, Channel):
-            # notify the synchronizer, which will then add the DMA command for us   
-            self.channel_synchronizer.add({
-                "function": DMASynchronizer.CONSTANT_CONTINUED, 
-                "self": self, 
-                "args": (), 
-                "kwargs": {"channel": configuration.input_source, "length": length_cycles},
-                "retval": None})
-        else:
-            self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
-                                   memory_input.byte_address,
-                                   memory_input.nbytes)
+        
     
     @requires_sequencer
     def configure_dsp(self, 

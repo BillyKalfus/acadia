@@ -129,22 +129,15 @@ class Firmware:
                 self._memory_smartconnect_masters += 1
                 
         for idx,module in enumerate(self.config["stream_processing_path"]["modules"]):
-            # Some modules use both mm2s and s2mm, but we won't necessarily need
-            # a separate AXI master since AXI is full duplex
-            if module["kind"] == "adder":
-                device = BusDevice(f"module{idx}_mm2s_datamover_controller", size=4)
-                self._datamover_controllers.append(device)
-                self.sequencer_bus_decoder.add(device, pipeline=module["datamover_controller_bus_pipeline"])
-            
-            if module["kind"] != "memory":
-                registers = BusDevice(f"module{idx}_registers", size=16)
-                self.sequencer_bus_decoder.add(registers, pipeline=module["registers_bus_pipeline"])
+            # TODO: add a way to make modules that need more than 16 registers
+            registers = BusDevice(f"module{idx}_registers", size=16)
+            self.sequencer_bus_decoder.add(registers, pipeline=module["registers_bus_pipeline"])
             
             device = BusDevice(f"module{idx}_s2mm_datamover_controller", size=4)
             self._datamover_controllers.append(device)
             self.sequencer_bus_decoder.add(device, pipeline=module["datamover_controller_bus_pipeline"])
             
-            self._memory_smartconnect_masters += (2 if module["kind"] == "adder" else 1)
+            self._memory_smartconnect_masters += 1
                 
         # Create dataports for interacting with the PS GPIO
         for gpio_num in [3,4,5]:
@@ -986,14 +979,8 @@ class Firmware:
                                         f"hedgehog/input{idx}_datamover_controller/sts", 
                                         f"hedgehog/input{idx}_datamover/M_AXIS_MM2S_STS")
                     
-                    # Connect the error signal through a CDC
-                    # TODO: this isn't always necessary
-                    create_ip(f, name=f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
-                    set_property(f, name=f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err", properties={"CDC_TYPE": "xpm_cdc_single"})
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_clk", eval(inp['AXI_clock'] + "_pin"))
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/src_in", f"hedgehog/input{idx}_datamover/mm2s_err")
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_clk", seq_clk_pin)
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_input{idx}_datamover_mm2s_err/dest_out", f"hedgehog/input{idx}_datamover_controller/err")
+                    # Connect the error signal
+                    connect_bd_net(f, f"hedgehog/input{idx}_datamover/mm2s_err", f"hedgehog/input{idx}_datamover_controller/err")
                     
                     # Connect the datamover to the switch through a FIFO
                     create_ip(f, f"hedgehog/input{idx}_datamover_fifo", "xilinx.com:ip:axis_data_fifo:2.0")
@@ -1089,13 +1076,8 @@ class Firmware:
                                     f"hedgehog/module{idx_module}_s2mm_datamover_controller/sts", 
                                     f"hedgehog/module{idx_module}_datamover/M_AXIS_S2MM_STS")
                 
-                # Connect the error signal through a CDC
-                create_ip(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
-                set_property(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err", properties={"CDC_TYPE": "xpm_cdc_single"})
-                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_clk", eval(module['AXI_clock'] + "_pin"))
-                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/src_in", f"hedgehog/module{idx_module}_datamover/s2mm_err")
-                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_clk", seq_clk_pin)
-                connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_s2mm_err/dest_out", f"hedgehog/module{idx_module}_s2mm_datamover_controller/err")
+                # Connect the error signal
+                connect_bd_net(f, f"hedgehog/module{idx_module}_datamover/s2mm_err", f"hedgehog/module{idx_module}_s2mm_datamover_controller/err")
 
                 if module["kind"] == "memory":
                     # No MM2S needed, just connect to the datamover (through a FIFO)
@@ -1128,141 +1110,39 @@ class Firmware:
                     memory_smartconnect_target_address_spaces.append(f"/hedgehog/module{idx_module}_datamover/Data_S2MM")
                     
                     # Create a buffer FIFO
-                    create_module(f, f"hedgehog/module{idx_module}_s2mm_datamover_fifo", "acadia_backpressure_fifo_bd")
+                    create_module(f, f"hedgehog/module{idx_module}_fifo", "acadia_stream_fifo")
                     set_property(f, 
-                                 f"hedgehog/module{idx_module}_s2mm_datamover_fifo",
-                                 properties={"WORD_WIDTH": self.config["stream_processing_path"]["width"], 
-                                             "INPUT_WORDS": 1,
-                                             "OUTPUT_WORDS": 1,
-                                             "INPUT_DEPTH": module["FIFO_depth"]})
+                                 f"hedgehog/module{idx_module}_fifo",
+                                 properties={"INPUT_WORDS": self.config["stream_processing_path"]["width"] // 32,
+                                            "DATA_OUTPUT_FIFO_DEPTH": module["FIFO_depth"],
+                                            "DATA_OUTPUT_FIFO_PRIMITIVE": module["FIFO_primitive"],
+                                            "DATA_OUTPUT_FIFO_ASYNCHRONOUS": "false" if module["AXI_clock"] == "seq_clk" else "true"})
                     
                     # Connect clocks and resets for the FIFO
                     connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_s2mm_datamover_fifo/signal_in_clk", 
+                                   f"hedgehog/module{idx_module}_fifo/clk", 
                                    seq_clk_pin)
                     connect_bd_net(f, 
-                                f"hedgehog/module{idx_module}_s2mm_datamover_fifo/signal_in_rst",
-                                f"hedgehog/module{idx_module}_s2mm_datamover_controller/fifo_rst")
+                                f"hedgehog/module{idx_module}_fifo/nrst",
+                                seq_clk_peripheral_aresetn)
+ 
                     connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_s2mm_datamover_fifo/monitor_clk", 
-                                   seq_clk_pin)
-                    connect_bd_net(f, 
-                                f"hedgehog/module{idx_module}_s2mm_datamover_fifo/monitor_rst",
-                                f"hedgehog/module{idx_module}_s2mm_datamover_controller/fifo_rst")
-                    connect_bd_net(f, 
-                                f"hedgehog/module{idx_module}_s2mm_datamover_fifo/monitor_overflow",
-                                f"hedgehog/module{idx_module}_s2mm_datamover_controller/fifo_overflow")
-                    connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_s2mm_datamover_fifo/m_axis_aclk", 
+                                   f"hedgehog/module{idx_module}_fifo/data_out_aclk", 
                                    eval(module['AXI_clock'] + "_pin"))
                     
                     # Connect the FIFO interfaces
                     connect_bd_intf_net(f, 
                                         f"hedgehog/stream_processing_input_switch/M{idx_module:02d}_AXIS", 
-                                        f"hedgehog/module{idx_module}_s2mm_datamover_fifo/signal_in")
+                                        f"hedgehog/module{idx_module}_fifo/data_in")
                     connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_s2mm_datamover_fifo/m_axis",
+                                        f"hedgehog/module{idx_module}_fifo/data_out",
                                         f"hedgehog/module{idx_module}_datamover/S_AXIS_S2MM")
-                    
-                elif module["kind"] == "adder":                    
-                    # Add a MM2S port and create a single AXI interface
-                    # TODO: For some reason, getting the single AXI interface to work only seems to
-                    # be possible by going into the GUI, disabling the MM2S and S2MM (or setting them both to Basic),
-                    # and setting all the settings to match manually. For now we'll just use the two individual interfaces
-                    # but it would be nice to figure this out
-                    datamover_properties = {
-                        "c_enable_cache_user": "true",
-                        "c_enable_s2mm_adv_sig": 0,
-                        "c_addr_width": 40,
-                        "c_single_interface": 0,
-                        
-                        "c_enable_s2mm": 1,
-                        "c_include_s2mm": "Full",
-                        "c_m_axi_s2mm_data_width": module['AXI_width'],
-                        "c_s_axis_s2mm_tdata_width": module['AXI_width'],
-                        "c_s2mm_btt_used": 23,
-                        "c_s2mm_burst_size": module['datamover_burst_size'],
-                        "c_s2mm_support_indet_btt": "true",
-                        "c_s2mm_include_sf": "false",
-                        
-                        "c_enable_mm2s": 1,
-                        "c_include_mm2s": "Full",
-                        "c_m_axi_mm2s_data_width": module['AXI_width'],
-                        "c_m_axis_mm2s_tdata_width": module['AXI_width'],
-                        "c_mm2s_btt_used": 23,
-                        "c_mm2s_burst_size": module['datamover_burst_size'],
-                        "c_mm2s_include_sf": "false", 
-                    }
 
-                    set_property(f, name=f"hedgehog/module{idx_module}_datamover", properties=datamover_properties)
-
-                    connect_bd_net(f, 
-                                    f"hedgehog/module{idx_module}_datamover/m_axis_mm2s_cmdsts_aclk", 
-                                    seq_clk_pin)
-                    connect_bd_net(f, 
-                                    f"hedgehog/module{idx_module}_datamover/m_axis_mm2s_cmdsts_aresetn",
-                                    seq_clk_peripheral_aresetn)
-                    
-                    # Connect the output AXI masters
-                    for direction in ["MM2S", "S2MM"]:
-                        connect_bd_intf_net(f, 
-                                            f"hedgehog/module{idx_module}_datamover/M_AXI_{direction}", 
-                                            f"hedgehog/memory_smartconnect/S{memory_smartconnect_master:02d}_AXI")
-                        memory_smartconnect_master += 1
-                        memory_smartconnect_target_address_spaces.append(f"/hedgehog/module{idx_module}_datamover/Data_{direction}")
-                        
-                    # Create a controller
-                    create_module(f, 
-                                    f"hedgehog/module{idx_module}_mm2s_datamover_controller", 
-                                    "acadia_datamover_controller")
-                    connect_bd_net(f, f"hedgehog/module{idx_module}_mm2s_datamover_controller/clk", seq_clk_pin)
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_mm2s_datamover_controller/master_bus",
-                                        f"hedgehog/sequencer_bus_decoder/module{idx_module}_mm2s_datamover_controller")
-
-                    # Connect command and status
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_mm2s_datamover_controller/cmd", 
-                                        f"hedgehog/module{idx_module}_datamover/S_AXIS_MM2S_CMD")
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_mm2s_datamover_controller/sts", 
-                                        f"hedgehog/module{idx_module}_datamover/M_AXIS_MM2S_STS")
-                    
-                    # Connect the error signal through a CDC
-                    create_ip(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err", vlnv="xilinx.com:ip:xpm_cdc_gen:1.0")
-                    set_property(f, name=f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err", properties={"CDC_TYPE": "xpm_cdc_single"})
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_clk", eval(module['AXI_clock'] + "_pin"))
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/src_in", f"hedgehog/module{idx_module}_datamover/mm2s_err")
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_clk", seq_clk_pin)
-                    connect_bd_net(f, f"hedgehog/xpm_cdc_module{idx_module}_datamover_mm2s_err/dest_out", f"hedgehog/module{idx_module}_mm2s_datamover_controller/err")                    
-                    
-                    # Create the adder
-                    create_module(f, f"hedgehog/module{idx_module}_adder", "acadia_stream_complex32_adder")
-                    connect_bd_net(f, f"hedgehog/module{idx_module}_adder/stats_clk", eval(module['AXI_clock'] + "_pin"))
-                    connect_bd_net(f, f"hedgehog/module{idx_module}_adder/samples_clk", seq_clk_pin)
-                    
-                    asynchronous = "false" if module["AXI_clock"] == "seq_clk" else 'true'
-                    set_property(f, 
-                                 f"hedgehog/module{idx_module}_adder",
-                                 properties={"INPUT_WORDS": self.config["stream_processing_path"]["width"] // 32,
-                                             "SAMPLES_FIFO_DEPTH": module["samples_fifo_depth"],
-                                             "SAMPLES_FIFO_PRIMITIVE": module["samples_fifo_primitive"],
-                                             "SAMPLES_FIFO_ASYNCHRONOUS": asynchronous,
-                                             "STATS_WIDTH": module["AXI_width"]})
-                    
-                    # Connect the adder interfaces
+                    # Connect the register interface to the bus
                     connect_bd_intf_net(f, 
                                         f"hedgehog/sequencer_bus_decoder/module{idx_module}_registers",
-                                        f"hedgehog/module{idx_module}_adder/registers")
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/stream_processing_input_switch/M{idx_module:02d}_AXIS", 
-                                        f"hedgehog/module{idx_module}_adder/samples")
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_datamover/M_AXIS_MM2S", 
-                                        f"hedgehog/module{idx_module}_adder/stats_in")
-                    connect_bd_intf_net(f,
-                                        f"hedgehog/module{idx_module}_adder/stats_out",
-                                        f"hedgehog/module{idx_module}_datamover/S_AXIS_S2MM")
+                                        f"hedgehog/module{idx_module}_fifo/registers")
+                    
                     
                 elif module["kind"] == "cmacc":
                     # No MM2S needed, just connect to the datamover
@@ -1295,7 +1175,7 @@ class Firmware:
                     memory_smartconnect_target_address_spaces.append(f"/hedgehog/module{idx_module}_datamover/Data_S2MM")
                     
                     # Create the module
-                    create_module(f, f"hedgehog/module{idx_module}_cmacc", "acadia_stream_complex32_macc")
+                    create_module(f, f"hedgehog/module{idx_module}_cmacc", "acadia_stream_cmacc")
                     external_depth = 32 * module["kernel_memory_depth"] // self.config["stream_processing_path"]["cmacc_kernel_memory_controller"]["controller_width"]
                     set_property(f, 
                                  f"hedgehog/module{idx_module}_cmacc", 
@@ -1310,6 +1190,7 @@ class Firmware:
                                             "DATA_OUTPUT_FIFO_ASYNCHRONOUS": "false" if module["AXI_clock"] == "seq_clk" else "true"})
                     
                     connect_bd_net(f, f"hedgehog/module{idx_module}_cmacc/clk", seq_clk_pin)
+                    connect_bd_net(f, f"hedgehog/module{idx_module}_cmacc/nrst", seq_clk_peripheral_aresetn)
                     
                     # Connect the register interface to the bus
                     connect_bd_intf_net(f, 
@@ -1335,66 +1216,6 @@ class Firmware:
                                         f"hedgehog/module{idx_module}_cmacc/kernel_memory",
                                         f"hedgehog/cmacc_kernel_memory/mem{cmacc_kernel_memory_controller_element}")
                     cmacc_kernel_memory_controller_element += 1
-                    
-                elif module["kind"] == "dsp":
-                    # No MM2S needed, just connect to the datamover
-                    datamover_properties = {
-                        "c_enable_cache_user": "true",
-                        "c_enable_s2mm_adv_sig": 0,
-                        "c_addr_width": 40,
-                        
-                        "c_enable_s2mm": 1,
-                        "c_include_s2mm": "Full",
-                        "c_m_axi_s2mm_data_width": module['AXI_width'],
-                        "c_s_axis_s2mm_tdata_width": 64,
-                        "c_s2mm_btt_used": 23,
-                        "c_s2mm_burst_size": module['datamover_burst_size'],
-                        "c_s2mm_support_indet_btt": "true",
-                        "c_s2mm_include_sf": "false",
-                        
-                        "c_enable_mm2s": 0,
-                        "c_include_mm2s": "Omit",
-                        "c_include_mm2s_stsfifo": "false",
-                        "c_mm2s_include_sf": "false",
-                    }
-                    set_property(f, name=f"hedgehog/module{idx_module}_datamover", properties=datamover_properties)
-
-                    # Connect the output AXI master
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_datamover/M_AXI_S2MM", 
-                                        f"hedgehog/memory_smartconnect/S{memory_smartconnect_master:02d}_AXI")
-                    memory_smartconnect_master += 1
-                    memory_smartconnect_target_address_spaces.append(f"/hedgehog/module{idx_module}_datamover/Data_S2MM")
-                    
-                    # Create the module
-                    create_module(f, f"hedgehog/module{idx_module}_dsp", "acadia_stream_complex32_dsp")
-                    set_property(f,
-                                 f"hedgehog/module{idx_module}_dsp", 
-                                 properties={"INPUT_WORDS": self.config["stream_processing_path"]["width"] // 32,
-                                            "DATA_OUTPUT_FIFO_DEPTH": module["FIFO_depth"],
-                                            "DATA_OUTPUT_FIFO_PRIMITIVE": module["FIFO_primitive"],
-                                            "DATA_OUTPUT_FIFO_ASYNCHRONOUS": "false" if module["AXI_clock"] == "seq_clk" else "true"})
-                    
-                    connect_bd_net(f, f"hedgehog/module{idx_module}_dsp/clk", seq_clk_pin)
-                    
-                    # Connect the register interface
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/sequencer_bus_decoder/module{idx_module}_registers",
-                                        f"hedgehog/module{idx_module}_dsp/registers")
-                    
-                    # Connect the input
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/stream_processing_input_switch/M{idx_module:02d}_AXIS", 
-                                        f"hedgehog/module{idx_module}_dsp/data_in")
-                    
-                    # Connect the output interface and clock directly to the datamover 
-                    # (the output is buffered with a FIFO internally)
-                    connect_bd_net(f, 
-                                   f"hedgehog/module{idx_module}_dsp/data_out_aclk", 
-                                   eval(module['AXI_clock'] + "_pin"))                    
-                    connect_bd_intf_net(f, 
-                                        f"hedgehog/module{idx_module}_dsp/data_out", 
-                                        f"hedgehog/module{idx_module}_datamover/S_AXIS_S2MM")  
                                         
                 elif module["kind"] == "fft":
                     #create_bd_cell -type ip -vlnv xilinx.com:ip:xfft:9.1 xfft_0

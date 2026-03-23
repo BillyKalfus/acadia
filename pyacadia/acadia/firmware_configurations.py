@@ -23,18 +23,6 @@ CONFIG_200 = {
             "segment": "/ps/SAXIGP1/HPC1_LPS_OCM"
         },
 
-        # "HP0_LPS_OCM": {
-        #     "address": 0x02_FF00_0000, 
-        #     "size_bits": 8 * 2 * 2**18, 
-        #     "segment": "/ps/SAXIGP2/HP0_LPS_OCM"
-        # },
-
-        # "HP1_LPS_OCM": {
-        #     "address": 0x03_FF00_0000, 
-        #     "size_bits": 8 * 2**18, 
-        #     "segment": "/ps/SAXIGP3/HP1_LPS_OCM"
-        # },
-
         "HPC0_DDR_LOW": {
             "address": 0x04_0000_0000, 
             "size_bits": 8 * 2**31, 
@@ -47,18 +35,6 @@ CONFIG_200 = {
             "segment": "/ps/SAXIGP1/HPC1_DDR_LOW"
         },
 
-        # "HP0_DDR_LOW": {
-        #     "address": 0x06_0000_0000, 
-        #     "size_bits": 8 * 2**31, 
-        #     "segment": "/ps/SAXIGP2/HP0_DDR_LOW"
-        # },
-
-        # "HP1_DDR_LOW": {
-        #     "address": 0x07_0000_0000, 
-        #     "size_bits": 8 * 2**31, 
-        #     "segment": "/ps/SAXIGP3/HP1_DDR_LOW"
-        # },
-
         "HPC0_DDR_HIGH": {
             "address": 0x08_0000_0000, 
             "size_bits": 8 * 2**35, 
@@ -70,18 +46,6 @@ CONFIG_200 = {
             "size_bits": 8 * 2**35, 
             "segment": "/ps/SAXIGP1/HPC1_DDR_HIGH"
         },
-
-        # "HP0_DDR_HIGH": {
-        #     "address": 0x28_0000_0000, 
-        #     "size_bits": 8 * 2**35, 
-        #     "segment": "/ps/SAXIGP2/HP0_DDR_HIGH"
-        # },
-
-        # "HP1_DDR_HIGH": {
-        #     "address": 0x38_0000_0000, 
-        #     "size_bits": 8 * 2**35, 
-        #     "segment": "/ps/SAXIGP3/HP1_DDR_HIGH"
-        # },
 
         "ddr4_c0": {
             "address": 0x40_0000_0000, 
@@ -224,21 +188,15 @@ CONFIG_200 = {
         # "sequencer": A MM2S DataMover is added to the sequencer crossbar
         "inputs": [
             {"kind": "ADC", 
-             "channel": 0,
-             "datamover_controller_bus_pipeline": True},
+             "channel": 0},
             {"kind": "ADC", 
-             "channel": 2,
-             "datamover_controller_bus_pipeline": True},
+             "channel": 2},
             {"kind": "ADC", 
-             "channel": 4,
-             "datamover_controller_bus_pipeline": True},
+             "channel": 4},
             {"kind": "ADC", 
-             "channel": 6,
-             "datamover_controller_bus_pipeline": True},
-            {"kind": "ADC_switch", 
-             "datamover_controller_bus_pipeline": True},
-            {"kind": "ADC_switch", 
-             "datamover_controller_bus_pipeline": True},
+             "channel": 6},
+            {"kind": "ADC_switch"},
+            {"kind": "ADC_switch"},
             {"kind": "memory",
              "AXI_clock": "PS_AXI_clk",
              "FIFO_depth": 512,
@@ -331,30 +289,6 @@ CONFIG_200 = {
              "datamover_burst_size": 128,
              "datamover_controller_bus_pipeline": True,
              "kernel_memory_depth": 2048},
-            {"kind": "dsp",
-             "AXI_width": 64,
-             "AXI_clock": "PS_AXI_clk",
-             "FIFO_depth": 512,
-             "FIFO_primitive": "auto",
-             "registers_bus_pipeline": True,
-             "datamover_burst_size": 128,
-             "datamover_controller_bus_pipeline": True},
-            {"kind": "dsp",
-             "AXI_width": 64,
-             "AXI_clock": "PS_AXI_clk",
-             "FIFO_depth": 512,
-             "FIFO_primitive": "auto",
-             "datamover_burst_size": 128,
-             "registers_bus_pipeline": True,
-             "datamover_controller_bus_pipeline": True},
-            # {"kind": "adder",
-            #  "AXI_width": 256,
-            #  "AXI_clock": "PS_AXI_clk",
-            #  "samples_fifo_depth": 512,
-            #  "samples_fifo_primitive": "auto",
-            #  "datamover_burst_size": 128,
-            #  "registers_bus_pipeline": True,
-            #  "datamover_controller_bus_pipeline": True}, 
         ],
         
         # Some shared settings for any CMACCs used

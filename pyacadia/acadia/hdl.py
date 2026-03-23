@@ -609,326 +609,75 @@ class BusDecoder(BusDevice, HDLModule):
         hdl += f'end rtl;\n'
         
         return hdl
+
+class IPModule:
+    """
+    A wrapper for things that need an IP module to be generated via TCL.
+    """
+
+    def __init__(self, 
+                module_name: str, 
+                ip_type: str,
+                ip_version: str):
+        """
+        :param module_name: The name of the IP module instance to create
+        :type module_name: str
+        :param project_dir: The directory in which the project is located,
+        needed for generating IP files into the correct locations.
+        :type project_dir: str
+        :param ip_type: The type of IP to create
+        :type ip_type: str
+        :param ip_version: The version of the IP
+        :type ip_version: str
+        """
+
+        self._module_name = module_name
+        self._ip_type = ip_type
+        self._ip_version = ip_version
+        self._ip_name = module_name + "_ip"
+
+    def generate_ip_tcl(self, directory: str, config_dict: dict) -> str:
+        """
+        Generate TCL commands to create the IP and add it to the project.
+        """
+        
+        s = ''
+        s += (f'create_ip'
+                f' -name {self._ip_type}'
+                f' -vendor xilinx.com'
+                f' -library ip'
+                f' -version {self._ip_version}'
+                f' -module_name'
+                f' {self._ip_name}\n')
+
+        config_str = " ".join([f"CONFIG.{k} {{{v}}}" for k,v in config_dict.items()])
+
+        s += f'set_property -dict [list {config_str}] [get_ips {self._ip_name}]\n'
+        xci_path = os.path.join(directory, f"acadia.srcs/sources_1/ip/{self._ip_name}/{self._ip_name}.xci") 
+        simlib_path = os.path.join(directory, "acadia.cache/compile_simlib")
+        
+        s += f'generate_target {{instantiation_template}} [get_files {xci_path}]\n'
+        s += f'generate_target all [get_files {xci_path}]\n'
+        s += f'catch {{ config_ip_cache -export [get_ips -all {self._ip_name}] }}\n'
+        s += f'export_ip_user_files -of_objects [get_files {xci_path}] -no_script -sync -force -quiet\n'
+        s += f'set_property GENERATE_SYNTH_CHECKPOINT 0 [get_files {xci_path}]\n'
+        
+        # s += f'create_ip_run [get_files -of_objects [get_fileset sources_1] {xci_path}] -force\n'
+        # s += f'launch_runs {ip_name}_synth_1 -jobs {self._synth_jobs}\n'
+        s += (f'export_simulation'
+                f' -of_objects [get_files {xci_path}]'
+                f' -directory {os.path.join(directory, "acadia.ip_user_files/sim_scripts")}'
+                f' -ip_user_files_dir {os.path.join(directory, "acadia.ip_user_files")}'
+                f' -ipstatic_source_dir {os.path.join(directory, "acadia.ip_user_files/ipstatic")}')
+        s += f' -lib_map_path [list'
+        for lib in ["modelsim", "questa", "ies", "xcelium", "vcs", "riviera"]:
+            s += f' {{{lib}={os.path.join(simlib_path, lib)}}}'
+        s += f'] -use_ip_compiled_libs -force -quiet\n'
+        
+        return s
     
-class BusDataMoverController(BusDevice, HDLModule):
-        
-    def __init__(self, name, datamovers, addr_bits, bus_data_bits=32, bus_addr_bits=32, status_count_width=16):
-        """
-        A bus interface for access to the command and status ports of an array
-        of AXI DataMovers. A small number of registers are also provided for 
-        interacting with a given DataMover, where the base address of the 
-        registers for that DataMover is the base address of this device, plus
-        4 times the DataMover number.
-        
-        The registers are:
-
-        - 0: CMD_ADDR/TRANSFER_STATUS
-            Writing to this register issues a command to the DataMover 
-            command FIFO whose address field is populated with the data
-            written to this register. The values of the other fields are 
-            derived from prior writes to other registers (see below).
-            Reading this register pops a word from the status FIFO.
-
-        - 1: CMD_BTT/TRANSFER_STATUS_COUNT
-            This register stores the number of bytes for the DataMover to
-            transfer when its next command is issued. Reading this register 
-            returns the number of status words received by the controller
-            since its last reset.
-
-        - 2: CMD_MISC/TOTAL_BYTES_TRANSFERRED
-            This register stores additional miscellaneous bits needed for a
-            DataMover command:
-                0     : TYPE
-                1     : EOF
-                5-2   : TAG
-                9-6   : xCACHE
-                13-10 : xUSER
-                ADDR_BITS+14 - 14 : ADDR high bits
-                
-            Reading this register returns the total number of bytes transferred
-            by the DataMover since the controller was last reset.
-
-        - 3: CONTROLLER_RESET/CONTROLLER_STATUS
-            Writing any value to this register clears its lowest bit 
-            (described below) as well as TRANSFER_STATUS_COUNT and 
-            TOTAL_BYTES_TRANSFERRED.
-            Reading this register returns a bitfield with some status signals:
-                0: This bit is set once the DataMover command interface sets 
-                    TREADY after this module sets TVALID, indicating that it 
-                    accepted the command driven by the module (this includes
-                    when TREADY is already set when the command is issued).
-                1: This bit is connected directly to the error signal for the
-                   DataMover.
-                
-        :param datamovers: A list of strings containing the names of the DataMovers
-        """
-        self._datamovers = datamovers
-        self._addr_bits = addr_bits
-        self._status_count_width = status_count_width
-        
-        BusDevice.__init__(self, name, self.size, bus_data_bits, bus_addr_bits)
-        HDLModule.__init__(self, name)
-        
-    @property
-    def size(self):
-        # 4 registers per datamover
-        return 4*len(self._datamovers)
     
-    def __getitem__(self, key):
-        """
-        Return the Symbol associated with the registers for a particular datamover, as indexed by name or number.
-        
-        :param key: a number or string indexing the datamover
-        :type key: int or str
-        """
-        if isinstance(key, int):
-            return self._address.value() + 4*key
-        elif isinstance(key, str):
-            return self._address.value() + 4*self._datamovers.index(key)
-        else:
-            raise TypeError(f"Incompatible type for key {key}")
-        
-    def generate_hdl(self):
-        if not self.address_assigned():
-            raise ValueError("Device must be assigned before generating HDL.")
-            
-        num_ports = next_highest_power_of_2(self.size)
-        bus_addr_bits = next_highest_power_of_2(num_ports, log=True)
-        
-        # Throw an error if a smarter strategy is needed
-        if num_ports > (2**self.bus_addr_bits):
-            raise ValueError(f"Too many devices on the bus to be allocated (attempted to allocate {num_ports} devices).")
-            
-        # Finally, write the HDL for the decoder
-        hdl = f'library IEEE;\nuse IEEE.STD_LOGIC_1164.ALL;\nuse IEEE.NUMERIC_STD.ALL;\n\nlibrary xpm;\nuse xpm.vcomponents.all;\n\n'
-        hdl += f'entity {self.name} is\n'
-        hdl += f'    port (\n'
-        
-        hdl += f'        datamover_cmd_clk  : in std_logic;\n'
-        hdl += f'        nrst : in std_logic;\n\n'
-
-        hdl += f'        -- Slave interface\n'
-        hdl += f'        master_bus_clk  : in std_logic;\n'
-        hdl += f'        master_bus_mosi : in  std_logic_vector({self.bus_data_bits-1} downto 0);\n'
-        hdl += f'        master_bus_miso : out std_logic_vector({self.bus_data_bits-1} downto 0);\n'
-        hdl += f'        master_bus_addr : in  std_logic_vector({bus_addr_bits-1} downto 0);\n'
-        hdl += f'        master_bus_wr   : in  std_logic;\n'
-        hdl += f'        master_bus_en   : in  std_logic;\n\n'
-        
-        for datamover in self._datamovers:
-            hdl += f'        -- {datamover} interface\n'
-            hdl += f'        {datamover}_err        : in  std_logic;\n'
-            hdl += f'        {datamover}_cmd_tdata  : out std_logic_vector(87 downto 0);\n'
-            hdl += f'        {datamover}_cmd_tvalid : out std_logic;\n'
-            hdl += f'        {datamover}_cmd_tready : in  std_logic;\n'
-            
-            hdl += f'        {datamover}_sts_tdata  : in  std_logic_vector(31 downto 0);\n'
-            hdl += f'        {datamover}_sts_tvalid : in  std_logic;\n'
-            hdl += f'        {datamover}_sts_tready : out std_logic;\n\n'
-            
-
-        hdl = hdl[:-3] + f"\n    );\n" # Get rid of the last semicolon
-        hdl += f'end {self.name};\n\n'
-
-        hdl += f'architecture rtl of {self.name} is\n\n'
-        
-        # Assign attributes
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO      : STRING;\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_MODE      : STRING;\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;\n\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
-        
-        for datamover in self._datamovers:
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_cmd_tdata  : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_cmd TDATA";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_cmd_tvalid : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_cmd TVALID";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_cmd_tready : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_cmd TREADY";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_MODE of {datamover}_cmd_tdata : SIGNAL is "Master";\n\n'
-            
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tdata  : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TDATA";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tvalid : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TVALID";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {datamover}_sts_tready : SIGNAL is "xilinx.com:interface:axis_rtl:1.0 {datamover}_sts TREADY";\n\n'
-            
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of datamover_cmd_clk: SIGNAL is "xilinx.com:signal:clock:1.0 datamover_cmd_clk CLK";\n'
-        bus_names = [s+f"_{d}" for s in self._datamovers for d in ["cmd","sts"]]
-        hdl += f'    ATTRIBUTE X_INTERFACE_PARAMETER of datamover_cmd_clk: SIGNAL is "ASSOCIATED_BUSIF {":".join(bus_names)}";\n'
-            
-        hdl += f'    signal dm_err     : std_logic_vector(31 downto 0);\n'
-        hdl += f'    signal dm_cmd_ack : std_logic_vector(31 downto 0);\n'
-        hdl += f'    signal dm_rst     : std_logic_vector(31 downto 0);\n\n'
-            
-        for datamover in self._datamovers:
-            hdl += f'    signal {datamover}_cmd_waiting : std_logic;\n\n'
-            hdl += f'    signal {datamover}_cmd_btt     : std_logic_vector(22 downto 0);\n'
-            hdl += f'    signal {datamover}_cmd_misc    : std_logic_vector({self._addr_bits-32+14-1} downto 0);\n\n'
-            hdl += f'    signal {datamover}_sts         : std_logic_vector(31 downto 0);\n'
-            hdl += f'    signal {datamover}_sts_rd      : std_logic;\n'
-            hdl += f'    signal {datamover}_sts_cnt     : std_logic_vector({self._status_count_width-1} downto 0);\n'
-        hdl += f'begin\n\n'
-        
-        hdl += f'    reg_wr_proc: process(master_bus_clk) begin\n'
-        hdl += f'        if rising_edge(master_bus_clk) then\n'
-        hdl += f'            if (nrst = \'0\') then\n'
-        hdl += f'                dm_rst <= (others => \'0\');\n'
-        
-        for i,datamover in enumerate(self._datamovers):    
-            hdl += f'                {datamover}_cmd_tdata   <= (others => \'0\');\n'
-            hdl += f'                {datamover}_cmd_waiting <= \'0\';\n'
-            hdl += f'                {datamover}_cmd_btt     <= (others => \'0\');\n'
-            hdl += f'                {datamover}_cmd_misc    <= (others => \'0\');\n'
-            
-        
-        hdl += f'            elsif (master_bus_en = \'1\' and master_bus_wr = \'1\') then\n'
-        hdl += f'                case master_bus_addr({bus_addr_bits-1} downto 0) is\n'
-        
-        for i,datamover in enumerate(self._datamovers):    
-            hdl += f'                    when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        {datamover}_cmd_tdata  <= {datamover}_cmd_misc(13 downto 6) & "0000" & {datamover}_cmd_misc(5 downto 2) & {datamover}_cmd_misc({self._addr_bits-32+14-1} downto 14) & master_bus_mosi & "0" & {datamover}_cmd_misc(1) & "000000" & {datamover}_cmd_misc(0) & {datamover}_cmd_btt;\n'
-            hdl += f'                        {datamover}_cmd_waiting <= \'1\';\n'
-            hdl += f'                        dm_rst <= (others => \'0\');\n'
-            hdl += f'                    when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        {datamover}_cmd_btt  <=  master_bus_mosi(22 downto 0);\n'
-            hdl += f'                        dm_rst <= (others => \'0\');\n'
-            hdl += f'                    when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        {datamover}_cmd_misc <=  master_bus_mosi({self._addr_bits-32+14-1} downto 0);\n'
-            hdl += f'                        dm_rst <= (others => \'0\');\n'
-            hdl += f'                    when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                        dm_rst <= master_bus_mosi;\n'
-        hdl += f'                    when others =>\n'
-        hdl += f'                        dm_rst <= (others => \'0\');\n'
-        hdl += f'                end case;\n'
-        hdl += f'            else\n'
-        hdl += f'                -- Clear the waiting signals if the cmd FIFO is ready\n'
-        
-        for i,datamover in enumerate(self._datamovers):  
-            hdl += f'                if({datamover}_cmd_tready = \'1\') then\n'
-            hdl += f'                    {datamover}_cmd_waiting <= \'0\';\n'
-            hdl += f'                end if;\n\n'
-        
-        hdl += f'                -- Also clear dm_rst, since it should only be high for one cycle\n'
-        hdl += f'                dm_rst <= (others => \'0\');\n'
-        hdl += f'            end if;\n'
-        hdl += f'        end if;\n'
-        hdl += f'    end process reg_wr_proc;\n\n'
-        
-        hdl += f'    -- Connect the cmd_tvalid signals to the waiting signal\n'
-        for i,datamover in enumerate(self._datamovers):  
-            hdl += f'    {datamover}_cmd_tvalid <= {datamover}_cmd_waiting;\n'
-        hdl += f'    \n'
-        
-        hdl += f'    dm_cmd_ack_proc: process(master_bus_clk) begin\n'
-        hdl += f'        if rising_edge(master_bus_clk) then\n'
-        hdl += f'            if (nrst = \'0\') then\n'
-        hdl += f'                dm_cmd_ack <= (others => \'0\');\n'
-        hdl += f'            else\n'
-        
-        for i,datamover in enumerate(self._datamovers):  
-            hdl += f'                if ({datamover}_cmd_waiting = \'1\' and {datamover}_cmd_tready = \'1\') then\n'
-            hdl += f'                    dm_cmd_ack({i}) <= \'1\';\n'
-            hdl += f'                elsif (dm_rst({i}) = \'1\') then\n'
-            hdl += f'                    dm_cmd_ack({i}) <= \'0\';\n'
-            hdl += f'                end if;\n\n'
-        
-        hdl += f'            end if;\n'
-        hdl += f'        end if;\n'
-        hdl += f'    end process dm_cmd_ack_proc;\n\n'
-        
-        hdl += f'    -- Combine the DataMover error signals into one vector\n'
-        for i,datamover in enumerate(self._datamovers):
-            hdl += f'    dm_err({i}) <= {datamover}_err;\n'
-        hdl += f'    dm_err(31 downto {len(self._datamovers)}) <= (others => \'0\');\n\n'
-        
-        hdl += f'    rd_proc: process(master_bus_clk) begin\n'
-        hdl += f'        if rising_edge(master_bus_clk) then\n'
-        hdl += f'            case master_bus_addr({bus_addr_bits-1} downto 0) is\n'
-        
-        for i,datamover in enumerate(self._datamovers):    
-            hdl += f'                when "{f"{(i*4):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= {datamover}_sts;\n'
-            hdl += f'                when "{f"{(i*4 + 1):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= "{"0"*(32-self._status_count_width)}" & {datamover}_sts_cnt;\n'
-            hdl += f'                when "{f"{(i*4 + 2):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= dm_cmd_ack;\n'
-            hdl += f'                when "{f"{(i*4 + 3):b}".zfill(bus_addr_bits)}" =>\n'
-            hdl += f'                    master_bus_miso <= dm_err;\n'
-            
-        hdl += f'                when others =>\n'
-        hdl += f'                    master_bus_miso <= (others => \'0\');\n'
-        hdl += f'            end case;\n'
-        hdl += f'        end if;\n'
-        hdl += f'    end process rd_proc;\n\n'
-
-        hdl += f'    -- Create FIFOs for the status words\n'
-        for i,datamover in enumerate(self._datamovers): 
-            hdl += f'    {datamover}_sts_tready <= nrst and not dm_rst({i});\n'
-            hdl += f'    {datamover}_sts_rd <= \'1\' when master_bus_addr({bus_addr_bits-1} downto 0) = "{f"{(i*4):b}".zfill(bus_addr_bits)}" and master_bus_en = \'1\' and master_bus_wr = \'0\' else \'0\';\n\n'
-            hdl += f'    -- Create a status counter\n'
-            hdl += f'    {datamover}_sts_cnt_proc: process(master_bus_clk) begin\n' 
-            hdl += f'        if rising_edge(master_bus_clk) then\n'
-            hdl += f'            if(nrst = \'0\' or dm_rst({i}) = \'1\') then\n'
-            hdl += f'                {datamover}_sts_cnt <= (others => \'0\');\n'
-            hdl += f'            elsif({datamover}_sts_tvalid = \'1\') then\n'
-            hdl += f'                {datamover}_sts_cnt <= std_logic_vector(unsigned({datamover}_sts_cnt) + 1);\n'
-            hdl += f'            end if;\n'
-            hdl += f'        end if;\n'
-            hdl += f'    end process {datamover}_sts_cnt_proc;\n\n' 
-            hdl += f'    {datamover}_sts_fifo : xpm_fifo_sync\n'
-            hdl += f'        generic map (\n'
-            hdl += f'            DOUT_RESET_VALUE    => "0",\n'
-            hdl += f'            ECC_MODE            => "no_ecc",\n'
-            hdl += f'            FIFO_MEMORY_TYPE    => "distributed", -- String\n'
-            hdl += f'            FIFO_READ_LATENCY   => 0,\n'
-            hdl += f'            FIFO_WRITE_DEPTH    => 16,\n'
-            hdl += f'            FULL_RESET_VALUE    => 0,\n'
-            hdl += f'            PROG_EMPTY_THRESH   => 10,\n'
-            hdl += f'            PROG_FULL_THRESH    => 10,\n'
-            hdl += f'            RD_DATA_COUNT_WIDTH => 4,\n'
-            hdl += f'            READ_DATA_WIDTH     => 32,\n'
-            hdl += f'            READ_MODE           => "fwft",\n'
-            hdl += f'            SIM_ASSERT_CHK      => 0,\n'
-            hdl += f'            USE_ADV_FEATURES    => "0000",\n'
-            hdl += f'            WAKEUP_TIME         => 0,\n'
-            hdl += f'            WRITE_DATA_WIDTH    => 32,\n'
-            hdl += f'            WR_DATA_COUNT_WIDTH => 4\n'
-            hdl += f'        )\n'
-            hdl += f'        port map (\n'
-            hdl += f'            almost_empty  => open,\n'
-            hdl += f'            almost_full   => open,\n'
-            hdl += f'            data_valid    => open,\n'
-            hdl += f'            dbiterr       => open,\n'
-            hdl += f'            dout          => {datamover}_sts,\n'
-            hdl += f'            empty         => open,\n'
-            hdl += f'            full          => open,\n'
-            hdl += f'            overflow      => open,\n'
-            hdl += f'            prog_empty    => open,\n'
-            hdl += f'            prog_full     => open,\n'
-            hdl += f'            rd_data_count => open,\n'
-            hdl += f'            rd_rst_busy   => open,\n'
-            hdl += f'            sbiterr       => open,\n'
-            hdl += f'            underflow     => open,\n'
-            hdl += f'            wr_ack        => open,\n'
-            hdl += f'            wr_data_count => open,\n'
-            hdl += f'            wr_rst_busy   => open,\n'
-            hdl += f'            din           => {datamover}_sts_tdata,\n'
-            hdl += f'            injectdbiterr => \'0\',\n'
-            hdl += f'            injectsbiterr => \'0\',\n'
-            hdl += f'            rd_en         => {datamover}_sts_rd,\n'
-            hdl += f'            rst           => dm_rst({i}),\n'
-            hdl += f'            sleep         => \'0\',\n'
-            hdl += f'            wr_clk        => master_bus_clk,\n'
-            hdl += f'            wr_en         => {datamover}_sts_tvalid\n'
-            hdl += f'        );\n\n'
-        
-        
-        hdl += f'end rtl;\n\n'
-        
-        return hdl
-    
-class AXIMemoryArray(HDLModule):
+class AXIMemoryArray(HDLModule, IPModule):
     """
     Creates a wrapper for an AXI BRAM controller connected to a memory.
     """
@@ -1029,7 +778,8 @@ class AXIMemoryArray(HDLModule):
         self._use_rst = use_rst
         self._synth_jobs = synth_jobs
         self._instantiate_memories = instantiate_memories
-        super().__init__(module_name)
+        HDLModule.__init__(self, module_name)
+        IPModule.__init__(self, module_name, "axi_bram_ctrl", "4.1")
         
     def generate_hdl(self):
         """
@@ -1574,7 +1324,7 @@ class AXIMemoryArray(HDLModule):
         
         return hdl
     
-    def generate_ip_tcl(self, project_dir):
+    def generate_ip_tcl(self, directory: str) -> str:
         """
         Generate TCL commands to create the IP and add it to the project.
 
@@ -1583,62 +1333,109 @@ class AXIMemoryArray(HDLModule):
         :type project_dir: str
         """
 
-        ip_name = self._module_name + "_ip"
-        s = ''
-        s += (f'create_ip'
-                f' -name axi_bram_ctrl'
-                f' -vendor xilinx.com'
-                f' -library ip'
-                f' -version 4.1'
-                f' -module_name'
-                f' {ip_name}\n')
-        s += ('set_property -dict [list'
-                f' CONFIG.DATA_WIDTH {{{self._controller_width}}}'
-                f' CONFIG.MEM_DEPTH {{{self._elements*self._size_bits // self._controller_width}}}'
-                f' CONFIG.SINGLE_PORT_BRAM {{1}}'
-                f' CONFIG.ID_WIDTH {{{self._axi_id_width}}}'
-                f' CONFIG.ECC_TYPE {{0}}'
-                f' CONFIG.Component_Name {{{ip_name}}}'
-                f' CONFIG.READ_LATENCY {{{self._controller_port_input_pipeline + self._controller_port_output_pipeline + 1}}}'
-                f' CONFIG.RD_CMD_OPTIMIZATION {{0}}]'
-                f' [get_ips {ip_name}]\n')
-        xci_path = os.path.join(project_dir, f"acadia.srcs/sources_1/ip/{ip_name}/{ip_name}.xci") 
-        simlib_path = os.path.join(project_dir, "acadia.cache/compile_simlib")
-        
-        s += f'generate_target {{instantiation_template}} [get_files {xci_path}]\n'
-        s += f'generate_target all [get_files {xci_path}]\n'
-        s += f'catch {{ config_ip_cache -export [get_ips -all {ip_name}] }}\n'
-        s += f'export_ip_user_files -of_objects [get_files {xci_path}] -no_script -sync -force -quiet\n'
-        s += f'set_property GENERATE_SYNTH_CHECKPOINT 0 [get_files {xci_path}]\n'
-        
-        # s += f'create_ip_run [get_files -of_objects [get_fileset sources_1] {xci_path}] -force\n'
-        # s += f'launch_runs {ip_name}_synth_1 -jobs {self._synth_jobs}\n'
-        s += (f'export_simulation'
-                f' -of_objects [get_files {xci_path}]'
-                f' -directory {os.path.join(project_dir, "acadia.ip_user_files/sim_scripts")}'
-                f' -ip_user_files_dir {os.path.join(project_dir, "acadia.ip_user_files")}'
-                f' -ipstatic_source_dir {os.path.join(project_dir, "acadia.ip_user_files/ipstatic")}')
-        s += f' -lib_map_path [list'
-        for lib in ["modelsim", "questa", "ies", "xcelium", "vcs", "riviera"]:
-            s += f' {{{lib}={os.path.join(simlib_path, lib)}}}'
-        s += f'] -use_ip_compiled_libs -force -quiet\n'
-        
-        return s
-    
-class BusGTY:
+        config_dict = {f'DATA_WIDTH': self._controller_width,
+                       f'MEM_DEPTH': self._elements*self._size_bits // self._controller_width,
+                       f'SINGLE_PORT_BRAM': 1,
+                       f'ID_WIDTH': self._axi_id_width,
+                       f'ECC_TYPE': 0,
+                       f'Component_Name': self._ip_name,
+                       f'READ_LATENCY': self._controller_port_input_pipeline + self._controller_port_output_pipeline + 1,
+                       f'RD_CMD_OPTIMIZATION': 0}
+
+        return super().generate_ip_tcl(directory, config_dict)
+            
+class BusGTYController(BusDevice, IPModule):
     """
     A bus-controlled interface to the GTY transceivers.
     """
-    pass
 
-    # create_ip -name gtwizard_ultrascale -vendor xilinx.com -library ip -version 1.7 -module_name gtwizard_ultrascale_0
-    # set_property -dict [list 
-    # CONFIG.INS_LOSS_NYQ {0} CONFIG.TX_LINE_RATE {10} CONFIG.TX_REFCLK_FREQUENCY {250} CONFIG.TX_DATA_ENCODING {8B10B} CONFIG.TX_USER_DATA_WIDTH {32} CONFIG.TX_INT_DATA_WIDTH {40} CONFIG.TX_BUFFER_MODE {0} CONFIG.TX_OUTCLK_SOURCE {TXPROGDIVCLK} CONFIG.TX_DIFF_SWING_EMPH_MODE {CUSTOM} CONFIG.RX_LINE_RATE {10} CONFIG.RX_REFCLK_FREQUENCY {250} CONFIG.RX_DATA_DECODING {8B10B} CONFIG.RX_INT_DATA_WIDTH {40} CONFIG.RX_BUFFER_MODE {0} CONFIG.RX_JTOL_FC {5.9988002} CONFIG.RX_TERMINATION {FLOAT} CONFIG.RX_COUPLING {DC} CONFIG.RX_REFCLK_SOURCE {X0Y4 clk1} CONFIG.TX_REFCLK_SOURCE {X0Y4 clk1} CONFIG.RX_RECCLK_OUTPUT {X0Y4 clk0} CONFIG.TXPROGDIV_FREQ_VAL {250} CONFIG.FREERUN_FREQUENCY {250} CONFIG.LOCATE_TX_USER_CLOCKING {CORE} CONFIG.LOCATE_RX_USER_CLOCKING {CORE} CONFIG.RX_COMMA_PRESET {K28.5} CONFIG.RX_COMMA_P_ENABLE {true} CONFIG.RX_COMMA_M_ENABLE {true} CONFIG.RX_COMMA_DOUBLE_ENABLE {false} CONFIG.RX_COMMA_MASK {1111111111} CONFIG.RX_COMMA_ALIGN_WORD {4} CONFIG.RX_COMMA_SHOW_REALIGN_ENABLE {false}] [get_ips gtwizard_ultrascale_0]
-    # generate_target {instantiation_template} [get_files /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci]
-    # generate_target all [get_files  /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci]
-    # catch { config_ip_cache -export [get_ips -all gtwizard_ultrascale_0] }
-    # export_ip_user_files -of_objects [get_files /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci] -no_script -sync -force -quiet
-    # create_ip_run [get_files -of_objects [get_fileset sources_1] /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci]
-    # launch_runs gtwizard_ultrascale_0_synth_1 -jobs 16
-    # export_simulation -of_objects [get_files /home/billy/acadia-build/acadia.srcs/sources_1/ip/gtwizard_ultrascale_0/gtwizard_ultrascale_0.xci] -directory /home/billy/acadia-build/acadia.ip_user_files/sim_scripts -ip_user_files_dir /home/billy/acadia-build/acadia.ip_user_files -ipstatic_source_dir /home/billy/acadia-build/acadia.ip_user_files/ipstatic -lib_map_path [list {modelsim=/home/billy/acadia-build/acadia.cache/compile_simlib/modelsim} {questa=/home/billy/acadia-build/acadia.cache/compile_simlib/questa} {ies=/home/billy/acadia-build/acadia.cache/compile_simlib/ies} {xcelium=/home/billy/acadia-build/acadia.cache/compile_simlib/xcelium} {vcs=/home/billy/acadia-build/acadia.cache/compile_simlib/vcs} {riviera=/home/billy/acadia-build/acadia.cache/compile_simlib/riviera}] -use_ip_compiled_libs -force -quiet
+    def __init__(self, module_name: str):
+        BusDevice.__init__(self, module_name, 16, 32, 32)
+        IPModule.__init__(self, module_name, "gtwizard_ultrascale", "1.7")
 
+    def generate_ip_tcl(self, directory: str) -> str:
+        config_dict = {
+            "CHANNEL_ENABLE": "X0Y4",
+            "DISABLE_LOC_XDC": 0,
+            "ENABLE_COMMON_USRCLK": 0,
+            "ENABLE_OPTIONAL_PORTS": "rxprbscntreset_in rxprbssel_in txprbssel_in rxprbserr_out rxprbslocked_out",
+            "FREERUN_FREQUENCY": 200, # TODO: find a way to extract this from the config
+            "GT_DIRECTION": "BOTH",
+            "GT_REV": 0,
+            "GT_TYPE": "GTY",
+            "INCLUDE_CPLL_CAL": 2,
+            "INS_LOSS_NYQ": 20,
+            "INTERNAL_PRESET": "10GBASE-R",
+            "LOCATE_COMMON": "CORE",
+            "LOCATE_IN_SYSTEM_IBERT_CORE": "NONE",
+            "LOCATE_RESET_CONTROLLER": "CORE",
+            "LOCATE_RX_BUFFER_BYPASS_CONTROLLER": "CORE",
+            "LOCATE_RX_USER_CLOCKING": "CORE",
+            "LOCATE_TX_BUFFER_BYPASS_CONTROLLER": "CORE",
+            "LOCATE_TX_USER_CLOCKING": "CORE",
+            "LOCATE_USER_DATA_WIDTH_SIZING": "CORE",
+            "OOB_ENABLE": "false",
+            "PRESET": "GTY-10GBASE-R",
+            "RESET_SEQUENCE_INTERVAL": "0",
+            "RX_BUFFER_BYPASS_MODE": "MULTI",
+            "RX_BUFFER_MODE": 1,
+            "RX_BUFFER_RESET_ON_CB_CHANGE": "ENABLE",
+            "RX_BUFFER_RESET_ON_COMMAALIGN": "DISABLE",
+            "RX_BUFFER_RESET_ON_RATE_CHANGE": "ENABLE",
+            "RX_COMMA_ALIGN_WORD": 4,
+            "RX_COMMA_DOUBLE_ENABLE": "false",
+            "RX_COMMA_MASK": "1111111111",
+            "RX_COMMA_M_ENABLE": "false",
+            "RX_COMMA_M_VAL": "1010000011",
+            "RX_COMMA_PRESET": "K28.1",
+            "RX_COMMA_P_ENABLE": "true",
+            "RX_COMMA_P_VAL": "1001111100",
+            "RX_COMMA_SHOW_REALIGN_ENABLE": "true",
+            "RX_COMMA_VALID_ONLY": 0,
+            "RX_COUPLING": "AC",
+            "RX_DATA_DECODING": "8B10B",
+            "RX_EQ_MODE": "AUTO",
+            "RX_INT_DATA_WIDTH": "40",
+            "RX_JTOL_FC": "4.7990402",
+            "RX_JTOL_LF_SLOPE": "-20",
+            "RX_LINE_RATE": 8,
+            "RX_MASTER_CHANNEL": "X0Y4",
+            "RX_OUTCLK_SOURCE": "RXPROGDIVCLK",
+            "RX_PLL_TYPE": "QPLL0",
+            "RX_PPM_OFFSET": 0,
+            "RX_QPLL_FRACN_NUMERATOR": 0,
+            "RX_RECCLK_OUTPUT": "X0Y4 clk0",
+            "RX_REFCLK_FREQUENCY": 200, # TODO: find a way to extract this from the config
+            "RX_REFCLK_SOURCE": "X0Y4 clk1",
+            "RX_SLIDE_MODE": "OFF",
+            "RX_SSC_PPM": 0,
+            "RX_TERMINATION": "PROGRAMMABLE",
+            "RX_TERMINATION_PROG_VALUE": 800,
+            "RX_USER_DATA_WIDTH": 32,
+            "SATA_TX_BURST_LEN": 15,
+            "SECONDARY_QPLL_ENABLE": "false",
+            "SECONDARY_QPLL_FRACN_NUMERATOR": 0,
+            "SECONDARY_QPLL_LINE_RATE": 10.3125,
+            "SECONDARY_QPLL_REFCLK_FREQUENCY": 257.8125,
+            "SIM_CPLL_CAL_BYPASS": 1,
+            "TXPROGDIV_FREQ_ENABLE": "false",
+            "TXPROGDIV_FREQ_SOURCE": "QPLL0",
+            "TXPROGDIV_FREQ_VAL": 200,
+            "TX_BUFFER_MODE": 1,
+            "TX_BUFFER_RESET_ON_RATE_CHANGE": "ENABLE",
+            "TX_DATA_ENCODING": "8B10B",
+            "TX_DIFF_SWING_EMPH_MODE": "CUSTOM",
+            "TX_INT_DATA_WIDTH": 40,
+            "TX_LINE_RATE": 8,
+            "TX_MASTER_CHANNEL": "X0Y4",
+            "TX_OUTCLK_SOURCE": "TXPLLREFCLK_DIV1",
+            "TX_PLL_TYPE": "QPLL0",
+            "TX_QPLL_FRACN_NUMERATOR": 0,
+            "TX_REFCLK_FREQUENCY": 200,
+            "TX_REFCLK_SOURCE": "X0Y4 clk1",
+            "TX_USER_DATA_WIDTH": 32,
+            "USB_ENABLE": "false",
+            "USER_GTPOWERGOOD_DELAY_EN": 1
+        }
+
+        return super().generate_ip_tcl(directory, config_dict)
