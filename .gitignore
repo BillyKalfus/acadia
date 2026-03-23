@@ -12,3 +12,7 @@ docs/_build
 .vscode*
 *.so
 .idea
+*.aux
+*.log
+*.toc
+*.out

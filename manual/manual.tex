@@ -1,0 +1,32 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{svg}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{array}
+\definecolor{gray}{rgb}{0.8,0.8,0.8}
+\lstset{%
+    basicstyle=\ttfamily,
+    breaklines = true,
+    backgroundcolor=\color{gray},
+}
+
+\title{Acadia Technical Reference Manual}
+\author{William Kalfus}
+\date{Version 9.0.0, March 2026}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\include{introduction.tex}
+\include{hardware.tex}
+\include{software.tex}
+
+\end{document}

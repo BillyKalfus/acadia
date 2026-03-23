@@ -1,0 +1,80 @@
+\part{Introduction}
+
+Acadia is a laboratory instrument designed for carrying out complex sequences of signal synthesis and capture. It couples a very simplistic real-time sequencer to a general-purpose high-performance processor and orchestrates them in concert, reaping the benefits of each: the sequencer provides real-time sequencing with conditional control flow with very low latency, while the processor can carry out advanced computation to influence the sequencer's behavior and rapidly generate new sequences. The sequencer's simple nature allows sequence branching to have very low overhead, and because waveform synthesis is always scheduled dynamically by the sequencer, sequences can easily incorporate signal synthesis conditioned on measurements, computation results, memory values, and more. Captured signals pass through a reconfigurable network of processing units that are optimized for different aspects of signal processing such as wide-bandwidth capture, low-latency filtering, and high-precision spectroscopy. A full assembler and compiler are provided that allow complex programs involving the complete system to be expressed simply as Python classes. We also include a runtime manager that seamlessly deploys programs to remote hardware, transparently transfers and archives captured data, and performs arbitrary post-processing and visualization.
+
+Acadia was designed with the challenges of quantum device research in mind, and a more thorough discussion of the associated considerations may be found in \hyperref[sec_motivation]{Section \ref{sec_motivation}}. However, its flexibility in orchestrating different signal processing functions allows Acadia to straightforwardly replicate the functionality of common lab instruments like oscilloscopes, signal generators, vector network analyzers, and spectrum analyzers. Along with a high-performance analog front-end, this can drastically lower the cost associated with having these capabilities available in a lab compared to commercial units, and the coexistence of these capabilities can allow bespoke combinations of functionality for unique experiments.
+
+Acadia is targeted for implementation on a ZCU216 development board from Xilinx, though it is straightforwardly portable to other hardware. Many parameters of the design (such as memory depths) can be modified simply by editing a firmware definition file, but the default configuration has shown to be sufficient for many experiments in our lab. Some parameters of the default configuration include:
+
+\section{Selected Specifications}
+
+\begin{itemize}
+
+    \item A sequencer with single-cycle instruction decode and execution
+    \begin{itemize}
+        \item 200 MHz clock rate
+        \item Two-cycle branch latency
+        \item 4K-deep instruction memory, able to be reloaded in real-time from external memory
+        \item Eight 32-bit general-purpose registers
+        \item Eight 48-bit DSP units for real-time arithmetic
+        \item 32-bit memory bus for interface to the rest of the system
+    \end{itemize}
+
+    \item 16 DACs operating at 6.4 GS/s, interpolated from an 800 MS/s fabric interface rate
+    \begin{itemize}
+        \item DAC sample rates may be changed without firmware change to allow optimal placement of Nyquist zone boundaries
+        \item 32 KS memory for each DAC channel (approximately 40 $\mu$ s at the default rate), which can be reloaded by the sequencer in real-time from multiple external memory sources
+        \item A 48-bit numerically-controlled quadrature oscillator on each channel capable of modulating the samples at the full DAC bandwidth
+    \end{itemize}
+
+    \item 16 ADCs operating at 2.4 GS/s, decimated to an 800 MS/s fabric interface rate
+    \begin{itemize}
+        \item A 48-bit numerically-controlled quadrature oscillator on each channel capable of modulating the samples at the full ADC bandwidth
+    \end{itemize}
+
+    \item All ADC outputs and two memory-to-stream units feed a processing/storage network containing configurable modules for concurrently processing streams of data
+
+    \begin{itemize}
+        \item Two full-bandwidth capture paths write a stream directly to memory
+
+        \item Four complex multiplier/accumulator units 
+        \begin{itemize}
+            \item Real-time signal filtering and decimation using an arbitrary filter kernel
+            \item Short pipeline provides results to the sequencer within 50 ns
+            \item Able to be automatically reset allowing back-to-back repeated captures
+        \end{itemize}
+
+    \end{itemize}
+
+    \item A fast true-dual-port cache memory directly connected between the sequencer's bus and the PS AXI network
+    \begin{itemize}
+        \item Organized as 32768 32-bit words
+        \item Optimized for very-low-latency communication between the sequencer and the processor (approximately 100 ns)
+        \item Allows fast real-time data access
+    \end{itemize}
+  
+    \item Two 4 GB banks of external DDR4 RAM
+    \item A 256-bit AXI interconnect allowing all memory regions to be concurrently accessed by the stream processing units and the processor
+\end{itemize}
+
+\section{Motivation in quantum control} \label{sec_motivation}
+
+Modern experiments in quantum device research demand signal synthesis and capture sequenced on nanosecond timescales. A non-trivial amount of computation may be needed for controlling the flow of the sequence, and the desire to condition signal synthesis on the results of prior measurements with very low latency precludes the use of commercial arbitrary waveform generators (AWGs). Furthermore, low tolerance for nondeterministic latencies or jitter while interacting with qubits requires that any processing logic be fully synchronous with waveform synthesis, making it difficult to integrate multiple instruments reliably. 
+
+The flexibility and ease of use sought from such an instrument makes interaction with high-level languages and standard processors desirable, but the the complexity of modern CPUs' datapaths and the latencies added by typical communication interfaces make them ineffective real-time controllers. This latency can greatly exceed the length of a measurement sequence, so even for computations in between measurements, these latencies can drastically reduce the duty cycle with which measurements are performed.
+
+Because of this, custom control hardware for quantum computers has been developed independently by multiple research groups. Most existing solutions implement a real-time processor in FPGA fabric which is capable of performing waveform parameter sweeps, control flow, and other specialized computations (such as random number generation or matrix multiplication). Analog-to-digital converters (ADCs) and digital-to-analog converters (DACs) are connected to the FPGA so that it can orchstrate the synthesis, capture, and processing of microwave signals interacting with the quantum hardware in real time. Often, the instrument will be configured and managed by an external computer and will be programmed to carry out a number of measurement sequences, recording data as necessary. 
+
+However, this approach requires the real-time processors to be capable of carrying out any computation that the complete measurement sequence could ever need, along with all of its variations. In view of the need to also complete calculations with very low latency, this requirement often leads to bloated instruction sets, short datapath pipelines, and monolithic designs. When implemented in reconfigurable FPGAs, the performance is often sub-optimal and difficult to improve.
+
+Many previous implementations have augmented the real-time processor with custom accelerators for particular applications, such as parametric waveform synthesizers or randomized sequence generators. However, as quantum computing advances and experimentalists ask more of their control hardware, users aim to add capabilities to their instruments like automated calibration routines, real-time error syndrome decoding, and benchmarking methods. The monolithic nature of most implementations can require a significant development effort and force the developer to remove functionality in order to accommodate a bespoke feature, even after overcoming the substantial learning curve that high-performance FPGA development presents to a researcher inexperienced in this practice. 
+
+To resolve the conflicting requirements of high performance and ease of use, herein we describe the Acadia system architecture, which is intended to take advantage of tight integration between the FPGA fabric and embedded processors available in modern programmable logic systems. By integrating these resources on the same chip, the latencies associated with launching communication signals off-chip and being translated to standardized protocols can be reduced or eliminated, and higher-level programs can interact with real-time sequences on reasonable timescales for quantum control. This allows the computational capabilities previously required of the real-time controller to be offloaded to the embedded processor, which can then be programmed in a high-level language more familiar to users.
+
+In particular, we focus on the Xilinx RFSoC series of products, as they offer large regions of FPGA fabric and high frequency analog data converters on-chip alongside a quad-core ARM processor. Targeted at directly synthesizing signals for wireless communications, the data converters in the RFSoC are able to directly synthesize signals up to approximately 10 GHz, offering a promising opportunity to alleviate the restrictions imposed by conventional pulse synthesis techniques when scaling quantum processors. The harmonics and image tones introduced by mixing elements exacerbate the issue of qubit frequency crowding, while driving with high power distorts pulses and introduces spurious emissions, thereby increasing the difficulty of driving parametric processes which require signals with extremely stable phase and frequency relationship. This often requires signals to be mixed with one another to achieve sufficient syntonization, but because of the high power required for driving a mixer along with its conversion loss and spectral broadening, a significant amount of noise is added in this process and the high degree of connectivity required quickly makes this technique impractical for more than a handful of channels.
+
+In contrast, the DACs and ADCs in the RFSoC have high enough analog bandwidths and sample rates so that pulses intended to drive transitions in superconducting circuits may be directly synthesized without the need for nonlinear upconversion processes driven by local oscillators. Additional signal processing capabilities in the datapaths of the mixed-signal tiles implement features that are desirable for quantum control (described below), alleviating requirements of the FPGA fabric.
+
+Furthermore, the low (but nondeterministic) latency of the interconnect between the processors and the FPGA fabric allows one to offload computational tasks normally required of the FPGA to the ARM processor, such as generating new waveforms in response to parameter sweeps. The FPGA fabric then only requires a simple sequencer capable of real-time execution and conditional control flow, and programs running on the processors will have direct access to wave synthesis/capture memory and sequencer instruction memory. 
+
+These benefits (among others) motivate the implementation of a control system on the RFSoC, which we describe herein.
