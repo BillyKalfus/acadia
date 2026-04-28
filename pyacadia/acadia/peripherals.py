@@ -1,7 +1,8 @@
-__all__ = ["RFClk", "PSGPIO", "ZDMA", "AXISSwitch", "get_gpio_base"]
+__all__ = ["RFClk", "PSGPIO", "ZDMA", "AXISSwitch", "get_gpio_base", "IDT_8A34001"]
 
 import re
 import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -1165,3 +1166,55 @@ class ZCU216Sensors:
                 measurements[key] = 1e-3*(raw + offset)*scale
 
         return measurements
+
+class IDT_8A34001:
+
+    @staticmethod
+    def identify(device_id: int = 0x5B, bus_id: int = 10) -> bool:
+        """
+        Checks whether a device with the proper product ID for the 8A34001 can be found.
+        """
+        from smbus import SMBus
+        smb = SMBus(bus_id)
+        smb.write_i2c_block_data(device_id, 0xFC, [0x00, 0xC0, 0x10, 0x20])
+        data = smb.read_i2c_block_data(device_id, 0x30, 2)
+        smb.close()
+        return (data[0] == 0x35) and (data[1] == 0x06)
+        
+    @staticmethod
+    def reset(device_id: int = 0x5B, bus_id: int = 10) -> None:
+
+        from smbus import SMBus
+        smb = SMBus(bus_id)
+        smb.write_i2c_block_data(device_id, 0xFC, [0x00, 0xC0, 0x10, 0x20])
+        smb.write_i2c_block_data(device_id, 0x12, [0x5A])
+        smb.close()
+
+    @staticmethod
+    def program(file: str, device_id: int = 0x5B, bus_id: int = 10) -> None:
+        """
+        Program the 8A34001 from a configuration file exported from Timing Commander.
+        """
+        from smbus import SMBus
+        
+        with open(file, "r") as f:
+            for line in f:
+                if line.startswith("Size:"):
+                    size_str,offset_str,data_str = line.split(",")
+                    size = int(size_str[len("Size: 0x"):], 16)
+                    offset = int(offset_str[len(" Offset: "):], 16)
+                    data_str = data_str[len(" Data: 0x"):].strip()
+                    data = [int(data_str[i:i+2], 16) for i in range(0, len(data_str), 2)]
+                    if len(data) != size:
+                        raise ValueError(f"Error parsing line with size {size}"
+                                         f"but {len(data)} bytes of data: {line}")
+
+                    cmd = f"i2ctransfer -y 10 w{size+1}@0x{device_id:02X} 0x{offset:02X} "
+                    cmd += " ".join([f"0x{d:02X}" for d in data])
+                    os.system(cmd)
+
+                    # smb = SMBus(bus_id)
+                    # smb.write_i2c_block_data(device_id, offset, data)
+                    # smb.close()
+
+                    time.sleep(0.01)

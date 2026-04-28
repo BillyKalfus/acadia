@@ -37,6 +37,7 @@ end cmacc_tb;
 
 architecture rtl of cmacc_tb is
     signal clk : std_logic := '1';
+    signal nrst : std_logic := '0';
     
     signal data_in_tdata  : std_logic_vector(127 downto 0) := (others => '0');
     signal data_in_tvalid : std_logic := '0';
@@ -61,7 +62,7 @@ architecture rtl of cmacc_tb is
     signal registers_en   : std_logic := '0';
 begin
 
-    uut : entity work.acadia_stream_complex32_macc
+    uut : entity work.acadia_stream_cmacc
          generic map (
             -- Number of quadratures pairs present in the input must be <= 4
             INPUT_WORDS                   => 4,
@@ -80,6 +81,7 @@ begin
         )
         port map(
             clk => clk,
+            nrst => nrst,
             
             -- Signal input
             data_in_tdata     => data_in_tdata,
@@ -92,6 +94,7 @@ begin
             kernel_memory_dout => kernel_memory_dout,
             kernel_memory_addr => kernel_memory_addr,
             kernel_memory_we   => kernel_memory_we,
+            kernel_memory_en   => '1',
             kernel_memory_clk  => clk,
                 
             -- Output data stream
@@ -131,6 +134,15 @@ begin
     kernel_memory_clk <= clk;
     
     stimulus_proc: process begin
+        -- Reset
+        nrst <= '0';
+        wait until rising_edge(clk);
+        nrst <= '1';
+        wait until rising_edge(clk);
+        
+        -- Wait a while (it takes a while for the FIFO to reset)
+        for i in 0 to 80 loop wait until rising_edge(clk); end loop;
+        
         -- Load single sample of kernel memory
         kernel_memory_din <= x"00008FFF";
         kernel_memory_addr <= "00000000000";
@@ -141,9 +153,9 @@ begin
         kernel_memory_addr <= "00000000000";
         kernel_memory_we <= "0000";
         
-        -- Reset the FIFO
+        -- Internal module reset
         wait until rising_edge(clk);
-        registers_addr <= x"00000002";
+        registers_addr <= x"00000000";
         registers_mosi <= x"10000000";
         registers_we   <= '1';
         registers_en   <= '1';
@@ -151,7 +163,7 @@ begin
         -- Write to kernel pointer start/end register
         -- both are zero in order to have a single-sample kernel
         wait until rising_edge(clk);
-        registers_addr <= x"00000003";
+        registers_addr <= x"00000001";
         registers_mosi <= x"00000000";
         registers_we   <= '1';
         registers_en   <= '1';
@@ -159,36 +171,37 @@ begin
         wait until rising_edge(clk);
 
         -- Control register
-        -- accumulator_update_mode = 01, accumulator_latch_write = 01, stream_port_write_mode = 10, arm_preload = 1
-        -- (1 << 18) | (1 << 20) | (1 << 27) | (1 << 30) = 0x48140000
-        registers_addr <= x"00000002";
-        registers_mosi <= x"48140000";
+        -- accumulator_update_mode = 01, accumulator_latch_write = 01, stream_port_write_mode = 01, arm_preload = 1, kernel_pointer_load = 1
+        -- (1 << 18) | (1 << 20) | (1 << 27) | (1 << 26) | (1 << 16) = 0x0C150000
+        registers_addr <= x"00000000";
+        registers_mosi <= x"0C150000";
         registers_we   <= '1';
         registers_en   <= '1';
 
         wait until rising_edge(clk);
 
         -- Real preload
-        registers_addr <= x"00000000";
-        registers_mosi <= x"00000000";
+        registers_addr <= x"00000004";
+        registers_mosi <= x"0000000A";
         registers_we   <= '1';
         registers_en   <= '1';
 
         wait until rising_edge(clk);
 
         -- Imag preload
-        registers_addr <= x"00000004";
-        registers_mosi <= x"00000000";
+        registers_addr <= x"00000005";
+        registers_mosi <= x"0000000C";
         registers_we   <= '1';
         registers_en   <= '1';
 
         wait until rising_edge(clk);
 
-        registers_addr <= x"00000005";
+        registers_addr <= x"00000000";
         registers_mosi <= x"00000000";
         registers_we   <= '0';
         registers_en   <= '0';
-
+        
+        -- Wait a bit and then start sending data
         for i in 0 to 9 loop wait until rising_edge(clk); end loop;
 
         data_in_tvalid <= '1';

@@ -114,11 +114,11 @@ architecture rtl of acadia_dma is
     ATTRIBUTE X_INTERFACE_MODE of address_out_tdata      : SIGNAL is "Master";
     ATTRIBUTE X_INTERFACE_PARAMETER of address_out_tdata : SIGNAL is "HAS_TLAST 1,HAS_TKEEP 0,HAS_TSTRB 0,HAS_TREADY 0,TUSER_WIDTH 0,TID_WIDTH 0,TDEST_WIDTH 0,TDATA_NUM_BYTES " & positive'image(ADDRESS_WIDTH/8);
 
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_we  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DIN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DOUT";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus ADDR";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_we  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus WE";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus EN";
 
     signal rst_int : std_logic;
     signal data_out_p : std_logic_vector(DATA_WIDTH-1 downto 0);
@@ -128,7 +128,7 @@ architecture rtl of acadia_dma is
     signal running_int      : std_logic;
 
     -- Command FIFO signals
-    signal fifo_dout: std_logic_vector(33 downto 0);
+    signal fifo_dout: std_logic_vector(34 downto 0);
     signal fifo_rd   : std_logic;
     signal fifo_wr   : std_logic;
     signal fifo_full    : std_logic;

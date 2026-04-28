@@ -267,11 +267,11 @@ class BusDataport(BusDevice, HDLModule):
         # Assign attributes
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DIN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DOUT";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus WE";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus EN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus CLK";\n\n'
         
         # Make the delayed write enable signals
         for d in range(1,self._max_write_delay):
@@ -524,20 +524,20 @@ class BusDecoder(BusDevice, HDLModule):
         # Assign attributes
         hdl += f'    ATTRIBUTE X_INTERFACE_INFO : STRING;\n'
         hdl += f'    ATTRIBUTE X_INTERFACE_MODE : STRING;\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";\n'
-        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";\n\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DIN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DOUT";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus ADDR";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus WE";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus EN";\n'
+        hdl += f'    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus CLK";\n\n'
         
         for (obj,pipeline) in self._bus_objects:
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 {obj.name} DIN";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_miso: SIGNAL is "xilinx.com:interface:bram:1.0 {obj.name} DOUT";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_addr: SIGNAL is "xilinx.com:interface:bram:1.0 {obj.name} ADDR";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 {obj.name} WE";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_en  : SIGNAL is "xilinx.com:interface:bram:1.0 {obj.name} EN";\n'
-            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_clk : SIGNAL is "xilinx.com:interface:bram:1.0 {obj.name} CLK";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_mosi: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 {obj.name} DIN";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_miso: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 {obj.name} DOUT";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_addr: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 {obj.name} ADDR";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_wr  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 {obj.name} WE";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_en  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 {obj.name} EN";\n'
+            hdl += f'    ATTRIBUTE X_INTERFACE_INFO of {obj.name}_clk : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 {obj.name} CLK";\n'
             hdl += f'    ATTRIBUTE X_INTERFACE_MODE of {obj.name}_mosi: SIGNAL is "Master";\n\n'
             
         hdl += f'begin\n'
@@ -1341,101 +1341,5 @@ class AXIMemoryArray(HDLModule, IPModule):
                        f'Component_Name': self._ip_name,
                        f'READ_LATENCY': self._controller_port_input_pipeline + self._controller_port_output_pipeline + 1,
                        f'RD_CMD_OPTIMIZATION': 0}
-
-        return super().generate_ip_tcl(directory, config_dict)
-            
-class BusGTYController(BusDevice, IPModule):
-    """
-    A bus-controlled interface to the GTY transceivers.
-    """
-
-    def __init__(self, module_name: str):
-        BusDevice.__init__(self, module_name, 16, 32, 32)
-        IPModule.__init__(self, module_name, "gtwizard_ultrascale", "1.7")
-
-    def generate_ip_tcl(self, directory: str) -> str:
-        config_dict = {
-            "CHANNEL_ENABLE": "X0Y4",
-            "DISABLE_LOC_XDC": 0,
-            "ENABLE_COMMON_USRCLK": 0,
-            "ENABLE_OPTIONAL_PORTS": "rxprbscntreset_in rxprbssel_in txprbssel_in rxprbserr_out rxprbslocked_out",
-            "FREERUN_FREQUENCY": 200, # TODO: find a way to extract this from the config
-            "GT_DIRECTION": "BOTH",
-            "GT_REV": 0,
-            "GT_TYPE": "GTY",
-            "INCLUDE_CPLL_CAL": 2,
-            "INS_LOSS_NYQ": 20,
-            "INTERNAL_PRESET": "10GBASE-R",
-            "LOCATE_COMMON": "CORE",
-            "LOCATE_IN_SYSTEM_IBERT_CORE": "NONE",
-            "LOCATE_RESET_CONTROLLER": "CORE",
-            "LOCATE_RX_BUFFER_BYPASS_CONTROLLER": "CORE",
-            "LOCATE_RX_USER_CLOCKING": "CORE",
-            "LOCATE_TX_BUFFER_BYPASS_CONTROLLER": "CORE",
-            "LOCATE_TX_USER_CLOCKING": "CORE",
-            "LOCATE_USER_DATA_WIDTH_SIZING": "CORE",
-            "OOB_ENABLE": "false",
-            "PRESET": "GTY-10GBASE-R",
-            "RESET_SEQUENCE_INTERVAL": "0",
-            "RX_BUFFER_BYPASS_MODE": "MULTI",
-            "RX_BUFFER_MODE": 1,
-            "RX_BUFFER_RESET_ON_CB_CHANGE": "ENABLE",
-            "RX_BUFFER_RESET_ON_COMMAALIGN": "DISABLE",
-            "RX_BUFFER_RESET_ON_RATE_CHANGE": "ENABLE",
-            "RX_COMMA_ALIGN_WORD": 4,
-            "RX_COMMA_DOUBLE_ENABLE": "false",
-            "RX_COMMA_MASK": "1111111111",
-            "RX_COMMA_M_ENABLE": "false",
-            "RX_COMMA_M_VAL": "1010000011",
-            "RX_COMMA_PRESET": "K28.1",
-            "RX_COMMA_P_ENABLE": "true",
-            "RX_COMMA_P_VAL": "1001111100",
-            "RX_COMMA_SHOW_REALIGN_ENABLE": "true",
-            "RX_COMMA_VALID_ONLY": 0,
-            "RX_COUPLING": "AC",
-            "RX_DATA_DECODING": "8B10B",
-            "RX_EQ_MODE": "AUTO",
-            "RX_INT_DATA_WIDTH": "40",
-            "RX_JTOL_FC": "4.7990402",
-            "RX_JTOL_LF_SLOPE": "-20",
-            "RX_LINE_RATE": 8,
-            "RX_MASTER_CHANNEL": "X0Y4",
-            "RX_OUTCLK_SOURCE": "RXPROGDIVCLK",
-            "RX_PLL_TYPE": "QPLL0",
-            "RX_PPM_OFFSET": 0,
-            "RX_QPLL_FRACN_NUMERATOR": 0,
-            "RX_RECCLK_OUTPUT": "X0Y4 clk0",
-            "RX_REFCLK_FREQUENCY": 200, # TODO: find a way to extract this from the config
-            "RX_REFCLK_SOURCE": "X0Y4 clk1",
-            "RX_SLIDE_MODE": "OFF",
-            "RX_SSC_PPM": 0,
-            "RX_TERMINATION": "PROGRAMMABLE",
-            "RX_TERMINATION_PROG_VALUE": 800,
-            "RX_USER_DATA_WIDTH": 32,
-            "SATA_TX_BURST_LEN": 15,
-            "SECONDARY_QPLL_ENABLE": "false",
-            "SECONDARY_QPLL_FRACN_NUMERATOR": 0,
-            "SECONDARY_QPLL_LINE_RATE": 10.3125,
-            "SECONDARY_QPLL_REFCLK_FREQUENCY": 257.8125,
-            "SIM_CPLL_CAL_BYPASS": 1,
-            "TXPROGDIV_FREQ_ENABLE": "false",
-            "TXPROGDIV_FREQ_SOURCE": "QPLL0",
-            "TXPROGDIV_FREQ_VAL": 200,
-            "TX_BUFFER_MODE": 1,
-            "TX_BUFFER_RESET_ON_RATE_CHANGE": "ENABLE",
-            "TX_DATA_ENCODING": "8B10B",
-            "TX_DIFF_SWING_EMPH_MODE": "CUSTOM",
-            "TX_INT_DATA_WIDTH": 40,
-            "TX_LINE_RATE": 8,
-            "TX_MASTER_CHANNEL": "X0Y4",
-            "TX_OUTCLK_SOURCE": "TXPLLREFCLK_DIV1",
-            "TX_PLL_TYPE": "QPLL0",
-            "TX_QPLL_FRACN_NUMERATOR": 0,
-            "TX_REFCLK_FREQUENCY": 200,
-            "TX_REFCLK_SOURCE": "X0Y4 clk1",
-            "TX_USER_DATA_WIDTH": 32,
-            "USB_ENABLE": "false",
-            "USER_GTPOWERGOOD_DELAY_EN": 1
-        }
 
         return super().generate_ip_tcl(directory, config_dict)

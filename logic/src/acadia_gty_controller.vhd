@@ -17,9 +17,9 @@
 --    concatenated into a single port rather than broken out individually in order to ease integration with 
 --    the PS GPIO controller or an AXI GPIO module.
 --
---    External control port signals:
+--    AXI control register 0: Reset and initialization settings
 --
---      Bit 0: w: gtwiz_userclk_tx_reset
+--        Bit 0: w: gtwiz_userclk_tx_reset
 --               r: gtwiz_userclk_tx_active
 --
 --        Bit 1: w: gtwiz_userclk_rx_reset
@@ -41,12 +41,29 @@
 --               r: rxpmaresetdone
 --
 --        Bit 7: w: no effect
---                r: rxprgdivresetdone
+--               r: rxprgdivresetdone
 --
 --        Bit 8: w: no effect
---                r: gtpowergood
+--               r: gtpowergood
 --
---    Register 0: Real-time Control and Status signals
+--        Bit 31: w: Controller reset (write 1 to take controller out of reset)
+--                r: 0
+--
+--    AXI control register 1: PRBS 
+--
+--        Bits 3-0: w: rxprbssel
+--                  r: 0
+--
+--        Bits 7-4: w: txprbssel
+--                  r: 0
+--        
+--        Bit 8:  w: rxprbserr (write 1 to clear, writing 0 has no effect)
+--                r: rxprbserr (latched)
+--       
+--        Bit 9:  w: no effect
+--                r: rxprbslocked
+--
+--    AXI control register 2: Alignment 
 --
 --        Bit 0: w: rxcommadeten
 --               r: 0
@@ -57,50 +74,33 @@
 --        Bit 2: w: rxpcommaalignen
 --               r: 0
 --
---        Bit 3: w: no effect
---               r: RX FIFO empty
---
---        Bit 4: w: no effect
---               r: RX FIFO overflow
+--        Bit 3: w: rxcommadet (write 1 to clear, writing 0 has no effect)
+--               r: rxcommadet (latched)
+-- 
+--        Bit 4: w: rxbyterealign (write 1 to clear, writing 0 has no effect)
+--               r: rxbyterealign (latched)
 --
 --        Bit 5: w: no effect
+--               r: rxbyteisaligned
+--
+--    Reading from bus address 0 returns a status word with the following bit fields:
+--     
+--        Bit 0: w: no effect
+--               r: RX FIFO empty
+--
+--        Bit 1: w: no effect
+--               r: RX FIFO overflow
+--
+--        Bit 2: w: no effect
 --               r: TX FIFO full
 --
---        Bits 7-6: w: Reserved (no effect)
---                  r: 0
+--    Data FIFOs are available over the bus: 
 --
---        Bits 11-8: w: rxprbssel
---                  r: 0
+--        Register 1: w: TX FIFO
+--                    r: no effect
 --
---        Bits 15-12: w: txprbssel
---                   r: 0
---
---        Bit 16: w: rxcommadet (write 1 to clear, writing 0 has no effect)
---                r: rxcommadet (latched)
--- 
---        Bit 17: w: rxbyterealign (write 1 to clear, writing 0 has no effect)
---                r: rxbyterealign (latched)
---
---        Bit 18: w: rxprbserr (write 1 to clear, writing 0 has no effect)
---                r: rxprbserr (latched)
---
---        Bit 19: w: no effect
---                r: rxbyteisaligned
---
---        Bit 20: w: no effect
---                r: rxprbslocked
---
---        Bits 30-21: w: Reserved (no effect)
---                r: 0
---
---        Bit 31: w: Controller reset (write 1 to reset, writing 0 does nothing)
---                r: 0
---
---    Register 1: w: TX FIFO
---                r: no effect
---
---    Register 2: w: no effect
---                r: RX FIFO
+--        Register 2: w: no effect
+--                    r: RX FIFO
 -- 
 -- Dependencies: 
 -- 
@@ -117,21 +117,50 @@ use IEEE.STD_LOGIC_1164.ALL;
 library xpm;
 use xpm.vcomponents.all;
 
+library UNISIM;
+use UNISIM.vcomponents.all;
+
 entity acadia_gty_controller is
     generic (
-        FIFO_DEPTH : positive := 16
+        FIFO_DEPTH   : positive := 16;
+        AXI_ADDRESS_BITS : positive := 4
     );
     port (
         -- Fabric clocks
-        clk_freerun : in std_logic;
-        tx_clk : out std_logic;
-        rx_clk : out std_logic;
+        clk_freerun   : in std_logic;
 
-        rst : in std_logic;
+        -- AXI-Lite configuration port
+        s_axi_aclk    : in  std_logic;
+        s_axi_aresetn : in  std_logic;
+        
+        -- AXI write address
+        s_axi_awaddr  : in  std_logic_vector(AXI_ADDRESS_BITS-1 downto 0);
+        s_axi_awvalid : in  std_logic;
+        s_axi_awready : out std_logic; 
 
-        external_control: in std_logic_vector(8 downto 0);
-        external_status: out std_logic_vector(8 downto 0);
+        -- AXI write
+        s_axi_wdata   : in  std_logic_vector(31 downto 0);
+        s_axi_wstrb   : in  std_logic_vector(3 downto 0);
+        s_axi_wvalid  : in  std_logic;
+        s_axi_wready  : out std_logic;
 
+        -- AXI write response
+        s_axi_bresp   : out std_logic_vector(1 downto 0);
+        s_axi_bvalid  : out std_logic;
+        s_axi_bready  : in  std_logic;
+
+        -- AXI read address
+        s_axi_araddr  : in  std_logic_vector(AXI_ADDRESS_BITS-1 downto 0);
+        s_axi_arready : out std_logic;
+        s_axi_arvalid : in  std_logic;
+
+        -- AXI read
+        s_axi_rdata   : out std_logic_vector(31 downto 0);
+        s_axi_rresp   : out std_logic_vector(1 downto 0);
+        s_axi_rvalid  : out std_logic;
+        s_axi_rready  : in  std_logic;
+
+        -- Bus interface for real-time data
         master_bus_clk   : in  std_logic;
         master_bus_mosi  : in  std_logic_vector(31 downto 0);
         master_bus_miso  : out std_logic_vector(31 downto 0);
@@ -140,16 +169,70 @@ entity acadia_gty_controller is
         master_bus_en    : in  std_logic;
 
         -- GT physical interface
-        gt_tx_p : out std_logic;
-        gt_tx_n : out std_logic;
-        gt_rx_p : in  std_logic;
-        gt_rx_n : in  std_logic;
+        MGT128_C0_tx_p : out std_logic;
+        MGT128_C0_tx_n : out std_logic;
+        MGT128_C0_rx_p : in  std_logic;
+        MGT128_C0_rx_n : in  std_logic;
 
-        gt_refclk00 : in std_logic
+        MGT128_refclk0_p : out std_logic;
+        MGT128_refclk0_n : out std_logic;
+        MGT128_refclk1_p : in  std_logic;
+        MGT128_refclk1_n : in  std_logic;
+
+        -- Clocks produced by the GT
+        MGT128_txusrclk2 : out std_logic;
+        MGT128_rxusrclk2 : out std_logic
     );
 end acadia_gty_controller;
 
 architecture rtl of acadia_gty_controller is
+
+    ATTRIBUTE X_INTERFACE_INFO : STRING;
+    ATTRIBUTE X_INTERFACE_MODE : STRING;
+    ATTRIBUTE X_INTERFACE_PARAMETER : STRING;
+    
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_we  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";
+
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_C0_tx_p  : SIGNAL is "xilinx.com:interface:gt_rtl:1.0 MGT128_C0 GTX_P";
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_C0_tx_n  : SIGNAL is "xilinx.com:interface:gt_rtl:1.0 MGT128_C0 GTX_N";
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_C0_rx_p  : SIGNAL is "xilinx.com:interface:gt_rtl:1.0 MGT128_C0 GRX_P";
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_C0_rx_n  : SIGNAL is "xilinx.com:interface:gt_rtl:1.0 MGT128_C0 GRX_N";
+    ATTRIBUTE X_INTERFACE_MODE of MGT128_C0_tx_p  : SIGNAL is "Master";
+
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_refclk0_p : SIGNAL is "xilinx.com:interface:diff_clock:1.0 MGT128_refclk0 CLK_P";
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_refclk0_n : SIGNAL is "xilinx.com:interface:diff_clock:1.0 MGT128_refclk0 CLK_N";
+    ATTRIBUTE X_INTERFACE_MODE of MGT128_refclk0_p : SIGNAL is "Master";
+
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_refclk1_p : SIGNAL is "xilinx.com:interface:diff_clock:1.0 MGT128_refclk1 CLK_P";
+    ATTRIBUTE X_INTERFACE_INFO of MGT128_refclk1_n : SIGNAL is "xilinx.com:interface:diff_clock:1.0 MGT128_refclk1 CLK_N";
+    ATTRIBUTE X_INTERFACE_MODE of MGT128_refclk1_p : SIGNAL is "Slave";
+
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_aclk      : SIGNAL is "xilinx.com:signal:clock:1.0 s_axi_aclk CLK";
+    ATTRIBUTE X_INTERFACE_PARAMETER of s_axi_aclk : SIGNAL is "ASSOCIATED_BUSIF s_axi";
+    
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_awaddr  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi AWADDR";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_awvalid : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi AWVALID";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_awready : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi AWREADY";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_wdata   : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi WDATA";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_wstrb   : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi WSTRB";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_wvalid  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi WVALID";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_wready  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi WREADY";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_bresp   : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi BRESP";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_bvalid  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi BVALID";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_bready  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi BREADY";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_araddr  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi ARADDR";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_arvalid : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi ARVALID";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_arready : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi ARREADY";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_rdata   : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi RDATA";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_rresp   : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi RRESP";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_rvalid  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi RVALID";
+    ATTRIBUTE X_INTERFACE_INFO of s_axi_rready  : SIGNAL is "xilinx.com:interface:aximm:1.0 s_axi RREADY";
+    ATTRIBUTE X_INTERFACE_PARAMETER of s_axi_awaddr: SIGNAL is "PROTOCOL AXI4LITE";
 
     component gtwizard_ultrascale_128
         port (
@@ -175,8 +258,13 @@ architecture rtl of acadia_gty_controller is
             gtwiz_userdata_tx_in : in std_logic_vector(31 downto 0);
             gtwiz_userdata_rx_out : out std_logic_vector(31 downto 0);
             gtrefclk00_in : in std_logic_vector(0 downto 0);
-            qpll0outclk_out : out std_logic_vector(0 downto 0);
-            qpll0outrefclk_out : out std_logic_vector(0 downto 0);
+            qpll0lockdetclk_in : IN STD_LOGIC_VECTOR(0 DOWNTO 0);
+            qpll0locken_in : IN STD_LOGIC_VECTOR(0 DOWNTO 0);
+            qpll0fbclklost_out : OUT STD_LOGIC_VECTOR(0 DOWNTO 0);
+            qpll0lock_out : OUT STD_LOGIC_VECTOR(0 DOWNTO 0);
+            qpll0outclk_out : OUT STD_LOGIC_VECTOR(0 DOWNTO 0);
+            qpll0outrefclk_out : OUT STD_LOGIC_VECTOR(0 DOWNTO 0);
+            qpll0refclklost_out : OUT STD_LOGIC_VECTOR(0 DOWNTO 0);
             gtyrxn_in : in std_logic_vector(0 downto 0);
             gtyrxp_in : in std_logic_vector(0 downto 0);
             rx8b10ben_in : in std_logic_vector(0 downto 0);
@@ -209,151 +297,279 @@ architecture rtl of acadia_gty_controller is
         );
     end component;
 
-    signal master_bus_clk_rst : std_logic;
-    signal rxusrclk2_rst : std_logic;
+    signal master_bus_clk_nrst : std_logic;
+    signal rxusrclk2_nrst      : std_logic;
 
-    -- Internally-registered control signals
-    signal rxcommadeten    : std_logic;
-    signal rxmcommaalignen : std_logic;
-    signal rxpcommaalignen : std_logic;
-    signal rxprbssel       : std_logic_vector(3 downto 0);
-    signal txprbssel       : std_logic_vector(3 downto 0);
-
-    -- The same signals synchronized to the RXUSRCLK2 domain
-    signal rxcommadeten_sync    : std_logic;
-    signal rxmcommaalignen_sync : std_logic;
-    signal rxpcommaalignen_sync : std_logic;
-    signal rxprbssel_sync       : std_logic_vector(3 downto 0);
-    signal txprbssel_sync       : std_logic_vector(3 downto 0);
+    -- Internally-registered control signals and their counterparts 
+    -- in the corresponding MGT domain
+    signal rxcommadeten_axi    : std_logic;
+    signal rxcommadeten_mgt    : std_logic;
+    signal rxmcommaalignen_axi : std_logic;
+    signal rxmcommaalignen_mgt : std_logic;
+    signal rxpcommaalignen_axi : std_logic;
+    signal rxpcommaalignen_mgt : std_logic;
+    signal rxprbssel_axi       : std_logic_vector(3 downto 0);
+    signal rxprbssel_mgt       : std_logic_vector(3 downto 0);
+    signal txprbssel_axi       : std_logic_vector(3 downto 0);
+    signal txprbssel_mgt       : std_logic_vector(3 downto 0);
 
     -- Latched status signals
-    -- Signals with no suffix are in the master_bus_clk domain, 
-    -- signals with the _sync suffix are in the rx_int_clk domain, 
+    -- Signals with _axi suffix are in the s_axi_aclk domain, 
+    -- signals with the _mgt suffix are in the rx_int_clk domain, 
     -- and signals with the _latch suffix are latches in the rx_int_clk domain
-    signal rxcommadet          : std_logic;
-    signal rxcommadet_sync     : std_logic;
-    signal rxcommadet_latch    : std_logic;
-    signal rxbyterealign       : std_logic;
-    signal rxbyterealign_sync  : std_logic;
-    signal rxbyterealign_latch : std_logic;
-    signal rxprbserr           : std_logic;
-    signal rxprbserr_sync      : std_logic;
+    signal rxcommadet_axi       : std_logic;
+    signal rxcommadet_clear_axi : std_logic;
+    signal rxcommadet_mgt       : std_logic;
+    signal rxcommadet_clear_mgt : std_logic;
+    signal rxcommadet_latch     : std_logic;
+    
+    signal rxbyterealign_axi       : std_logic;
+    signal rxbyterealign_clear_axi : std_logic;
+    signal rxbyterealign_mgt       : std_logic;
+    signal rxbyterealign_clear_mgt : std_logic;
+    signal rxbyterealign_latch     : std_logic;
+    
+    signal rxprbserr_axi       : std_logic;
+    signal rxprbserr_clear_axi : std_logic;
+    signal rxprbserr_mgt       : std_logic;
+    signal rxprbserr_clear_mgt : std_logic;
     signal rxprbserr_latch     : std_logic;
 
-    signal gt_latch_reset      : std_logic_vector(2 downto 0);
-    signal gt_latch_reset_sync : std_logic_vector(gt_latch_reset'high downto 0);
-
     -- Non-latched status
-    signal rxprbslocked         : std_logic;
-    signal rxprbslocked_sync    : std_logic;
-    signal rxbyteisaligned      : std_logic;
-    signal rxbyteisaligned_sync : std_logic;
+    signal rxprbslocked_axi    : std_logic;
+    signal rxprbslocked_mgt    : std_logic;
+    signal rxbyteisaligned_axi : std_logic;
+    signal rxbyteisaligned_mgt : std_logic;
 
-    signal rx_is_k_char          : std_logic_vector(3 downto 0);
-    signal rx_invalid_data_error : std_logic_vector(3 downto 0);
-    signal rx_disparity_error    : std_logic_vector(3 downto 0);
-    signal rx_comma_detected     : std_logic_vector(3 downto 0);
+    signal rx_is_k_char          : std_logic_vector(15 downto 0);
+    signal rx_disparity_error    : std_logic_vector(15 downto 0);
+    signal rx_invalid_data_error : std_logic_vector(7 downto 0);
+    signal rx_comma_detected     : std_logic_vector(7 downto 0);
 
     signal tx_is_k_char          : std_logic_vector(3 downto 0);
 
     signal gt_txdata : std_logic_vector(31 downto 0);
     signal gt_rxdata : std_logic_vector(31 downto 0);
 
-    signal tx_clk_int : std_logic;
-    signal rx_clk_int : std_logic;
+    signal MGT128_txusrclk2_int  : std_logic;
+    signal MGT128_rxusrclk2_int  : std_logic;
+    signal MGT128_refclk00       : std_logic;
+    signal MGT128_rxrecclkout    : std_logic;
+    signal MGT128_rxoutclk_mgt   : std_logic;
+
+    signal axi_regs_in  : std_logic_vector(127 downto 0);
+    signal axi_regs_out : std_logic_vector(127 downto 0);
+
+    -- Asynchronous outputs from the MGT that connect to the AXI registers
+    signal userclk_tx_active_mgt   : std_logic;
+    signal userclk_tx_active_axi   : std_logic;
+    signal userclk_rx_active_mgt   : std_logic;
+    signal userclk_rx_active_axi   : std_logic;
+    signal reset_rx_cdr_stable_mgt : std_logic;
+    signal reset_rx_cdr_stable_axi : std_logic;
+    signal reset_tx_done_mgt       : std_logic;
+    signal reset_tx_done_axi       : std_logic;
+    signal txpmaresetdone_mgt      : std_logic;
+    signal txpmaresetdone_axi      : std_logic;
+    signal reset_rx_done_mgt       : std_logic;
+    signal reset_rx_done_axi       : std_logic;
+    signal rxpmaresetdone_mgt      : std_logic;
+    signal rxpmaresetdone_axi      : std_logic;
+    signal rxprgdivresetdone_mgt   : std_logic;
+    signal rxprgdivresetdone_axi   : std_logic;
+    signal gtpowergood_mgt         : std_logic;
+    signal gtpowergood_axi         : std_logic;
+    
+    signal qpll0fbclklost_mgt : std_logic;
+    signal qpll0fbclklost_axi : std_logic;
+    signal qpll0lock_mgt : std_logic;
+    signal qpll0lock_axi : std_logic;
+    signal qpll0refclklost_mgt : std_logic;
+    signal qpll0refclklost_axi : std_logic;
+
+    -- Asynchronous inputs to the MGT from the AXI registers
+    signal userclk_tx_reset_axi          : std_logic;
+    signal userclk_tx_reset_mgt          : std_logic;
+    signal userclk_rx_reset_axi          : std_logic;
+    signal userclk_rx_reset_mgt          : std_logic;
+    signal reset_all_axi                 : std_logic;
+    signal reset_all_mgt                 : std_logic;
+    signal reset_tx_pll_and_datapath_axi : std_logic;
+    signal reset_tx_pll_and_datapath_mgt : std_logic;
+    signal reset_tx_datapath_axi         : std_logic;
+    signal reset_tx_datapath_mgt         : std_logic;
+    signal reset_rx_pll_and_datapath_axi : std_logic;
+    signal reset_rx_pll_and_datapath_mgt : std_logic;
+    signal reset_rx_datapath_axi         : std_logic;
+    signal reset_rx_datapath_mgt         : std_logic;
 
 begin
 
-    -- Connect to the external port
-    -- All of the inputs to the transceiver that come from the external port are already asynchronous,
-    -- so we don't need to do any CDC (though if the GT wizard doesn't apply the right constraints, 
-    -- we might need to manually add false paths).
-    -- For the outputs to the external status port, we need to declare a false path so that whatever 
-    -- it goes to doesn't try to get its timing.
-    -- set_false_path -from [get_pins acadia_bd_i/hedgehog/acadia_gty_controller_128/inst/external_status]
-
-    master_bus_clk_rst_sync: xpm_cdc_sync_rst
+    regs_inst: entity work.acadia_axi_lite_regs
         generic map (
-            DEST_SYNC_FF => 4,
-            INIT => 1,
-            INIT_SYNC_FF => 0,
-            SIM_ASSERT_CHK => 1
+            N_REGS => 4,
+            AXI_ADDRESS_BITS => AXI_ADDRESS_BITS
         )
         port map (
-            src_rst => rst,
+            s_axi_aclk    => s_axi_aclk,
+            s_axi_aresetn => s_axi_aresetn,
+            
+            s_axi_awaddr  => s_axi_awaddr,
+            s_axi_awvalid => s_axi_awvalid,
+            s_axi_awready => s_axi_awready,
+            s_axi_wdata   => s_axi_wdata,
+            s_axi_wstrb   => s_axi_wstrb,
+            s_axi_wvalid  => s_axi_wvalid,
+            s_axi_wready  => s_axi_wready,
+            s_axi_bresp   => s_axi_bresp,
+            s_axi_bvalid  => s_axi_bvalid,
+            s_axi_bready  => s_axi_bready,
+            s_axi_araddr  => s_axi_araddr,
+            s_axi_arready => s_axi_arready,
+            s_axi_arvalid => s_axi_arvalid,
+            s_axi_rdata   => s_axi_rdata,
+            s_axi_rresp   => s_axi_rresp,
+            s_axi_rvalid  => s_axi_rvalid,
+            s_axi_rready  => s_axi_rready,
 
-            dest_clk => master_bus_clk,
-            dest_rst => master_bus_clk_rst
+            -- Register interface
+            regs_out      => axi_regs_out,
+            regs_in       => axi_regs_in
         );
 
-    rxusrclk2_rst_sync: xpm_cdc_sync_rst
-        generic map (
-            DEST_SYNC_FF => 4,
-            INIT => 1,
-            INIT_SYNC_FF => 0,
-            SIM_ASSERT_CHK => 1
-        )
-        port map (
-            src_rst => rst,
+    -- Assign signals to/from the AXI registers 
+    -- Register 0
+    userclk_tx_reset_axi          <= axi_regs_out(0);
+    userclk_rx_reset_axi          <= axi_regs_out(1);
+    reset_all_axi                 <= axi_regs_out(2);
+    reset_tx_pll_and_datapath_axi <= axi_regs_out(3);
+    reset_tx_datapath_axi         <= axi_regs_out(4);
+    reset_rx_pll_and_datapath_axi <= axi_regs_out(5);
+    reset_rx_datapath_axi         <= axi_regs_out(6);
+            
+    axi_regs_in(0) <= userclk_tx_active_axi;
+    axi_regs_in(1) <= userclk_rx_active_axi;
+    axi_regs_in(2) <= reset_rx_cdr_stable_axi;
+    axi_regs_in(3) <= reset_tx_done_axi;
+    axi_regs_in(4) <= txpmaresetdone_axi;
+    axi_regs_in(5) <= reset_rx_done_axi;
+    axi_regs_in(6) <= rxpmaresetdone_axi;
+    axi_regs_in(7) <= rxprgdivresetdone_axi;
+    axi_regs_in(8) <= gtpowergood_axi;
+    axi_regs_in(9) <= qpll0lock_axi;
+    axi_regs_in(10) <= qpll0refclklost_axi;
+    axi_regs_in(11) <= qpll0fbclklost_axi;
 
-            dest_clk => rx_clk_int,
-            dest_rst => rxusrclk2_rst
-        );
+    -- Register 1
+    rxprbssel_axi <= axi_regs_out(3+32 downto 0+32);
+    txprbssel_axi <= axi_regs_out(7+32 downto 4+32);
 
-    -- Latch some of the signals from the bus so that they stay asserted at
-    -- the GTY interface
-    control_proc: process(master_bus_clk) begin
-        if rising_edge(master_bus_clk) then
-            if(master_bus_clk_rst = '1') then
-                rxcommadeten <= '1';
-                rxmcommaalignen <= '1';
-                rxpcommaalignen <= '1';
-                rxprbssel <= (others => '0');
-                txprbssel <= (others => '0');
-            elsif(master_bus_en = '1' and master_bus_we = '1' and master_bus_addr(1 downto 0) = "00") then
-                rxcommadeten <= master_bus_mosi(0);
-                rxmcommaalignen <= master_bus_mosi(1);
-                rxpcommaalignen <= master_bus_mosi(2);
-                rxprbssel <= master_bus_mosi(11 downto 8);
-                txprbssel <= master_bus_mosi(15 downto 12);
-            end if;
-        end if;
-    end process control_proc;
+    axi_regs_in(8+32) <= rxprbserr_axi;
+    rxprbserr_clear_axi <= axi_regs_out(8+32);
 
-    bus_rd_proc: process(master_bus_clk) begin
-        if rising_edge(master_bus_clk) then
-            if(master_bus_clk_rst = '1') then
-                master_bus_miso <= (others => '0');
-            elsif(master_bus_addr(1 downto 0) = "00") then
-                master_bus_miso(16) <= rxcommadet;
-                master_bus_miso(17) <= rxbyterealign;
-                master_bus_miso(18) <= rxprbserr;
-                master_bus_miso(19) <= rxbyteisaligned;
-                master_bus_miso(20) <= rxprbslocked;
-            end if;
-        end if;
-    end process bus_rd_proc;
+    axi_regs_in(9+32) <= rxprbslocked_axi;
 
+    -- Register 2
+    rxcommadeten_axi    <= axi_regs_out(0+64);
+    rxmcommaalignen_axi <= axi_regs_out(1+64);
+    rxpcommaalignen_axi <= axi_regs_out(2+64);
+
+    axi_regs_in(3+64) <= rxcommadet_axi;
+    rxcommadet_clear_axi <= axi_regs_out(3+64);
+
+    axi_regs_in(4+64) <= rxbyterealign_axi;
+    rxbyterealign_clear_axi <= axi_regs_out(4+64);
+
+    axi_regs_in(5+64) <= rxbyteisaligned_axi;
+
+    -- These signals are asynchronous so they can just be connected
+    -- Asynchronous
+    userclk_tx_reset_mgt          <= userclk_tx_reset_axi;
+    userclk_rx_reset_mgt          <= userclk_rx_reset_axi;
+    reset_all_mgt                 <= reset_all_axi;
+    reset_tx_pll_and_datapath_mgt <= reset_tx_pll_and_datapath_axi;
+    reset_tx_datapath_mgt         <= reset_tx_datapath_axi;
+    reset_rx_pll_and_datapath_mgt <= reset_rx_pll_and_datapath_axi;
+    reset_rx_datapath_mgt         <= reset_rx_datapath_axi;
+
+    -- We'll use synchronous reset synchronizers to synchronize the assorted 
+    -- asynchronous outputs from the MGT to the AXI clock domain
+    -- This is really just a lazy way of making the flip-flop stages in the AXI clock domain
+    -- and applying the appropriate constraints
+    userclk_tx_active_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => userclk_tx_active_mgt, dest_rst => userclk_tx_active_axi, dest_clk => s_axi_aclk);
+
+    userclk_rx_active_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => userclk_rx_active_mgt, dest_rst => userclk_rx_active_axi, dest_clk => s_axi_aclk);
+
+    reset_rx_cdr_stable_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => reset_rx_cdr_stable_mgt, dest_rst => reset_rx_cdr_stable_axi, dest_clk => s_axi_aclk);
+
+    reset_tx_done_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => reset_tx_done_mgt, dest_rst => reset_tx_done_axi, dest_clk => s_axi_aclk);
+
+    txpmaresetdone_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => txpmaresetdone_mgt, dest_rst => txpmaresetdone_axi, dest_clk => s_axi_aclk);
+
+    reset_rx_done_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => reset_rx_done_mgt, dest_rst => reset_rx_done_axi, dest_clk => s_axi_aclk);
+
+    rxpmaresetdone_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => rxpmaresetdone_mgt, dest_rst => rxpmaresetdone_axi, dest_clk => s_axi_aclk);
+
+    rxprgdivresetdone_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => rxprgdivresetdone_mgt, dest_rst => rxprgdivresetdone_axi, dest_clk => s_axi_aclk);
+
+    gtpowergood_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => gtpowergood_mgt, dest_rst => gtpowergood_axi, dest_clk => s_axi_aclk);
+        
+    qpll0lock_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => qpll0lock_mgt, dest_rst => qpll0lock_axi, dest_clk => s_axi_aclk);
+        
+    qpll0refclklost_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => qpll0refclklost_mgt, dest_rst => qpll0refclklost_axi, dest_clk => s_axi_aclk);
+        
+    qpll0fbclklost_sync: xpm_cdc_sync_rst 
+        generic map(SIM_ASSERT_CHK => 1) 
+        port map(src_rst => qpll0fbclklost_mgt, dest_rst => qpll0fbclklost_axi, dest_clk => s_axi_aclk);
+    
+    -- Synchronize signals from the AXI registers into the 
+    -- appropriate MGT domains
     control_rxusrclk2_sync: xpm_cdc_array_single
         generic map (
             DEST_SYNC_FF => 4,
             INIT_SYNC_FF => 0,
             SIM_ASSERT_CHK => 1,
             SRC_INPUT_REG => 0,
-            WIDTH => 3 + 4
+            WIDTH => 9
         )
         port map (
-            src_clk => master_bus_clk,
-            src_in(0) => rxcommadeten,
-            src_in(1) => rxmcommaalignen,
-            src_in(2) => rxpcommaalignen,
-            src_in(6 downto 3) => rxprbssel,
+            src_clk => s_axi_aclk,
+            src_in(0) => rxcommadeten_axi,
+            src_in(1) => rxmcommaalignen_axi,
+            src_in(2) => rxpcommaalignen_axi,
+            src_in(6 downto 3) => rxprbssel_axi,
+            src_in(7) => rxprbserr_clear_axi,
+            src_in(8) => rxbyterealign_clear_axi,
 
-            dest_clk => rx_clk_int,
-            dest_out(0) => rxcommadeten_sync,
-            dest_out(1) => rxmcommaalignen_sync,
-            dest_out(2) => rxpcommaalignen_sync,
-            dest_out(6 downto 3) => rxprbssel_sync
+            dest_clk => MGT128_rxusrclk2_int,
+            dest_out(0) => rxcommadeten_mgt,
+            dest_out(1) => rxmcommaalignen_mgt,
+            dest_out(2) => rxpcommaalignen_mgt,
+            dest_out(6 downto 3) => rxprbssel_mgt,
+            dest_out(7) => rxprbserr_clear_mgt,
+            dest_out(8) => rxbyterealign_clear_mgt
         );
 
     control_txusrclk2_sync: xpm_cdc_array_single
@@ -366,66 +582,44 @@ begin
         )
         port map (
             src_clk => master_bus_clk,
-            src_in(3 downto 0) => txprbssel,
+            src_in(3 downto 0) => txprbssel_axi,
 
-            dest_clk => tx_clk_int,
-            dest_out(3 downto 0) => txprbssel_sync
-        );
-
-    -- Create latch reset signals based on what the bus commands
-    gt_latch_reset <= master_bus_mosi(19 downto 16) when (master_bus_en = '1' 
-                                        and master_bus_we = '1' 
-                                        and master_bus_addr(1 downto 0) = "00") 
-                        else (others => '0');
-
-    latch_reset_sync: xpm_cdc_array_single
-        generic map (
-            DEST_SYNC_FF => 4,
-            INIT_SYNC_FF => 0,
-            SIM_ASSERT_CHK => 1,
-            SRC_INPUT_REG => 0,
-            WIDTH => gt_latch_reset'length
-        )
-        port map (
-            src_clk => master_bus_clk,
-            src_in => gt_latch_reset,
-
-            dest_clk => rx_clk_int,
-            dest_out => gt_latch_reset_sync
+            dest_clk => MGT128_txusrclk2_int,
+            dest_out(3 downto 0) => txprbssel_mgt
         );
 
     -- Set or reset latches in the rxusrclk2 domain
-    rxusrclk2_latches: process(rx_clk_int) begin
-        if rising_edge(rx_clk_int) then
-            rxcommadet_latch <= (rxcommadet_latch or rxcommadet_sync) and not gt_latch_reset_sync(0);
-            rxbyterealign_latch <= (rxbyterealign_latch or rxbyterealign_sync) and not gt_latch_reset_sync(1);
-            rxprbserr_latch <= (rxprbserr_latch or rxprbserr_sync) and not gt_latch_reset_sync(2);
+    rxusrclk2_latches_proc: process(MGT128_rxusrclk2_int) begin
+        if rising_edge(MGT128_rxusrclk2_int) then
+            rxcommadet_latch <= (rxcommadet_latch or rxcommadet_mgt) and not rxcommadet_clear_mgt;
+            rxbyterealign_latch <= (rxbyterealign_latch or rxbyterealign_mgt) and not rxbyterealign_clear_mgt;
+            rxprbserr_latch <= (rxprbserr_latch or rxprbserr_mgt) and not rxprbserr_clear_mgt;
         end if;
-    end process rxusrclk2_latches;
+    end process rxusrclk2_latches_proc;
 
-    -- Transfer the latched status signals back into the bus domain
+    -- Transfer the latched status signals back into the AXI domain
     latch_sync: xpm_cdc_array_single
         generic map (
             DEST_SYNC_FF => 4,
             INIT_SYNC_FF => 0,
             SIM_ASSERT_CHK => 1,
             SRC_INPUT_REG => 0,
-            WIDTH => gt_latch_reset'length
+            WIDTH => 3
         )
         port map (
-            src_clk => rx_clk_int,
+            src_clk => MGT128_rxusrclk2_int,
             src_in(0) => rxcommadet_latch,
             src_in(1) => rxbyterealign_latch,
             src_in(2) => rxprbserr_latch,
 
-            dest_clk => master_bus_clk,
-            dest_out(0) => rxcommadet,
-            dest_out(1) => rxbyterealign,
-            dest_out(2) => rxprbserr
+            dest_clk => s_axi_aclk,
+            dest_out(0) => rxcommadet_axi,
+            dest_out(1) => rxbyterealign_axi,
+            dest_out(2) => rxprbserr_axi
         );
 
-    -- Transfer non-latched status signals from the gt back into the bus clock domain
-    status_master_bus_clk_sync: xpm_cdc_array_single
+    -- Transfer non-latched status signals from the gt back into the AXI clock domain
+    status_sync: xpm_cdc_array_single
         generic map (
             DEST_SYNC_FF => 4,
             INIT_SYNC_FF => 0,
@@ -434,82 +628,104 @@ begin
             WIDTH => 2
         )
         port map (
-            src_clk => rx_clk_int,
-            src_in(0) => rxprbslocked_sync,
-            src_in(1) => rxbyteisaligned_sync,
+            src_clk => MGT128_rxusrclk2_int,
+            src_in(0) => rxprbslocked_mgt,
+            src_in(1) => rxbyteisaligned_mgt,
 
-            dest_clk => master_bus_clk,
-            dest_out(0) => rxprbslocked,
-            dest_out(1) => rxbyteisaligned
+            dest_clk => s_axi_aclk,
+            dest_out(0) => rxprbslocked_axi,
+            dest_out(1) => rxbyteisaligned_axi
         );
 
-    gty_inst : gtwizard_ultrascale_0
+    -- Clock buffers
+    MGT128_refclk1_ibufds: IBUFDS_GTE4 
+        port map (
+            O => MGT128_refclk00,
+            ODIV2 => open,
+            CEB => '0',
+            I => MGT128_refclk1_p,
+            IB => MGT128_refclk1_n
+        );
+
+    MGT128_refclk0_obufds: OBUFDS_GTE4
+        generic map (
+            REFCLK_EN_TX_PATH => '1',
+            REFCLK_ICNTL_TX   => "00111"
+        )
+        port map (
+            I   => MGT128_rxrecclkout,
+            CEB => '0',
+            O   => MGT128_refclk0_p,
+            OB  => MGT128_refclk0_n
+        );
+
+    gty_inst : gtwizard_ultrascale_128
         port map (
             -- Free-running clock for the reset helper block
-            gtwiz_reset_clk_freerun_in   => clk,
+            gtwiz_reset_clk_freerun_in(0)   => clk_freerun,
 
             -- Resets clocking resources within the helper block
             -- Asynchronous
-            gtwiz_userclk_tx_reset_in          => external_control(0),
-            gtwiz_userclk_rx_reset_in          => external_control(1),
+            gtwiz_userclk_tx_reset_in(0)          => userclk_tx_reset_mgt,
+            gtwiz_userclk_rx_reset_in(0)          => userclk_rx_reset_mgt,
 
             -- Triggers for different pathways in the reset helper block
             -- Asynchronous
-            gtwiz_reset_all_in                 => external_control(2),
-            gtwiz_reset_tx_pll_and_datapath_in => external_control(3),
-            gtwiz_reset_tx_datapath_in         => external_control(4),
-            gtwiz_reset_rx_pll_and_datapath_in => external_control(5),
-            gtwiz_reset_rx_datapath_in         => external_control(6),
+            gtwiz_reset_all_in(0)                 => reset_all_mgt,
+            gtwiz_reset_tx_pll_and_datapath_in(0) => reset_tx_pll_and_datapath_mgt,
+            gtwiz_reset_tx_datapath_in(0)         => reset_tx_datapath_mgt,
+            gtwiz_reset_rx_pll_and_datapath_in(0) => reset_rx_pll_and_datapath_mgt,
+            gtwiz_reset_rx_datapath_in(0)         => reset_rx_datapath_mgt,
 
             -- 8b10b and comma detection
             -- These connect directly to corresponding ports on the transceiver primitives
             -- Synchronous to TXUSRCLK2
-            tx8b10ben_in => '1',
+            tx8b10ben_in(0) => '1',
             
             -- These are all synchronous to RXUSRCLK2
-            rx8b10ben_in       => '1',
-            rxcommadeten_in    => rxcommadeten_sync,
-            rxmcommaalignen_in => rxmcommaalignen_sync,
-            rxpcommaalignen_in => rxpcommaalignen_sync,
-            rxbyterealign_out  => rxbyterealign_sync,
-            rxcommadet_out     => rxcommadet_sync,
+            rx8b10ben_in(0)       => '1',
+            rxcommadeten_in(0)    => rxcommadeten_mgt,
+            rxmcommaalignen_in(0) => rxmcommaalignen_mgt,
+            rxpcommaalignen_in(0) => rxpcommaalignen_mgt,
+            rxbyterealign_out(0)  => rxbyterealign_mgt,
+            rxcommadet_out(0)     => rxcommadet_mgt,
 
             -- PRBS control and status
             -- These connect directly to corresponding ports on the transceiver primitives
             -- Synchronous to TXUSRCLK2
-            txprbssel_in => txprbssel_sync,
+            txprbssel_in => txprbssel_mgt,
 
             -- These are all synchronous to RXUSRCLK2
-            rxprbscntreset_in => '0',
-            rxprbssel_in => rxprbssel_sync,
-            rxprbserr_out => rxprbserr_sync,
-            rxprbslocked_out => rxprbslocked_sync,
-            rxbyteisaligned_out => rxbyteisaligned_sync,
+            rxprbscntreset_in(0) => '0',
+            rxprbssel_in => rxprbssel_mgt,
+            rxprbserr_out(0) => rxprbserr_mgt,
+            rxprbslocked_out(0) => rxprbslocked_mgt,
+            rxbyteisaligned_out(0) => rxbyteisaligned_mgt,
             
 
             -- Status signals
             -- Synchronous to gtwiz_userclk_tx_usrclk2_out
-            gtwiz_userclk_tx_active_out   => external_status(0),
+            gtwiz_userclk_tx_active_out(0)   => userclk_tx_active_mgt,
             -- Synchronous to gtwiz_userclk_rx_usrclk2_out
-            gtwiz_userclk_rx_active_out   => external_status(1),
+            gtwiz_userclk_rx_active_out(0)   => userclk_rx_active_mgt,
             -- Synchronous to gtwiz_reset_clk_freerun_in
-            gtwiz_reset_rx_cdr_stable_out => external_status(2),
+            gtwiz_reset_rx_cdr_stable_out(0) => reset_rx_cdr_stable_mgt,
             -- Synchronous to TXUSRCLK2
-            gtwiz_reset_tx_done_out       => external_status(3),
+            gtwiz_reset_tx_done_out(0)       => reset_tx_done_mgt,
             -- Connects to corresponding port on transceiver primitive
             -- Asynchronous
-            txpmaresetdone_out            => external_status(4),
+            txpmaresetdone_out(0)            => txpmaresetdone_mgt,
             -- Synchronous to RXUSRCLK2
-            gtwiz_reset_rx_done_out       => external_status(5),
+            gtwiz_reset_rx_done_out(0)       => reset_rx_done_mgt,
             -- Connects to corresponding port on transceiver primitive
             -- Asynchronous
-            rxpmaresetdone_out            => external_status(6),
+            rxpmaresetdone_out(0)            => rxpmaresetdone_mgt,
             -- Connects to corresponding port on transceiver primitive
             -- Asynchronous
-            rxprgdivresetdone_out         => external_status(7),
+            rxprgdivresetdone_out(0)         => rxprgdivresetdone_mgt,
             -- Connects to corresponding port on transceiver primitive
             -- Asynchronous
-            gtpowergood_out               => external_status(8),
+            gtpowergood_out(0)               => gtpowergood_mgt,
 
             -- When the 8b10b decoder is enabled, the rxctrl signals behave as follows:
             --   If a valid K character is received, the corresponding bit of rxctrl0 is set.
@@ -518,10 +734,10 @@ begin
             --   If an invalid character is received, the corresponding bit of rxctrl3 is set.
             -- These connect to the corresponding ports of the transceiver
             -- Synchronous to RXUSRCLK2
-            rxctrl0_out(3 downto 0)       => rx_is_k_char,
-            rxctrl1_out(3 downto 0)       => disparity_error,
-            rxctrl2_out(3 downto 0)       => comma_detected,
-            rxctrl3_out(3 downto 0)       => invalid_data,
+            rxctrl0_out  => rx_is_k_char,
+            rxctrl1_out  => rx_disparity_error,
+            rxctrl2_out  => rx_comma_detected,
+            rxctrl3_out  => rx_invalid_data_error,
 
             -- When 
             -- These connect to the corresponding ports of the transceiver
@@ -534,28 +750,33 @@ begin
             -- Fabric-accessible clocks
             gtwiz_userclk_tx_srcclk_out  => open,
             gtwiz_userclk_tx_usrclk_out  => open,
-            gtwiz_userclk_tx_usrclk2_out => tx_clk_int,
+            gtwiz_userclk_tx_usrclk2_out(0) => MGT128_txusrclk2_int,
             gtwiz_userclk_rx_srcclk_out  => open,
             gtwiz_userclk_rx_usrclk_out  => open,
-            gtwiz_userclk_rx_usrclk2_out => rx_clk_int,
-            qpll0outclk_out              => open,
-            qpll0outrefclk_out           => open,
-            rxrecclkout_out              => open,
+            gtwiz_userclk_rx_usrclk2_out(0) => MGT128_rxusrclk2_int,
+            qpll0lockdetclk_in(0) => clk_freerun,
+            qpll0locken_in => "1",
+            qpll0fbclklost_out(0) => qpll0fbclklost_mgt,
+            qpll0lock_out(0) => qpll0lock_mgt,
+            qpll0outclk_out => open,
+            qpll0outrefclk_out => open,
+            qpll0refclklost_out(0) => qpll0refclklost_mgt,
+            rxrecclkout_out(0)           => MGT128_rxrecclkout,
 
             -- Data interface
             gtwiz_userdata_tx_in  => gt_txdata,
             gtwiz_userdata_rx_out => gt_rxdata,
             
             -- Physical connections
-            gtyrxn_in     => gt_rx_n,
-            gtyrxp_in     => gt_rx_p,
-            gtytxn_out    => gt_tx_n,
-            gtytxp_out    => gt_tx_p,
-            gtrefclk00_in => gt_refclk00
+            gtyrxn_in(0)     => MGT128_C0_rx_n,
+            gtyrxp_in(0)     => MGT128_C0_rx_p,
+            gtytxn_out(0)    => MGT128_C0_tx_n,
+            gtytxp_out(0)    => MGT128_C0_tx_p,
+            gtrefclk00_in(0) => MGT128_refclk00
         );
 
-        tx_clk <= tx_clk_int;
-        rx_clk <= rx_clk_int;
+        MGT128_txusrclk2 <= MGT128_txusrclk2_int;
+        MGT128_rxusrclk2 <= MGT128_rxusrclk2_int;
     
 
 end rtl;

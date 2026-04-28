@@ -974,19 +974,15 @@ class Acadia:
         PSGPIO.sysfs_set_direction(self._ddr4_c1_sys_rst_gpio, "out")
         PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 0)
 
-        self._ddr4_c0_cal_cplt_gpio = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["ddr4_c0_cal_cplt"]           
-        PSGPIO.sysfs_export(self._ddr4_c0_cal_cplt_gpio)
-        PSGPIO.sysfs_set_direction(self._ddr4_c0_cal_cplt_gpio, "in")
+        self._ddr4_c0_cal_complete_gpio = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["ddr4_c0_cal_complete"]           
+        PSGPIO.sysfs_export(self._ddr4_c0_cal_complete_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c0_cal_complete_gpio, "in")
 
-        self._ddr4_c1_cal_cplt_gpio = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["ddr4_c1_cal_cplt"]           
-        PSGPIO.sysfs_export(self._ddr4_c1_cal_cplt_gpio)
-        PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_cplt_gpio, "in")
-
-        self._clk_wiz_locked = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["clk_wiz_locked"]           
-        PSGPIO.sysfs_export(self._clk_wiz_locked)
-        PSGPIO.sysfs_set_direction(self._clk_wiz_locked, "in")
+        self._ddr4_c1_cal_complete_gpio = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["ddr4_c1_cal_complete"]           
+        PSGPIO.sysfs_export(self._ddr4_c1_cal_complete_gpio)
+        PSGPIO.sysfs_set_direction(self._ddr4_c1_cal_complete_gpio, "in")
         
-        self._sequencer_done = self._firmware["ps_gpio"]["sysfs_offset"] + 64           
+        self._sequencer_done = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["sequencer_done"]          
         PSGPIO.sysfs_export(self._sequencer_done)
         PSGPIO.sysfs_set_direction(self._sequencer_done, "in")
 
@@ -1220,7 +1216,7 @@ class Acadia:
 
         # Calculate the divider value that we need for the LMK output channels
         # VCO is configured for 3 GHz
-        target_frequency = self._firmware["clk104_pl_clk"]["freq_hz"]
+        target_frequency = self._firmware["clocks"]["CLK104_PL_CLK"]
         divider = 3e9 / target_frequency
         if round(divider, 6) != round(divider):
             raise ValueError(f"Required frequency {target_frequency} does not"
@@ -1420,7 +1416,7 @@ class Acadia:
             the frequency of the RF tile interface) in Hz
         :rtype: float
         """
-        return self._firmware["clk104_pl_clk"]["freq_hz"]
+        return self._firmware["clocks"]["CLK104_PL_CLK"]
 
     def seconds_to_cycles(self, 
                         t: Union[float, np.ndarray], 
@@ -3400,10 +3396,10 @@ class Acadia:
         PSGPIO.sysfs_write(self._ddr4_c1_sys_rst_gpio, 0)
 
     def is_plddr0_cal_complete(self):
-        return PSGPIO.sysfs_read(self._ddr4_c0_cal_cplt_gpio)
+        return PSGPIO.sysfs_read(self._ddr4_c0_cal_complete_gpio)
     
     def is_plddr1_cal_complete(self):
-        return PSGPIO.sysfs_read(self._ddr4_c1_cal_cplt_gpio)
+        return PSGPIO.sysfs_read(self._ddr4_c1_cal_complete_gpio)
         
     def reset_logic(self):
         """
@@ -3579,13 +3575,13 @@ class Acadia:
             for block in range(4):
                 # By default, the sample rate will be configured to be zero. when we attach it will be read
                 dac_channel = Channel(tile=tile, block=block, is_dac=True, 
-                    interface_sample_frequency = (self._firmware["clk104_pl_clk"]["freq_hz"]
+                    interface_sample_frequency = (self._firmware["clocks"]["CLK104_PL_CLK"]
                                                           * self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 32),
                     interface_width_bytes = self._firmware["rfdc"]["dac"]["channel_interface_width"][tile*4 + block] // 8)
                 self._DAC_channels.append(dac_channel)
                 
                 adc_channel = Channel(tile=tile, block=block, is_dac=False,
-                    interface_sample_frequency = (self._firmware["clk104_pl_clk"]["freq_hz"]
+                    interface_sample_frequency = (self._firmware["clocks"]["CLK104_PL_CLK"]
                                                           * self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 32),
                     interface_width_bytes = self._firmware["rfdc"]["adc"]["channel_interface_width"][tile*4 + block] // 8)
                 

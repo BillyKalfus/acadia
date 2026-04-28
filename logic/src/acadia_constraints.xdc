@@ -1,8 +1,8 @@
 # Pins for SPI Mux
-set_property PACKAGE_PIN G10      [get_ports "GPIO_SPI[0]"] ;
-set_property PACKAGE_PIN H11      [get_ports "GPIO_SPI[1]"] ;
-set_property IOSTANDARD  LVCMOS18 [get_ports "GPIO_SPI[0]"] ;
-set_property IOSTANDARD  LVCMOS18 [get_ports "GPIO_SPI[1]"] ;
+set_property PACKAGE_PIN G10      [get_ports "CLK104_SPI_sel[0]"] ;
+set_property PACKAGE_PIN H11      [get_ports "CLK104_SPI_sel[1]"] ;
+set_property IOSTANDARD  LVCMOS18 [get_ports "CLK104_SPI_sel[0]"] ;
+set_property IOSTANDARD  LVCMOS18 [get_ports "CLK104_SPI_sel[1]"] ;
 
 # CLK104 connections
 set_property PACKAGE_PIN D11       [get_ports "CLK104_PL_SYSREF_clk_n"] ;   # Bank  89 VCCO - VCC1V8   - IO_L8N_HDGC_AD4N_89
@@ -13,12 +13,12 @@ set_property PACKAGE_PIN E9        [get_ports "CLK104_PL_CLK_clk_n"] ;      # Ba
 set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_CLK_clk_n"] ;      # Bank  89 VCCO - VCC1V8   - IO_L7N_HDGC_AD5N_89
 set_property PACKAGE_PIN E10       [get_ports "CLK104_PL_CLK_clk_p"] ;      # Bank  89 VCCO - VCC1V8   - IO_L7P_HDGC_AD5P_89
 set_property IOSTANDARD  LVDS_25   [get_ports "CLK104_PL_CLK_clk_p"] ;      # Bank  89 VCCO - VCC1V8   - IO_L7P_HDGC_AD5P_89
-set_property PACKAGE_PIN BA22      [get_ports "CLK104_SFP_REC_CLK_N"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5N_T0U_N9_AD14N_66
-set_property IOSTANDARD  LVDS      [get_ports "CLK104_SFP_REC_CLK_N"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5N_T0U_N9_AD14N_66
-set_property PACKAGE_PIN AY22      [get_ports "CLK104_SFP_REC_CLK_P"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5P_T0U_N8_AD14P_66
-set_property IOSTANDARD  LVDS      [get_ports "CLK104_SFP_REC_CLK_P"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5P_T0U_N8_AD14P_66
-set_property PACKAGE_PIN L15       [get_ports "CLK104_SYNC_IN"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "CLK104_SYNC_IN"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
+set_property PACKAGE_PIN BA22      [get_ports "CLK104_SFP_REC_CLK_clk_n"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5N_T0U_N9_AD14N_66
+set_property IOSTANDARD  LVDS      [get_ports "CLK104_SFP_REC_CLK_clk_n"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5N_T0U_N9_AD14N_66
+set_property PACKAGE_PIN AY22      [get_ports "CLK104_SFP_REC_CLK_clk_p"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5P_T0U_N8_AD14P_66
+set_property IOSTANDARD  LVDS      [get_ports "CLK104_SFP_REC_CLK_clk_p"] ; # Bank  66 VCCO - VADJ_FMC - IO_L5P_T0U_N8_AD14P_66
+set_property PACKAGE_PIN L15       [get_ports "CLK104_sync"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "CLK104_sync"] ;       # Bank  88 VCCO - VCC1V8   - IO_L5P_HDGC_88
 
 # SI570
 # set_property PACKAGE_PIN AR19            [get_ports "USER_SI570_C0_N"] ; # Bank  65 VCCO - VCC1V2   - IO_L12N_T1U_N11_GC_65
@@ -27,86 +27,85 @@ set_property IOSTANDARD  LVCMOS18  [get_ports "CLK104_SYNC_IN"] ;       # Bank  
 # set_property IOSTANDARD  DIFF_SSTL12_DCI [get_ports "USER_SI570_C0_P"] ; # Bank  65 VCCO - VCC1V2   - IO_L12P_T1U_N10_GC_65
 
 # 8A34001 connections
-set_property PACKAGE_PIN Y40         [get_ports "CLK_8A34001_Q1_OUT_clk_n"] ;  # Bank 128 - MGTYRXN3_128
-set_property PACKAGE_PIN Y39         [get_ports "CLK_8A34001_Q1_OUT_clk_p"] ;  # Bank 128 - MGTYRXP3_128
-set_property PACKAGE_PIN AT24        [get_ports "CLK_8A34001_Q2_OUT_clk_n"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
-set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q2_OUT_clk_n"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
-set_property PACKAGE_PIN AT23        [get_ports "CLK_8A34001_Q2_OUT_clk_p"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
-set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q2_OUT_clk_p"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
-set_property PACKAGE_PIN G30         [get_ports "CLK_8A34001_Q3_OUT_clk_n"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
-set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q3_OUT_clk_n"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
-set_property PACKAGE_PIN H30         [get_ports "CLK_8A34001_Q3_OUT_clk_p"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
-set_property IOSTANDARD  LVDS        [get_ports "CLK_8A34001_Q3_OUT_clk_p"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
-set_property PACKAGE_PIN T35         [get_ports "CLK_8A34001_Q7_OUT_clk_n"] ;  # Bank 129 - MGTREFCLK1N_129
-set_property PACKAGE_PIN T34         [get_ports "CLK_8A34001_Q7_OUT_clk_p"] ;  # Bank 129 - MGTREFCLK1P_129
-set_property PACKAGE_PIN H21         [get_ports "CLK_8A34001_Q8_OUT_clk_n"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
-set_property IOSTANDARD  DIFF_SSTL12 [get_ports "CLK_8A34001_Q8_OUT_clk_n"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
-set_property PACKAGE_PIN J21         [get_ports "CLK_8A34001_Q8_OUT_clk_p"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
-set_property IOSTANDARD  DIFF_SSTL12 [get_ports "CLK_8A34001_Q8_OUT_clk_p"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
-set_property PACKAGE_PIN Y35         [get_ports "CLK_8A34001_Q11_OUT_clk_n"] ; # Bank 128 - MGTREFCLK1N_128
-set_property PACKAGE_PIN Y34         [get_ports "CLK_8A34001_Q11_OUT_clk_p"] ; # Bank 128 - MGTREFCLK1P_128
+set_property PACKAGE_PIN Y40         [get_ports "IDT_8A34001_Q1_clk_n"] ;  # Bank 128 - MGTYRXN3_128
+set_property PACKAGE_PIN Y39         [get_ports "IDT_8A34001_Q1_clk_p"] ;  # Bank 128 - MGTYRXP3_128
+set_property PACKAGE_PIN AT24        [get_ports "IDT_8A34001_Q2_clk_n"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
+set_property IOSTANDARD  LVDS        [get_ports "IDT_8A34001_Q2_clk_n"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_66
+set_property PACKAGE_PIN AT23        [get_ports "IDT_8A34001_Q2_clk_p"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
+set_property IOSTANDARD  LVDS        [get_ports "IDT_8A34001_Q2_clk_p"] ;    # Bank  66 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_66
+set_property PACKAGE_PIN G30         [get_ports "IDT_8A34001_Q3_clk_n"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
+set_property IOSTANDARD  LVDS        [get_ports "IDT_8A34001_Q3_clk_n"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11N_T1U_N9_GC_67
+set_property PACKAGE_PIN H30         [get_ports "IDT_8A34001_Q3_clk_p"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
+set_property IOSTANDARD  LVDS        [get_ports "IDT_8A34001_Q3_clk_p"] ;    # Bank  67 VCCO - VADJ_FMC - IO_L11P_T1U_N8_GC_67
+# set_property PACKAGE_PIN T35         [get_ports "IDT_8A34001_Q7_clk_n"] ;  # Bank 129 - MGTREFCLK1N_129
+# set_property PACKAGE_PIN T34         [get_ports "IDT_8A34001_Q7_clk_p"] ;  # Bank 129 - MGTREFCLK1P_129
+set_property PACKAGE_PIN H21         [get_ports "IDT_8A34001_Q8_clk_n"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
+set_property IOSTANDARD  DIFF_SSTL12 [get_ports "IDT_8A34001_Q8_clk_n"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11N_T1U_N9_GC_69
+set_property PACKAGE_PIN J21         [get_ports "IDT_8A34001_Q8_clk_p"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
+set_property IOSTANDARD  DIFF_SSTL12 [get_ports "IDT_8A34001_Q8_clk_p"] ;  # Bank  69 VCCO - VCC1V2   - IO_L11P_T1U_N8_GC_69
+set_property PACKAGE_PIN Y35         [get_ports "IDT_8A34001_Q11_clk_n"] ; # Bank 128 - MGTREFCLK1N_128
+set_property PACKAGE_PIN Y34         [get_ports "IDT_8A34001_Q11_clk_p"] ; # Bank 128 - MGTREFCLK1P_128
 
-set_property PACKAGE_PIN R37       [get_ports "CLK_8A34001_CLK1_IN_clk_n"] ; # Bank 128 - MGTYTXN3_128
-set_property PACKAGE_PIN R36       [get_ports "CLK_8A34001_CLK1_IN_clk_p"] ; # Bank 128 - MGTYTXP3_128
-set_property PACKAGE_PIN AA37      [get_ports "CLK_8A34001_CLK5_IN_clk_n"] ; # Bank 128 - MGTREFCLK0N_128
-set_property PACKAGE_PIN AA36      [get_ports "CLK_8A34001_CLK5_IN_clk_p"] ; # Bank 128 - MGTREFCLK0P_128
-set_property PACKAGE_PIN V35       [get_ports "CLK_8A34001_CLK6_IN_clk_n"] ; # Bank 129 - MGTREFCLK0N_129
-set_property PACKAGE_PIN V34       [get_ports "CLK_8A34001_CLK6_IN_clk_p"] ; # Bank 129 - MGTREFCLK0P_129
+# set_property PACKAGE_PIN R37       [get_ports "IDT_8A34001_CLK1_clk_n"] ; # Bank 128 - MGTYTXN3_128
+# set_property PACKAGE_PIN R36       [get_ports "IDT_8A34001_CLK1_clk_p"] ; # Bank 128 - MGTYTXP3_128
+set_property PACKAGE_PIN AA37      [get_ports "IDT_8A34001_CLK5_clk_n"] ; # Bank 128 - MGTREFCLK0N_128
+set_property PACKAGE_PIN AA36      [get_ports "IDT_8A34001_CLK5_clk_p"] ; # Bank 128 - MGTREFCLK0P_128
+# set_property PACKAGE_PIN V35       [get_ports "IDT_8A34001_CLK6_clk_n"] ; # Bank 129 - MGTREFCLK0N_129
+# set_property PACKAGE_PIN V34       [get_ports "IDT_8A34001_CLK6_clk_p"] ; # Bank 129 - MGTREFCLK0P_129
 
 # 8A34001 GPIO
-# We won't make these into a bus, because they may need different directions
-# set_property PACKAGE_PIN H19         [get_ports "CLK_8A34001_GPIO_0"] ;# Bank  69 VCCO - VCC1V2   - IO_L9N_T1L_N5_AD12N_69
-# set_property IOSTANDARD  LVCMOS12    [get_ports "CLK_8A34001_GPIO_0"] ;# Bank  69 VCCO - VCC1V2   - IO_L9N_T1L_N5_AD12N_69
-# set_property PACKAGE_PIN J19         [get_ports "CLK_8A34001_GPIO_1"] ;# Bank  69 VCCO - VCC1V2   - IO_L9P_T1L_N4_AD12P_69
-# set_property IOSTANDARD  LVCMOS12    [get_ports "CLK_8A34001_GPIO_1"] ;# Bank  69 VCCO - VCC1V2   - IO_L9P_T1L_N4_AD12P_69
-# set_property PACKAGE_PIN K20        [get_ports "CLK_8A34001_GPIO_2"] ;# Bank  69 VCCO - VCC1V2   - IO_L7N_T1L_N1_QBC_AD13N_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_2"] ;# Bank  69 VCCO - VCC1V2   - IO_L7N_T1L_N1_QBC_AD13N_69
-# set_property PACKAGE_PIN K21        [get_ports "CLK_8A34001_GPIO_3"] ;# Bank  69 VCCO - VCC1V2   - IO_L7P_T1L_N0_QBC_AD13P_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_3"] ;# Bank  69 VCCO - VCC1V2   - IO_L7P_T1L_N0_QBC_AD13P_69
-# set_property PACKAGE_PIN L18        [get_ports "CLK_8A34001_GPIO_4"] ;# Bank  69 VCCO - VCC1V2   - IO_L6N_T0U_N11_AD6N_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_4"] ;# Bank  69 VCCO - VCC1V2   - IO_L6N_T0U_N11_AD6N_69
-# set_property PACKAGE_PIN M18        [get_ports "CLK_8A34001_GPIO_5"] ;# Bank  69 VCCO - VCC1V2   - IO_L6P_T0U_N10_AD6P_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_5"] ;# Bank  69 VCCO - VCC1V2   - IO_L6P_T0U_N10_AD6P_69
-# set_property PACKAGE_PIN L20        [get_ports "CLK_8A34001_GPIO_6"] ;# Bank  69 VCCO - VCC1V2   - IO_L5N_T0U_N9_AD14N_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_6"] ;# Bank  69 VCCO - VCC1V2   - IO_L5N_T0U_N9_AD14N_69
-# set_property PACKAGE_PIN M20        [get_ports "CLK_8A34001_GPIO_7"] ;# Bank  69 VCCO - VCC1V2   - IO_L5P_T0U_N8_AD14P_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_7"] ;# Bank  69 VCCO - VCC1V2   - IO_L5P_T0U_N8_AD14P_69
-# set_property PACKAGE_PIN N19        [get_ports "CLK_8A34001_GPIO_10"] ;# Bank  69 VCCO - VCC1V2   - IO_L3N_T0L_N5_AD15N_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_10"] ;# Bank  69 VCCO - VCC1V2   - IO_L3N_T0L_N5_AD15N_69
-# set_property PACKAGE_PIN N20        [get_ports "CLK_8A34001_GPIO_11"] ;# Bank  69 VCCO - VCC1V2   - IO_L3P_T0L_N4_AD15P_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_11"] ;# Bank  69 VCCO - VCC1V2   - IO_L3P_T0L_N4_AD15P_69
-# set_property PACKAGE_PIN P17        [get_ports "CLK_8A34001_GPIO_12"] ;# Bank  69 VCCO - VCC1V2   - IO_L2N_T0L_N3_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_12"] ;# Bank  69 VCCO - VCC1V2   - IO_L2N_T0L_N3_69
-# set_property PACKAGE_PIN R17        [get_ports "CLK_8A34001_GPIO_13"] ;# Bank  69 VCCO - VCC1V2   - IO_L2P_T0L_N2_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_13"] ;# Bank  69 VCCO - VCC1V2   - IO_L2P_T0L_N2_69
-# set_property PACKAGE_PIN R19        [get_ports "CLK_8A34001_GPIO_14"] ;# Bank  69 VCCO - VCC1V2   - IO_L1N_T0L_N1_DBC_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_14"] ;# Bank  69 VCCO - VCC1V2   - IO_L1N_T0L_N1_DBC_69
-# set_property PACKAGE_PIN R20        [get_ports "CLK_8A34001_GPIO_15"] ;# Bank  69 VCCO - VCC1V2   - IO_L1P_T0L_N0_DBC_69
-# set_property IOSTANDARD  LVCMOS12   [get_ports "CLK_8A34001_GPIO_15"] ;# Bank  69 VCCO - VCC1V2   - IO_L1P_T0L_N0_DBC_69
+set_property PACKAGE_PIN H19        [get_ports "IDT_8A34001_GPIO[0]"] ;# Bank  69 VCCO - VCC1V2   - IO_L9N_T1L_N5_AD12N_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[0]"] ;# Bank  69 VCCO - VCC1V2   - IO_L9N_T1L_N5_AD12N_69
+set_property PACKAGE_PIN J19        [get_ports "IDT_8A34001_GPIO[1]"] ;# Bank  69 VCCO - VCC1V2   - IO_L9P_T1L_N4_AD12P_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[1]"] ;# Bank  69 VCCO - VCC1V2   - IO_L9P_T1L_N4_AD12P_69
+set_property PACKAGE_PIN K20        [get_ports "IDT_8A34001_GPIO[2]"] ;# Bank  69 VCCO - VCC1V2   - IO_L7N_T1L_N1_QBC_AD13N_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[2]"] ;# Bank  69 VCCO - VCC1V2   - IO_L7N_T1L_N1_QBC_AD13N_69
+set_property PACKAGE_PIN K21        [get_ports "IDT_8A34001_GPIO[3]"] ;# Bank  69 VCCO - VCC1V2   - IO_L7P_T1L_N0_QBC_AD13P_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[3]"] ;# Bank  69 VCCO - VCC1V2   - IO_L7P_T1L_N0_QBC_AD13P_69
+set_property PACKAGE_PIN L18        [get_ports "IDT_8A34001_GPIO[4]"] ;# Bank  69 VCCO - VCC1V2   - IO_L6N_T0U_N11_AD6N_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[4]"] ;# Bank  69 VCCO - VCC1V2   - IO_L6N_T0U_N11_AD6N_69
+set_property PACKAGE_PIN M18        [get_ports "IDT_8A34001_GPIO[5]"] ;# Bank  69 VCCO - VCC1V2   - IO_L6P_T0U_N10_AD6P_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[5]"] ;# Bank  69 VCCO - VCC1V2   - IO_L6P_T0U_N10_AD6P_69
+set_property PACKAGE_PIN L20        [get_ports "IDT_8A34001_GPIO[6]"] ;# Bank  69 VCCO - VCC1V2   - IO_L5N_T0U_N9_AD14N_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[6]"] ;# Bank  69 VCCO - VCC1V2   - IO_L5N_T0U_N9_AD14N_69
+set_property PACKAGE_PIN M20        [get_ports "IDT_8A34001_GPIO[7]"] ;# Bank  69 VCCO - VCC1V2   - IO_L5P_T0U_N8_AD14P_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[7]"] ;# Bank  69 VCCO - VCC1V2   - IO_L5P_T0U_N8_AD14P_69
+set_property PACKAGE_PIN N19        [get_ports "IDT_8A34001_GPIO[10]"] ;# Bank  69 VCCO - VCC1V2   - IO_L3N_T0L_N5_AD15N_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[10]"] ;# Bank  69 VCCO - VCC1V2   - IO_L3N_T0L_N5_AD15N_69
+set_property PACKAGE_PIN N20        [get_ports "IDT_8A34001_GPIO[11]"] ;# Bank  69 VCCO - VCC1V2   - IO_L3P_T0L_N4_AD15P_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[11]"] ;# Bank  69 VCCO - VCC1V2   - IO_L3P_T0L_N4_AD15P_69
+set_property PACKAGE_PIN P17        [get_ports "IDT_8A34001_GPIO[12]"] ;# Bank  69 VCCO - VCC1V2   - IO_L2N_T0L_N3_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[12]"] ;# Bank  69 VCCO - VCC1V2   - IO_L2N_T0L_N3_69
+set_property PACKAGE_PIN R17        [get_ports "IDT_8A34001_GPIO[13]"] ;# Bank  69 VCCO - VCC1V2   - IO_L2P_T0L_N2_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[13]"] ;# Bank  69 VCCO - VCC1V2   - IO_L2P_T0L_N2_69
+set_property PACKAGE_PIN R19        [get_ports "IDT_8A34001_GPIO[14]"] ;# Bank  69 VCCO - VCC1V2   - IO_L1N_T0L_N1_DBC_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[14]"] ;# Bank  69 VCCO - VCC1V2   - IO_L1N_T0L_N1_DBC_69
+set_property PACKAGE_PIN R20        [get_ports "IDT_8A34001_GPIO[15]"] ;# Bank  69 VCCO - VCC1V2   - IO_L1P_T0L_N0_DBC_69
+set_property IOSTANDARD  LVCMOS12   [get_ports "IDT_8A34001_GPIO[15]"] ;# Bank  69 VCCO - VCC1V2   - IO_L1P_T0L_N0_DBC_69
 
 # SFP connections
-set_property PACKAGE_PIN AC42     [get_ports "SFP0_RX_N"] ;# Bank 128 - MGTYRXN0_128
-set_property PACKAGE_PIN AC41     [get_ports "SFP0_RX_P"] ;# Bank 128 - MGTYRXP0_128
-set_property PACKAGE_PIN V39      [get_ports "SFP0_TX_N"] ;# Bank 128 - MGTYTXN0_128
-set_property PACKAGE_PIN V38      [get_ports "SFP0_TX_P"] ;# Bank 128 - MGTYTXP0_128
-set_property PACKAGE_PIN AB40     [get_ports "SFP1_RX_N"] ;# Bank 128 - MGTYRXN1_128
-set_property PACKAGE_PIN AB39     [get_ports "SFP1_RX_P"] ;# Bank 128 - MGTYRXP1_128
-set_property PACKAGE_PIN U37      [get_ports "SFP1_TX_N"] ;# Bank 128 - MGTYTXN1_128
-set_property PACKAGE_PIN U36      [get_ports "SFP1_TX_P"] ;# Bank 128 - MGTYTXP1_128
-set_property PACKAGE_PIN W42      [get_ports "SFP2_RX_N"] ;# Bank 129 - MGTYRXN0_129
-set_property PACKAGE_PIN W41      [get_ports "SFP2_RX_P"] ;# Bank 129 - MGTYRXP0_129
-set_property PACKAGE_PIN P39      [get_ports "SFP2_TX_N"] ;# Bank 129 - MGTYTXN0_129
-set_property PACKAGE_PIN P38      [get_ports "SFP2_TX_P"] ;# Bank 129 - MGTYTXP0_129
-set_property PACKAGE_PIN U42      [get_ports "SFP3_RX_N"] ;# Bank 129 - MGTYRXN1_129
-set_property PACKAGE_PIN U41      [get_ports "SFP3_RX_P"] ;# Bank 129 - MGTYRXP1_129
-set_property PACKAGE_PIN N37      [get_ports "SFP3_TX_N"] ;# Bank 129 - MGTYTXN1_129
-set_property PACKAGE_PIN N36      [get_ports "SFP3_TX_P"] ;# Bank 129 - MGTYTXP1_129
+set_property PACKAGE_PIN AC42     [get_ports "MGT128_C0_grx_n"] ;# Bank 128 - MGTYRXN0_128
+set_property PACKAGE_PIN AC41     [get_ports "MGT128_C0_grx_p"] ;# Bank 128 - MGTYRXP0_128
+set_property PACKAGE_PIN V39      [get_ports "MGT128_C0_gtx_n"] ;# Bank 128 - MGTYTXN0_128
+set_property PACKAGE_PIN V38      [get_ports "MGT128_C0_gtx_p"] ;# Bank 128 - MGTYTXP0_128
+set_property PACKAGE_PIN AB40     [get_ports "MGT128_C1_grx_n"] ;# Bank 128 - MGTYRXN1_128
+set_property PACKAGE_PIN AB39     [get_ports "MGT128_C1_grx_p"] ;# Bank 128 - MGTYRXP1_128
+set_property PACKAGE_PIN U37      [get_ports "MGT128_C1_gtx_n"] ;# Bank 128 - MGTYTXN1_128
+set_property PACKAGE_PIN U36      [get_ports "MGT128_C1_gtx_p"] ;# Bank 128 - MGTYTXP1_128
+set_property PACKAGE_PIN W42      [get_ports "MGT129_C0_grx_n"] ;# Bank 129 - MGTYRXN0_129
+set_property PACKAGE_PIN W41      [get_ports "MGT129_C0_grx_p"] ;# Bank 129 - MGTYRXP0_129
+set_property PACKAGE_PIN P39      [get_ports "MGT129_C0_gtx_n"] ;# Bank 129 - MGTYTXN0_129
+set_property PACKAGE_PIN P38      [get_ports "MGT129_C0_gtx_p"] ;# Bank 129 - MGTYTXP0_129
+set_property PACKAGE_PIN U42      [get_ports "MGT129_C1_grx_n"] ;# Bank 129 - MGTYRXN1_129
+set_property PACKAGE_PIN U41      [get_ports "MGT129_C1_grx_p"] ;# Bank 129 - MGTYRXP1_129
+set_property PACKAGE_PIN N37      [get_ports "MGT129_C1_gtx_n"] ;# Bank 129 - MGTYTXN1_129
+set_property PACKAGE_PIN N36      [get_ports "MGT129_C1_gtx_p"] ;# Bank 129 - MGTYTXP1_129
 
 # FMC connector clocks
-set_property PACKAGE_PIN AR26     [get_ports "FMCP_CLK1_M2C_N"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12N_T1U_N11_GC_66
-set_property IOSTANDARD  LVDS     [get_ports "FMCP_CLK1_M2C_N"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12N_T1U_N11_GC_66
-set_property PACKAGE_PIN AP26     [get_ports "FMCP_CLK1_M2C_P"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12P_T1U_N10_GC_66
-set_property IOSTANDARD  LVDS     [get_ports "FMCP_CLK1_M2C_P"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12P_T1U_N10_GC_66
+# set_property PACKAGE_PIN AR26     [get_ports "FMCP_CLK1_M2C_N"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12N_T1U_N11_GC_66
+# set_property IOSTANDARD  LVDS     [get_ports "FMCP_CLK1_M2C_N"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12N_T1U_N11_GC_66
+# set_property PACKAGE_PIN AP26     [get_ports "FMCP_CLK1_M2C_P"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12P_T1U_N10_GC_66
+# set_property IOSTANDARD  LVDS     [get_ports "FMCP_CLK1_M2C_P"] ;# Bank  66 VCCO - VADJ_FMC - IO_L12P_T1U_N10_GC_66
 
 # DIP switches
 # set_property PACKAGE_PIN AY10      [get_ports {GPIO_DIP_SW[0]}] ;# Bank  84 VCCO - VCC1V8   - IO_L4N_AD8N_84
@@ -139,109 +138,109 @@ set_property IOSTANDARD  LVDS     [get_ports "FMCP_CLK1_M2C_P"] ;# Bank  66 VCCO
 # set_property IOSTANDARD  LVCMOS18  [get_ports "GPIO_SW_W"] ;# Bank  89 VCCO - VCC1V8   - IO_L1P_AD11P_89
 
 # PMOD0
-set_property PACKAGE_PIN G15       [get_ports "PMOD0_0"] ;# Bank  88 VCCO - VCC1V8   - IO_L12N_AD8N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_0"] ;# Bank  88 VCCO - VCC1V8   - IO_L12N_AD8N_88
-set_property PACKAGE_PIN G16       [get_ports "PMOD0_1"] ;# Bank  88 VCCO - VCC1V8   - IO_L12P_AD8P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_1"] ;# Bank  88 VCCO - VCC1V8   - IO_L12P_AD8P_88
-set_property PACKAGE_PIN H14       [get_ports "PMOD0_2"] ;# Bank  88 VCCO - VCC1V8   - IO_L11N_AD9N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_2"] ;# Bank  88 VCCO - VCC1V8   - IO_L11N_AD9N_88
-set_property PACKAGE_PIN H15       [get_ports "PMOD0_3"] ;# Bank  88 VCCO - VCC1V8   - IO_L11P_AD9P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_3"] ;# Bank  88 VCCO - VCC1V8   - IO_L11P_AD9P_88
-set_property PACKAGE_PIN G13       [get_ports "PMOD0_4"] ;# Bank  88 VCCO - VCC1V8   - IO_L10N_AD10N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_4"] ;# Bank  88 VCCO - VCC1V8   - IO_L10N_AD10N_88
-set_property PACKAGE_PIN H13       [get_ports "PMOD0_5"] ;# Bank  88 VCCO - VCC1V8   - IO_L10P_AD10P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_5"] ;# Bank  88 VCCO - VCC1V8   - IO_L10P_AD10P_88
-set_property PACKAGE_PIN J13       [get_ports "PMOD0_6"] ;# Bank  88 VCCO - VCC1V8   - IO_L9N_AD11N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_6"] ;# Bank  88 VCCO - VCC1V8   - IO_L9N_AD11N_88
-set_property PACKAGE_PIN J14       [get_ports "PMOD0_7"] ;# Bank  88 VCCO - VCC1V8   - IO_L9P_AD11P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0_7"] ;# Bank  88 VCCO - VCC1V8   - IO_L9P_AD11P_88
+set_property PACKAGE_PIN G15       [get_ports "PMOD0[0]"] ;# Bank  88 VCCO - VCC1V8   - IO_L12N_AD8N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[0]"] ;# Bank  88 VCCO - VCC1V8   - IO_L12N_AD8N_88
+set_property PACKAGE_PIN G16       [get_ports "PMOD0[1]"] ;# Bank  88 VCCO - VCC1V8   - IO_L12P_AD8P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[1]"] ;# Bank  88 VCCO - VCC1V8   - IO_L12P_AD8P_88
+set_property PACKAGE_PIN H14       [get_ports "PMOD0[2]"] ;# Bank  88 VCCO - VCC1V8   - IO_L11N_AD9N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[2]"] ;# Bank  88 VCCO - VCC1V8   - IO_L11N_AD9N_88
+set_property PACKAGE_PIN H15       [get_ports "PMOD0[3]"] ;# Bank  88 VCCO - VCC1V8   - IO_L11P_AD9P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[3]"] ;# Bank  88 VCCO - VCC1V8   - IO_L11P_AD9P_88
+set_property PACKAGE_PIN G13       [get_ports "PMOD0[4]"] ;# Bank  88 VCCO - VCC1V8   - IO_L10N_AD10N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[4]"] ;# Bank  88 VCCO - VCC1V8   - IO_L10N_AD10N_88
+set_property PACKAGE_PIN H13       [get_ports "PMOD0[5]"] ;# Bank  88 VCCO - VCC1V8   - IO_L10P_AD10P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[5]"] ;# Bank  88 VCCO - VCC1V8   - IO_L10P_AD10P_88
+set_property PACKAGE_PIN J13       [get_ports "PMOD0[6]"] ;# Bank  88 VCCO - VCC1V8   - IO_L9N_AD11N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[6]"] ;# Bank  88 VCCO - VCC1V8   - IO_L9N_AD11N_88
+set_property PACKAGE_PIN J14       [get_ports "PMOD0[7]"] ;# Bank  88 VCCO - VCC1V8   - IO_L9P_AD11P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD0[7]"] ;# Bank  88 VCCO - VCC1V8   - IO_L9P_AD11P_88
 
 # PMOD1
-set_property PACKAGE_PIN L17       [get_ports "PMOD1_0"] ;# Bank  88 VCCO - VCC1V8   - IO_L4N_AD12N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_0"] ;# Bank  88 VCCO - VCC1V8   - IO_L4N_AD12N_88
-set_property PACKAGE_PIN M17       [get_ports "PMOD1_1"] ;# Bank  88 VCCO - VCC1V8   - IO_L4P_AD12P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_1"] ;# Bank  88 VCCO - VCC1V8   - IO_L4P_AD12P_88
-set_property PACKAGE_PIN M14       [get_ports "PMOD1_2"] ;# Bank  88 VCCO - VCC1V8   - IO_L3N_AD13N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_2"] ;# Bank  88 VCCO - VCC1V8   - IO_L3N_AD13N_88
-set_property PACKAGE_PIN N14       [get_ports "PMOD1_3"] ;# Bank  88 VCCO - VCC1V8   - IO_L3P_AD13P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_3"] ;# Bank  88 VCCO - VCC1V8   - IO_L3P_AD13P_88
-set_property PACKAGE_PIN M15       [get_ports "PMOD1_4"] ;# Bank  88 VCCO - VCC1V8   - IO_L2N_AD14N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_4"] ;# Bank  88 VCCO - VCC1V8   - IO_L2N_AD14N_88
-set_property PACKAGE_PIN N15       [get_ports "PMOD1_5"] ;# Bank  88 VCCO - VCC1V8   - IO_L2P_AD14P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_5"] ;# Bank  88 VCCO - VCC1V8   - IO_L2P_AD14P_88
-set_property PACKAGE_PIN M16       [get_ports "PMOD1_6"] ;# Bank  88 VCCO - VCC1V8   - IO_L1N_AD15N_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_6"] ;# Bank  88 VCCO - VCC1V8   - IO_L1N_AD15N_88
-set_property PACKAGE_PIN N16       [get_ports "PMOD1_7"] ;# Bank  88 VCCO - VCC1V8   - IO_L1P_AD15P_88
-set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1_7"] ;# Bank  88 VCCO - VCC1V8   - IO_L1P_AD15P_88
+set_property PACKAGE_PIN L17       [get_ports "PMOD1[0]"] ;# Bank  88 VCCO - VCC1V8   - IO_L4N_AD12N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[0]"] ;# Bank  88 VCCO - VCC1V8   - IO_L4N_AD12N_88
+set_property PACKAGE_PIN M17       [get_ports "PMOD1[1]"] ;# Bank  88 VCCO - VCC1V8   - IO_L4P_AD12P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[1]"] ;# Bank  88 VCCO - VCC1V8   - IO_L4P_AD12P_88
+set_property PACKAGE_PIN M14       [get_ports "PMOD1[2]"] ;# Bank  88 VCCO - VCC1V8   - IO_L3N_AD13N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[2]"] ;# Bank  88 VCCO - VCC1V8   - IO_L3N_AD13N_88
+set_property PACKAGE_PIN N14       [get_ports "PMOD1[3]"] ;# Bank  88 VCCO - VCC1V8   - IO_L3P_AD13P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[3]"] ;# Bank  88 VCCO - VCC1V8   - IO_L3P_AD13P_88
+set_property PACKAGE_PIN M15       [get_ports "PMOD1[4]"] ;# Bank  88 VCCO - VCC1V8   - IO_L2N_AD14N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[4]"] ;# Bank  88 VCCO - VCC1V8   - IO_L2N_AD14N_88
+set_property PACKAGE_PIN N15       [get_ports "PMOD1[5]"] ;# Bank  88 VCCO - VCC1V8   - IO_L2P_AD14P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[5]"] ;# Bank  88 VCCO - VCC1V8   - IO_L2P_AD14P_88
+set_property PACKAGE_PIN M16       [get_ports "PMOD1[6]"] ;# Bank  88 VCCO - VCC1V8   - IO_L1N_AD15N_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[6]"] ;# Bank  88 VCCO - VCC1V8   - IO_L1N_AD15N_88
+set_property PACKAGE_PIN N16       [get_ports "PMOD1[7]"] ;# Bank  88 VCCO - VCC1V8   - IO_L1P_AD15P_88
+set_property IOSTANDARD  LVCMOS18  [get_ports "PMOD1[7]"] ;# Bank  88 VCCO - VCC1V8   - IO_L1P_AD15P_88
 
 
 # GPIO exposed on the RF daughterboard
 # Choosing arbitrarily for now to make the DACIO outputs and the ADCIO inputs
-set_property PACKAGE_PIN F13     [get_ports {DACIO[0]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[0]}]
-set_property PACKAGE_PIN F14     [get_ports {DACIO[1]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[1]}]
-set_property PACKAGE_PIN A14     [get_ports {DACIO[2]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[2]}]
-set_property PACKAGE_PIN A15     [get_ports {DACIO[3]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[3]}]
-set_property PACKAGE_PIN C16     [get_ports {DACIO[4]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[4]}]
-set_property PACKAGE_PIN D16     [get_ports {DACIO[5]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[5]}]
-set_property PACKAGE_PIN E15     [get_ports {DACIO[6]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[6]}]
-set_property PACKAGE_PIN E16     [get_ports {DACIO[7]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[7]}]
-set_property PACKAGE_PIN B15     [get_ports {DACIO[8]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[8]}]
-set_property PACKAGE_PIN B16     [get_ports {DACIO[9]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[9]}]
-set_property PACKAGE_PIN C14     [get_ports {DACIO[10]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[10]}]
-set_property PACKAGE_PIN C15     [get_ports {DACIO[11]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[11]}]
-set_property PACKAGE_PIN E14     [get_ports {DACIO[12]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[12]}]
-set_property PACKAGE_PIN F15     [get_ports {DACIO[13]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[13]}]
-set_property PACKAGE_PIN B12     [get_ports {DACIO[14]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[14]}]
-set_property PACKAGE_PIN B13     [get_ports {DACIO[15]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {DACIO[15]}]
+set_property PACKAGE_PIN F13     [get_ports "DACIO[0]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[0]"]
+set_property PACKAGE_PIN F14     [get_ports "DACIO[1]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[1]"]
+set_property PACKAGE_PIN A14     [get_ports "DACIO[2]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[2]"]
+set_property PACKAGE_PIN A15     [get_ports "DACIO[3]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[3]"]
+set_property PACKAGE_PIN C16     [get_ports "DACIO[4]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[4]"]
+set_property PACKAGE_PIN D16     [get_ports "DACIO[5]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[5]"]
+set_property PACKAGE_PIN E15     [get_ports "DACIO[6]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[6]"]
+set_property PACKAGE_PIN E16     [get_ports "DACIO[7]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[7]"]
+set_property PACKAGE_PIN B15     [get_ports "DACIO[8]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[8]"]
+set_property PACKAGE_PIN B16     [get_ports "DACIO[9]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[9]"]
+set_property PACKAGE_PIN C14     [get_ports "DACIO[10]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[10]"]
+set_property PACKAGE_PIN C15     [get_ports "DACIO[11]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[11]"]
+set_property PACKAGE_PIN E14     [get_ports "DACIO[12]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[12]"]
+set_property PACKAGE_PIN F15     [get_ports "DACIO[13]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[13]"]
+set_property PACKAGE_PIN B12     [get_ports "DACIO[14]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[14]"]
+set_property PACKAGE_PIN B13     [get_ports "DACIO[15]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "DACIO[15]"]
 
-set_property PACKAGE_PIN AP10    [get_ports {ADCIO[0]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[0]}]
-set_property PACKAGE_PIN AP11    [get_ports {ADCIO[1]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[1]}]
-set_property PACKAGE_PIN AR11    [get_ports {ADCIO[2]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[2]}]
-set_property PACKAGE_PIN AP12    [get_ports {ADCIO[3]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[3]}]
-set_property PACKAGE_PIN AT10    [get_ports {ADCIO[4]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[4]}]
-set_property PACKAGE_PIN AR10    [get_ports {ADCIO[5]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[5]}]
-set_property PACKAGE_PIN AT12    [get_ports {ADCIO[6]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[6]}]
-set_property PACKAGE_PIN AR12    [get_ports {ADCIO[7]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[7]}]
-set_property PACKAGE_PIN AU11    [get_ports {ADCIO[8]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[8]}]
-set_property PACKAGE_PIN AU12    [get_ports {ADCIO[9]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[9]}]
-set_property PACKAGE_PIN AV10    [get_ports {ADCIO[10]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[10]}]
-set_property PACKAGE_PIN AU10    [get_ports {ADCIO[11]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[11]}]
-set_property PACKAGE_PIN AW9     [get_ports {ADCIO[12]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[12]}]
-set_property PACKAGE_PIN AV9     [get_ports {ADCIO[13]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[13]}]
-set_property PACKAGE_PIN AW11    [get_ports {ADCIO[14]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[14]}]
-set_property PACKAGE_PIN AV11    [get_ports {ADCIO[15]}]
-set_property IOSTANDARD LVCMOS18 [get_ports {ADCIO[15]}]
+set_property PACKAGE_PIN AP10    [get_ports "ADCIO[0]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[0]"]
+set_property PACKAGE_PIN AP11    [get_ports "ADCIO[1]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[1]"]
+set_property PACKAGE_PIN AR11    [get_ports "ADCIO[2]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[2]"]
+set_property PACKAGE_PIN AP12    [get_ports "ADCIO[3]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[3]"]
+set_property PACKAGE_PIN AT10    [get_ports "ADCIO[4]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[4]"]
+set_property PACKAGE_PIN AR10    [get_ports "ADCIO[5]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[5]"]
+set_property PACKAGE_PIN AT12    [get_ports "ADCIO[6]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[6]"]
+set_property PACKAGE_PIN AR12    [get_ports "ADCIO[7]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[7]"]
+set_property PACKAGE_PIN AU11    [get_ports "ADCIO[8]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[8]"]
+set_property PACKAGE_PIN AU12    [get_ports "ADCIO[9]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[9]"]
+set_property PACKAGE_PIN AV10    [get_ports "ADCIO[10]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[10]"]
+set_property PACKAGE_PIN AU10    [get_ports "ADCIO[11]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[11]"]
+set_property PACKAGE_PIN AW9     [get_ports "ADCIO[12]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[12]"]
+set_property PACKAGE_PIN AV9     [get_ports "ADCIO[13]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[13]"]
+set_property PACKAGE_PIN AW11    [get_ports "ADCIO[14]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[14]"]
+set_property PACKAGE_PIN AV11    [get_ports "ADCIO[15]"]
+set_property IOSTANDARD LVCMOS18 [get_ports "ADCIO[15]"]
 
 # DDR signals
 

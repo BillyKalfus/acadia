@@ -365,12 +365,12 @@ architecture rtl of acadia_rfdc_rts_regs is
     ATTRIBUTE X_INTERFACE_INFO : STRING;
     ATTRIBUTE X_INTERFACE_MODE : STRING;
     
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DIN";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus DOUT";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram:1.0 master_bus ADDR";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus WE";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus EN";
-    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram:1.0 master_bus CLK";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_mosi: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DIN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_miso: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus DOUT";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_addr: SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus ADDR";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_wr  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus WE";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus EN";
+    ATTRIBUTE X_INTERFACE_INFO of master_bus_clk : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus CLK";
     
     ATTRIBUTE X_INTERFACE_INFO of dac00_nco_freq      : SIGNAL is "xilinx.com:interface:rfdc_nco_pins_rtl:1.0 dac0_nco CONVERTER0_NCO_FREQ";
     ATTRIBUTE X_INTERFACE_INFO of dac00_nco_phase     : SIGNAL is "xilinx.com:interface:rfdc_nco_pins_rtl:1.0 dac0_nco CONVERTER0_NCO_PHASE";
