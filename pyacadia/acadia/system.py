@@ -950,7 +950,7 @@ class Acadia:
                 address=0xFD50_0000 + (instance._resource_id*0x1_0000),
                 size=0x1_0000))
             
-        # Connect to the GPIO registers and store sequencer bus addresses for the GPIO dataports
+        # Connect to the GPIO registers
         self._psgpio_mem = self._attach_memory(0xFF0A0000, 0x400, dtype=np.uint32)
             
         # Configure and connect to the sysfs interface for various GPIO        
@@ -1624,6 +1624,7 @@ class Acadia:
     def command_dma(self, 
                     channel: Channel, 
                     command_type: Literal[0,1,2,3,"continued arbitrary","arbitrary","continued constant","dwell"] = "arbitrary",
+                    flag: bool = False,
                     **kwargs) -> None:
         """
         Command a channel's DMA. The DMA has four different commands that it can process, 
@@ -1672,6 +1673,8 @@ class Acadia:
 
         :param channel: Physical channel to command.
         :type channel: :class:`Channel` or str
+        :param flag: The value of the DMA flag output for the command
+        :type flag: bool
         :param command_type: Type of command to issue to the DMA.
         "type command_type: str or int
         """
@@ -1739,10 +1742,10 @@ class Acadia:
             command_string = f"{command}"
 
         self._active_sequencer.bus_write(
-            address=device.address().value() + command_type,
+            address=device.address().value() + command_type + (4 if flag else 0),
             data=command, 
             simplifier=Acadia.sequencer_dma_instruction_simplifier,
-            comment=f"Command DMA for {channel}, type {command_type}: {command_string}")
+            comment=f"Command DMA for {channel}, flag {flag}, type {command_type}: {command_string}")
             
     def memory_region(self, 
                       specifier: Union[Channel, ManagedMemory, np.ndarray, str, StreamConfiguration, None]) -> callable:
@@ -2004,6 +2007,7 @@ class Acadia:
     def schedule_waveform(self, 
                         waveform: WaveformMemory, 
                         channel: Union[Channel, str, None] = None,
+                        flag: bool = False,
                         stretch_length: Union[float, Symbol, Operation] = None,
                         stretch_length_is_minus_one: bool = False):
         """
@@ -2018,6 +2022,9 @@ class Acadia:
         :type waveform: :class:`WaveformMemory`
         :param channel: Channel to stream
         :type channel: :class:`Channel`
+        :param flag: The value of the DMA flag output for the DMA command(s) 
+            generated.
+        :type flag: bool
         :param stretch_length: The amount by which to "stretch" the
             waveform. Stretching refers to playing the first half of a waveform,
             then repeating only the sample in the middle for some length of time,
@@ -2090,12 +2097,13 @@ class Acadia:
                 "kwargs": {
                     "channel": channel, 
                     "length": length_cycles, 
-                    "address": word_address},
+                    "address": word_address,
+                    "flag": flag},
                 "retval": None})
 
             logger.debug(f"Scheduled arbitrary waveform on channel"
                          f" {channel} of length {length_cycles}"
-                         f" at address {word_address}")
+                         f" at address {word_address} with flag {flag}")
 
             return
 
@@ -2133,7 +2141,8 @@ class Acadia:
             "kwargs": {
                 "channel": channel, 
                 "length": length_cycles // 2, 
-                "address": word_address},
+                "address": word_address,
+                "flag": flag},
             "retval": None})
 
         self.channel_synchronizer.add({
@@ -2143,7 +2152,8 @@ class Acadia:
             "kwargs": {
                 "channel": channel, 
                 "length": stretch_length,
-                "length_is_minus_one": stretch_length_is_minus_one},
+                "length_is_minus_one": stretch_length_is_minus_one,
+                "flag": flag},
             "retval": None})
 
         # If the waveform has an odd number of samples, then the second arbitrary
@@ -2160,19 +2170,21 @@ class Acadia:
             "args": (), 
             "kwargs": {
                 "channel": channel, 
-                "length": (length_cycles - 1) // 2},
+                "length": (length_cycles - 1) // 2,
+                "flag": flag},
             "retval": None})
 
         logger.debug(f"Scheduled stretched waveform on channel"
                      f" {channel} with first arbitrary part lasting"
                      f" {length_cycles // 2} cycles, a stretch length of"
                      f" {stretch_length}, and a second arbitrary part lasting"
-                     f" {(length_cycles - 1) // 2} cycles")
+                     f" {(length_cycles - 1) // 2} cycles. Flag {flag}")
 
     @requires_sequencer
     def schedule_direct(self, 
                         channel: Union[Channel, str], 
-                        command_source):
+                        command_source,
+                        flag: bool = False):
         """
         Schedules a DMA command constructed elsewhere.
 
@@ -2188,14 +2200,16 @@ class Acadia:
             "args": (), 
             "kwargs": {
                 "channel": channel, 
-                "command": command_source},
+                "command": command_source,
+                "flag": flag},
             "retval": None})
 
     @requires_sequencer
     def dwell(self,
                 channel: Union[Channel, str, None] = None,
                 length: Union[float, Symbol, Operation] = None,
-                length_is_minus_one: bool = False) -> None:
+                length_is_minus_one: bool = False,
+                flag: bool = False) -> None:
         """
         Schedule a dwell on a channel's DMA.
 
@@ -2245,201 +2259,9 @@ class Acadia:
             "kwargs": {
                 "channel": self.channel(channel), 
                 "length": length,
-                "length_is_minus_one": length_is_minus_one},
+                "length_is_minus_one": length_is_minus_one,
+                "flag": flag},
             "retval": None})
-
-    @requires_sequencer
-    def stream_direct(self, 
-                      src: Union[Channel, StreamConfiguration, WaveformMemory],
-                      dst: WaveformMemory, 
-                      length: float = None,
-                      output_offset_bytes: Union[int, Source, None] = None) -> tuple[StreamConfiguration, WaveformMemory]:
-        """
-        Stream data from an input of the stream processing path directly into memory. 
-        
-        The amount of data streamed into memory is controlled by the 
-        ``length`` parameter. If provided, this must be a float representing
-        the number of seconds for which to accept data. If not provided, the
-        amount of time is chosen so as to fill the destination.
-        """
-        
-        if isinstance(src, StreamConfiguration):
-            if src.module != "memory":
-                raise TypeError(f"The StreamConfiguration provided to"
-                                f" stream_direct must represent a"
-                                f" direct-to-memory module (received"
-                                f" configuration for module type {src.module})")
-            configuration = src
-        elif isinstance(src, (Channel, str)):
-            configuration = self._request_stream_configuration(self.channel(src), "memory")
-        elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
-            configuration = self._request_stream_configuration("memory", "memory")
-        else:
-            raise TypeError(f"Unable to create stream with source {src}")
-
-        if length is None:
-            length_cycles = 8 * dst.nbytes // self._firmware["stream_processing_path"]["width"]
-        elif np.issubdtype(type(length), float):
-            length_cycles = self.seconds_to_cycles(length)
-        else:
-            raise TypeError(f"Invalid type for direct stream length: {type(length)}")
-
-        if dst.itemsize != 2:
-            raise TypeError(f"Destinations for direct streams must have 16-bit quadratures;"
-                            f" found dtype {dst.dtype}")
-
-        # Because this is a direct stream, we can infer the output size from the length of the stream
-        output_size_bytes = length_cycles * self._firmware["stream_processing_path"]["width"] // 8
-
-        logger.debug(f"Direct stream of length {length_cycles} cycles"
-                     f" and {output_size_bytes} bytes.")
-
-        self.stream(configuration, 
-                    dst, 
-                    (src if isinstance(src, WaveformMemory) else None),
-                    length_cycles,
-                    output_size_bytes,
-                    output_offset_bytes)
-
-    @requires_sequencer
-    def stream_cmacc(self, 
-                     src: Union[Channel, str, StreamConfiguration, WaveformMemory],
-                     dst: WaveformMemory, 
-                     length: float = None,
-                     output_offset_bytes: Union[int, Source, None] = None,
-                     kernel: Union[np.ndarray, WaveformMemory, float, None] = None,
-                     preload: Union[tuple[int], None] = (0,0),
-                     write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
-                     last_only: bool = True, 
-                     reset_fifo: bool = False,
-                     accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
-        """
-        Stream data from an input of the stream processing path, through
-        a CMACC, and into memory. 
-
-        The complex multiplier-accumulator (CMACC) accepts a stream of data,
-        multiplies each incoming sample by the corresponding value of a 
-        "kernel", and progressively sums all of the products ("accumulates") 
-        into a register (the "accumulator"). An output port on the CMACC can
-        be configured to write the value of the accumulator or a copy of the 
-        input stream into memory, and one can configure whether the entire stream
-        is written or exclusively the last value. The amount of data processed 
-        by the CMACC, its method of processing, and the amount of data written 
-        into memory are all independently variable and are described below.
-        
-        The amount of data accepted into the CMACC is controlled by the 
-        ``length`` parameter. If provided, this must be a float representing
-        the number of seconds for which to accept data. If not provided, the
-        amount of time is chosen to match that of the accumulation kernel.
-        
-        The accumulation kernel to be used is controlled by the ``kernel`` parameter.  
-        
-        - If this is a numpy array, its shape information 
-            is used in order to determine the size of the kernel. A new kernel 
-            memory object is allocated and returned. 
-            
-        - If this is a WaveformMemory whose region is the kernel memory for the source Channel, 
-            no new kernel will be allocated, and the CMACC will be configured to use 
-            this previously-allocated kernel.
-            
-        - If this is a WaveformMemory whose region is not the kernel memory 
-            for the source Channel, a new kernel will be allocated with a
-            matching number of samples. 
-            
-        - If this is a float, this should be the length in seconds of a new kernel 
-            to be allocated. 
-            
-        - If ``None``, a single-element kernel is newly allocated to allow for 
-            boxcar accumulation. In this case, note that ``length`` must be provided.
-
-        The ``write_mode`` parameter controls which data is presented at the
-        output port of the CMACC, with the following options:
-
-        - "upper": The upper 32 bits of each quadrature in the accumulator are presented to the
-            output, and the lower 16 bits of each quadrature are discarded.
-
-        - "lower": The lower 32 bits of each quadrature in the accumulator are written to the
-            output, and the upper 16 bits of the accumulator value are discarded.
-
-        - "input": The input data is duplicated at the output (after the initial
-            factor-of-4 decimation). The accumulator still runs and its value is
-            accessible via the bus interface.
-
-        - "none" or ``None``: No data is written to the output. The accumulator 
-            still runs and its value is accessible via the bus interface.
-
-        The CMACC can be configured to present data every single cycle by setting ``last_only=False``.
-        In this situation, a stream of data equal in length (of time) to the input stream
-        is written to the output. For ``write_mode="upper"`` or ``"lower"``, the
-        output stream will consist of partial sums of the accumulated input stream.
-        That is, each sample in the output stream is the sum of all the samples before
-        it, plus the new sample accumulated in that cycle. This allows one to capture
-        the value of the accumulator throughout its operation. For ``write_mode="input"``,
-        the stream written to the output port will consist of the input stream that is
-        being accumulated by the CMACC. This is particularly useful for debugging and for
-        calibrating the accumulation kernel, as this is a direct view of the data that would
-        be multiplied against the kernel and accumulated.
-
-        Alternatively, the CMACC can be configured to write only the last value of its output
-        stream to the output port by setting ``last_only=True``. This is primarily intended 
-        for situations in which only the fully accumulated input is necessary; in this case,
-        the value of the accumulator during its operation is of no relevance, and only the
-        final value should be written. When ``last_only=True``, only a single value will be
-        written to the output port regardless of the amount of data accepted into the CMACC.
-
-        When beginning a capture, the hardware does not adjust the value stored in the 
-        accumulator. This means that incoming samples will be accumulated on top of whatever
-        value was already there; however, by providing a value for ``preload``, a known value will
-        be loaded into the CMACC before beginning the capture. The format for ``preload`` is a tuple
-        of two ``int``s, corresponding to the values to be loaded into the real and imaginary parts of
-        the accumulator. 
-        """
-
-        if length is None and (kernel is None or (hasattr(kernel, "size") and kernel.size == 1)):
-            raise ValueError(f"Must provide length when kernel is not"
-                                " provided or a boxcar kernel is used.")
-
-        # 32-bit quadratures are required for CMACC output
-        if dst.itemsize != 4:
-            raise TypeError(f"CMACC streams require destinations with"
-                            f" 32-bit quadratures; destination has dtype"
-                            f" {dst.dtype}")
-
-        configuration, kernel_memory = self.configure_cmacc(
-            src, kernel, write_mode, last_only, reset_fifo, accumulator_done)
-
-        if preload is not None:
-            self.cmacc_load(configuration, preload)
-
-        if length is None:
-            # infer the length in time from the kernel (one cycle per kernel sample)
-            # we already checked whether we have a boxcar kernel, so we're good to just
-            # look at the kernel size
-            length_cycles = kernel_memory.size
-            logger.debug(f"Inferring CMACC stream length from kernel memory ({length_cycles} cycles)")
-        elif np.issubdtype(type(length), float):
-            length_cycles = self.seconds_to_cycles(length)
-            logger.debug(f"Converted float to CMACC stream length ({length_cycles} cycles)")
-        else:
-            raise TypeError(f"Received invalid type for CMACC stream length: {type(length)}")
-
-        # If we're not writing only the last sample, 
-        # then we're writing one sample every cycle
-        if last_only:
-            output_size_samples = 1
-        else:
-            output_size_samples = length_cycles
-
-        output_size_bytes = output_size_samples * (2*dst.itemsize)
-        
-        self.stream(configuration=configuration, 
-                    dst=dst,
-                    length_cycles=length_cycles,
-                    output_size_bytes=output_size_bytes,
-                    offset_bytes=output_offset_bytes,
-                    memory_input=(src if configuration.input_source == "memory" else None))
-
-        return configuration, kernel_memory
         
     @requires_sequencer
     def stream(self, 
@@ -2449,7 +2271,8 @@ class Acadia:
                length_cycles: Union[int, None] = None,
                output_size_bytes: Union[int, None] = None,
                offset_bytes: Union[int, Source] = None,
-               command_datamover: bool = True) -> None:
+               command_datamover: bool = True,
+               flag: bool = False) -> None:
         """
         Stream data from a source to a destination WaveformMemory. 
 
@@ -2576,93 +2399,204 @@ class Acadia:
                                 dst.byte_address + offset_bytes,
                                 output_size_bytes)
 
-        
-    
     @requires_sequencer
-    def configure_dsp(self, 
-                    src: Union[Channel, WaveformMemory], 
-                    decimation: int = 1,
-                    reset: bool = True,
-                    configuration: StreamConfiguration = None) -> StreamConfiguration:
+    def stream_direct(self, 
+                      src: Union[Channel, StreamConfiguration, WaveformMemory],
+                      dst: WaveformMemory, 
+                      length: float = None,
+                      output_offset_bytes: Union[int, Source, None] = None,
+                      flag: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
         """
-        Configure a DSP for streaming data. 
+        Stream data from an input of the stream processing path directly into memory. 
         
-        The source of data can either be a :class:`Channel` representing an 
-        ADC, or it can be an array in memory captured by an :class:`Array`
-        object. The ``decimation`` property of ``dst`` will be used to 
-        determine whether the stream passed directly from the input into memory
-        or whether a DSP module will be used for decimating the stream.
+        The amount of data streamed into memory is controlled by the 
+        ``length`` parameter. If provided, this must be a float representing
+        the number of seconds for which to accept data. If not provided, the
+        amount of time is chosen so as to fill the destination.
+        """
+        
+        if isinstance(src, StreamConfiguration):
+            if src.module != "fifo":
+                raise TypeError(f"The StreamConfiguration provided to"
+                                f" stream_direct must represent a"
+                                f" FIFO module (received"
+                                f" configuration for module type {src.module})")
+            configuration = src
+        elif isinstance(src, (Channel, str)):
+            configuration = self._request_stream_configuration(self.channel(src), "fifo")
+        elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
+            configuration = self._request_stream_configuration("memory", "fifo")
+        else:
+            raise TypeError(f"Unable to create stream with source {src}")
 
-        :param src: Data source. If a configuration is provided and this is of
-            type :class:`Channel`, the channel in the configuration must match.
-        :type src: :class:`Channel` or :class:`Array`
-        :param decimation: The decimation to use for the DSP. This must either 
-            be 1 or a multiple of 4.
-        :type decimation: int
-        :param configuration: Stream configuration to use. If `None`, a new one
-            will be requested.
-        :type configuration: :class:`StreamConfiguration`
-        :return: The configuration used for streaming
-        :rtype: :class:`StreamConfiguration`
+        if length is None:
+            length_cycles = 8 * dst.nbytes // self._firmware["stream_processing_path"]["width"]
+        elif np.issubdtype(type(length), float):
+            length_cycles = self.seconds_to_cycles(length)
+        else:
+            raise TypeError(f"Invalid type for direct stream length: {type(length)}")
+
+        if dst.itemsize != 2:
+            raise TypeError(f"Destinations for direct streams must have 16-bit quadratures;"
+                            f" found dtype {dst.dtype}")
+
+        # Because this is a direct stream, we can infer the output size from the length of the stream
+        output_size_bytes = length_cycles * self._firmware["stream_processing_path"]["width"] // 8
+
+        logger.debug(f"Direct stream of length {length_cycles} cycles"
+                     f" and {output_size_bytes} bytes.")
+
+        self.stream(configuration=configuration, 
+                    dst=dst, 
+                    memory_input=(src if isinstance(src, WaveformMemory) else None),
+                    length_cycles=length_cycles,
+                    output_size_bytes=output_size_bytes,
+                    offset_bytes=output_offset_bytes,
+                    flag=flag)
+
+    @requires_sequencer
+    def stream_cmacc(self, 
+                     src: Union[Channel, str, StreamConfiguration, WaveformMemory],
+                     dst: WaveformMemory, 
+                     length: float = None,
+                     output_offset_bytes: Union[int, Source, None] = None,
+                     kernel: Union[np.ndarray, WaveformMemory, float, None] = None,
+                     preload: Union[tuple[int], None] = (0,0),
+                     write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
+                     last_only: bool = True, 
+                     reset_fifo: bool = False,
+                     accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
+        """
+        Stream data from an input of the stream processing path, through
+        a CMACC, and into memory.
+
+        This function calls :meth:`configure_cmacc`, and many arguments are 
+        passed in directly; see argument descriptions there.
+
+        The amount of data accepted into the CMACC is controlled by the 
+        ``length`` parameter. If provided, this must be a float representing
+        the number of seconds for which to accept data. If not provided, the
+        amount of time is chosen to match that of the accumulation kernel.
+
+        If ``kernel`` is ``None``, a single-element kernel is newly allocated to allow for 
+            boxcar accumulation. In this case, note that ``length`` must be provided.
+
         """
 
-        config_src = src if isinstance(src, Channel) else "memory"
-        module = "memory" if decimation == 1 else "dsp"
-        if configuration is None:
-            configuration = self._request_stream_configuration(config_src, module)
+        if length is None and (kernel is None or (hasattr(kernel, "size") and kernel.size == 1)):
+            raise ValueError(f"Must provide length when kernel is not"
+                                " provided or a boxcar kernel is used.")
 
-        if decimation != 1:
-            # Configure the DSP for decimation
-            # At packet start and counter start, we'll load in the input value
-            # Otherwise, when we receive valid data, we'll add it to P
-            dsp_address = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
-            logger.debug(f"Configuring DSP module {configuration.input_switch_slave} at bus address 0x{dsp_address:08X}")
+        # 32-bit quadratures are required for CMACC output
+        if dst.itemsize != 4:
+            raise TypeError(f"CMACC streams require destinations with"
+                            f" 32-bit quadratures; destination has dtype"
+                            f" {dst.dtype}")
 
-            if reset:
-                self.sequencer().bus_write(address=dsp_address, data=(1 << 4))
-                self.sequencer().nop()
-                self.sequencer().nop()
-            
-            # P = multiplier: CIN = 0, W = 00, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
-            self.sequencer().bus_write(address=dsp_address + 9, data=int("00000001010000", 2)) # packet start config
-            self.sequencer().bus_write(address=dsp_address + 10, data=int("00000001010000", 2)) # counter start config
-            
-            # P = multiplier + P: CIN = 0, W = 01, Z = 000, Y = 01, X = 01, ALUMODE = 0000 (W+X+Y+Z+CIN)
-            self.sequencer().bus_write(address=dsp_address + 11, data=int("00100001010000", 2)) # counter run config
-            
-            # The DSP module output is bits 46 to 15 of P, so we'll multiply by 
-            # 2^15 for both quadratures
-            self.sequencer().bus_write(address=dsp_address + 1, data=(1 << 15))
-            self.sequencer().bus_write(address=dsp_address + 5, data=(1 << 15))
-            
-            # No pre-add to the input stream
-            self.sequencer().bus_write(address=dsp_address + 2, data=0)
-            self.sequencer().bus_write(address=dsp_address + 6, data=0)
-            
-            # load packet start config
-            self.sequencer().bus_write(address=dsp_address, data=(1 << 5)) 
-            
-            # Counter period low and high
-            input_samples_per_cycle = self._firmware["stream_processing_path"]["width"] // 32
-            counter_value = (decimation // input_samples_per_cycle) - 1
-            logger.debug(f"Assigning counter value {counter_value} ({input_samples_per_cycle} input samples per cycle, decimation {decimation})")
+        configuration, kernel_memory = self.configure_cmacc(
+            src, kernel, write_mode, last_only, reset_fifo, accumulator_done)
 
-            self.sequencer().bus_write(address=dsp_address + 12, data=(counter_value & 0xFFFF) << 16) # low
-            self.sequencer().bus_write(address=dsp_address + 13, data=(counter_value >> 16) & 0xFFFFFFFF) # high
+        if preload is not None:
+            self.cmacc_load(configuration, preload)
+
+        if length is None:
+            # infer the length in time from the kernel (one cycle per kernel sample)
+            # we already checked whether we have a boxcar kernel, so we're good to just
+            # look at the kernel size
+            length_cycles = kernel_memory.size
+            logger.debug(f"Inferring CMACC stream length from kernel memory ({length_cycles} cycles)")
+        elif np.issubdtype(type(length), float):
+            length_cycles = self.seconds_to_cycles(length)
+            logger.debug(f"Converted float to CMACC stream length ({length_cycles} cycles)")
+        else:
+            raise TypeError(f"Received invalid type for CMACC stream length: {type(length)}")
+
+        # If we're not writing only the last sample, 
+        # then we're writing one sample every cycle
+        if last_only:
+            output_size_samples = 1
+        else:
+            output_size_samples = length_cycles
+
+        output_size_bytes = output_size_samples * (2*dst.itemsize)
         
-        return configuration
-        
+        self.stream(configuration=configuration, 
+                    dst=dst,
+                    length_cycles=length_cycles,
+                    output_size_bytes=output_size_bytes,
+                    offset_bytes=output_offset_bytes,
+                    memory_input=(src if configuration.input_source == "memory" else None))
+
+        return configuration, kernel_memory
 
     @requires_sequencer
     def configure_cmacc(self, 
                         src: Union[Channel, str, StreamConfiguration, WaveformMemory],
                         kernel: Union[np.ndarray, float, None] = None,
-                        write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
-                        last_only: bool = True, 
-                        reset_fifo: bool = False,
-                        accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
+                        kernel_pointer_load: bool = True,
+                        arm_preload: bool = True,
+                        accumulator_mode: Literal["none", "after_arm", "after_kernel_start"] = "none",
+                        latch_mode: Literal["none", "last", "kernel", "all"] = "none",
+                        stream_mode: Literal["none", "last", "kernel", "all"] = "none") -> tuple[StreamConfiguration, WaveformMemory]:
         """
         Configure the CMACC.
+
+        The complex multiplier-accumulator (CMACC) accepts a stream of data,
+        multiplies each incoming sample by the corresponding value of a 
+        "kernel", and progressively sums all of the products ("accumulates") 
+        into a register (the "accumulator"). An output port on the CMACC can
+        be configured to write the value of the accumulator or a copy of the 
+        input stream into memory, and one can configure whether the entire stream
+        is written or exclusively the last value. The amount of data processed 
+        by the CMACC, its method of processing, and the amount of data written 
+        into memory are all independently variable and are described below.
+        
+        
+        
+        The accumulation kernel to be used is controlled by the ``kernel`` parameter.  
+        
+        - If this is a numpy array, its shape information 
+            is used in order to determine the size of the kernel. A new kernel 
+            memory object is allocated and returned. 
+            
+        - If this is a WaveformMemory whose region is the kernel memory for the source Channel, 
+            no new kernel will be allocated, and the CMACC will be configured to use 
+            this previously-allocated kernel.
+            
+        - If this is a WaveformMemory whose region is not the kernel memory 
+            for the source Channel, a new kernel will be allocated with a
+            matching number of samples. 
+            
+        - If this is a float, this should be the length in seconds of a new kernel 
+            to be allocated. 
+            
+        - If ``None``, a single-element kernel is newly allocated to allow for 
+            boxcar accumulation. In this case, note that ``length`` must be provided.
+
+        The ``write_mode`` parameter controls which data is presented at the
+        output port of the CMACC, with the following options:
+
+        - "upper": The upper 32 bits of each quadrature in the accumulator are presented to the
+            output, and the lower 16 bits of each quadrature are discarded.
+
+        - "lower": The lower 32 bits of each quadrature in the accumulator are written to the
+            output, and the upper 16 bits of the accumulator value are discarded.
+
+        - "input": The input data is duplicated at the output (after the initial
+            factor-of-4 decimation). The accumulator still runs and its value is
+            accessible via the bus interface.
+
+        - "none" or ``None``: No data is written to the output. The accumulator 
+            still runs and its value is accessible via the bus interface.
+
+
+
+        When beginning a capture, the hardware does not adjust the value stored in the 
+        accumulator. This means that incoming samples will be accumulated on top of whatever
+        value was already there; however, by providing a value for ``preload``, a known value will
+        be loaded into the CMACC before beginning the capture. The format for ``preload`` is a tuple
+        of two ``int``s, corresponding to the values to be loaded into the real and imaginary parts of
+        the accumulator. 
 
         :param src: The source of data to be accumulated by the CMACC
         :type src: Channel or WaveformMemory
