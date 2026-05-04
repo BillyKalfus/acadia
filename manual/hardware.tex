@@ -235,19 +235,19 @@ the number of cycles for which \lstinline|valid| is set. During the last cycle o
 
 \subsubsection{DataMovers and DataMover controllers}
 
-\subsubsection{Direct-to-memory streaming}
+\subsubsection{Direct streaming}
 
 \subsubsection{Complex multiplier with accumulator (CMACC)}
 
 
-The Complex Multiplier and Accumulator (CMACC) module provides a low-latency solution for filtering and decimating signals in real time. Each sample that enters the CMACC is multiplied with the corresponding sample of an arbitrary complex kernel/window function, and the result is iteratively summed (``accumulated'') in a register (the ``accumulator''). By choosing an appropriate window function, different bands of noise can be rejected from the incoming signal. This architecture can also allow the signal to be processed with a matched filter, which optimizes the noise rejection when trying to distinguish between known signals.
+The Complex Multiplier and Accumulator (CMACC) module provides a low-latency solution for filtering and decimating signals in real time. Each sample that enters the CMACC is multiplied with the corresponding sample of an arbitrary complex kernel/window function, and the result is iteratively summed (``accumulated'') in a 47-bit register (the ``accumulator''). By choosing an appropriate window function, different bands of noise can be rejected from the incoming signal. This architecture can also allow the signal to be processed with a matched filter, which optimizes the noise rejection when trying to distinguish between known signals.
 
 The internal datapath of the CMACC is a four-stage pipeline; a new set of samples is accepted every cycle and the accumulator reflects new inputs after a latency of four cycles. The stages, each of which performs multiple simultaneous operations, are as follows:
 
 \begin{enumerate}
   \item
   \begin{itemize}
-    \item Four complex samples enter the CMACC (each comprised of two 16-bit signed quadratures) which are summed together to produce a complex value with 18-bit signed quadratures.
+    \item Four complex samples enter the CMACC (each comprised of two 16-bit signed quadratures) and are summed together to produce a complex value with 18-bit signed quadratures.
     \item The value of the kernel corresponding to the current value of the kernel pointer is produced at the output of the kernel memory.
     \item If the kernel pointer has reached the value of the kernel end address register, it resets to the value of the kernel start address register. Otherwise, it increments by one. 
   \end{itemize} 
@@ -271,12 +271,13 @@ The CMACC module has a register interface that can be controlled by the sequence
 
 Each CMACC has a dedicated bank of kernel memory with a depth of 2048 samples. Before streaming a signal into the CMACC, the sequencer should specify the start and end addresses of the kernel in memory to the CMACC via a write to its register interface. These addresses are arbitrary and can be easily changed at will by the sequencer, allowing one CMACC to switch between multiple different kernels in real time.
 
-An internal pointer register is used to step through the kernel memory as new samples enter the CMACC so that the samples can be multiplied by the appropriate value of the kernel. The pointer is initialized to the pre-programmed start address via a register write and it increments for every valid sample that enters the CMACC. When it reaches the pre-programmed end address, it resets to the starting address. If valid samples continue to enter the CMACC, the pointer will continue to increment again without any additional latency or dropped data; this enables the use of periodic kernels without needing to occupy more than a single period's worth of kernel memory. A common special case is the ``boxcar'' kernel, which only requires loading a single entry in kernel memory. This feature can also be used for decimation, since the CMACC can be configured to emit a valid output upon reaching the kernel end address (see below). The sequencer can also manually reset the kernel pointer to its start address via a write to the configuration register, which is required after updating the kernel start and end addresses.
+An internal pointer register is used to step through the kernel memory as new samples enter the CMACC so that they are multiplied by the appropriate value of the kernel. The pointer start and end values are written to the CMACC via the register interface and correspond to the addresses of the first and last kernel values. The pointer will then increment for every valid sample that enters the CMACC, and when it reaches the end value, it resets to the start value. If valid samples continue to enter the CMACC after the pointer resets, it will continue to increment again without any additional latency or dropped data; this enables the use of periodic kernels without needing to occupy more than a single period's worth of kernel memory. A common special case is the ``boxcar'' kernel, which only requires loading a single entry in kernel memory; in this case, the start and end pointer values are equal. A repeating kernel also provides a straightforward means of decimating an input stream, since the CMACC can be configured to emit a valid output exclusively upon reaching the kernel end address (see below); in this case, the kernel values determine the frequency response of the decimation filter. The sequencer can manually reset the kernel pointer to its start address via a write to the configuration register, which is required after updating the kernel start and end addresses.
 
-The CMACC does not require consecutive samples to be valid. When samples enter the CMACC, if they are marked as not valid, they will not contribute to the accumulator and the kernel pointer will not increase. If an input sample is marked as ``last'', the CMACC can be configured to reset the accumulator and/or produce an output; see below for a description of accumulator configuration and output behavior.
+The CMACC does not require consecutive input samples to be valid. When samples enter the CMACC, if they are not valid, they will not contribute to the accumulator and the kernel pointer will not increase. This allows the CMACC to operate on interrupted streams, such as data streamed from memory in bursts. It also allows the CMACC to ``idle'' by providing it invalid samples.
 
+The accumulator's update behavior is configurable, allowing it to perform several different processing functions. A register in the CMACC stores a ``preload'' value which allows the accumulator to automatically reset to a known value before incorporating new samples. This allows the accumulation result to be available as long as necessary without requiring the sequencer to manually reset it before accepting new data.
 
-
+Because the CMACC always operates on a continuous stream of data (be it valid or invalid), it doesn't intrinsically have a notion of when the ``first'' sample is. For example, consider the common usage pattern of accumulating a series of ADC samples into one value with a constant offset. This would involve the the sequencer programming a preload value for the constant offset and then commanding an ADC DMA to create a short burst of valid samples. Before the DMA is commanded, the CMACC is only receiving invalid samples; the next valid sample to enter the CMACC corresponds to the ``first'' sample of the command. Therefore, before commanding the DMA, the sequencer must indicate to the CMACC that the accumulator should be reset to the preload value upon receiving the next valid sample. This is implemented by setting the \lstinline|arm_preload| bit in the CMACC configuration register
 
 
 \subsection{Data converter real-time configuration registers}

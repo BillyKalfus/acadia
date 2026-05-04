@@ -143,15 +143,36 @@ begin
         -- Wait a while (it takes a while for the FIFO to reset)
         for i in 0 to 80 loop wait until rising_edge(clk); end loop;
         
-        -- Load single sample of kernel memory
+        -- Load four samples of kernel memory
+        kernel_memory_din <= x"12345678";
+        kernel_memory_addr <= "000" & x"00";
+        kernel_memory_we <= "1111";
+
+        wait until rising_edge(clk);
+
         kernel_memory_din <= x"00008FFF";
-        kernel_memory_addr <= "00000000000";
+        kernel_memory_addr <= "000" & x"01";
+        kernel_memory_we <= "1111";
+
+        wait until rising_edge(clk);
+
+        kernel_memory_din <= x"FACE0000";
+        kernel_memory_addr <= "000" & x"02";
+        kernel_memory_we <= "1111";
+
+        wait until rising_edge(clk);
+
+        kernel_memory_din <= x"ABCDB00C";
+        kernel_memory_addr <= "000" & x"03";
         kernel_memory_we <= "1111";
         
         wait until rising_edge(clk);
+
         kernel_memory_din <= x"00000000";
         kernel_memory_addr <= "00000000000";
         kernel_memory_we <= "0000";
+
+        ------------ FIRST TEST: BOXCAR KERNEL ----------------
         
         -- Internal module reset
         wait until rising_edge(clk);
@@ -171,7 +192,11 @@ begin
         wait until rising_edge(clk);
 
         -- Control register
-        -- accumulator_update_mode = 01, accumulator_latch_write = 01, stream_port_write_mode = 01, arm_preload = 1, kernel_pointer_load = 1
+        -- accumulator_update_mode (bits 19-18) = 01 (accumulate after arm), 
+        -- accumulator_latch_write (bits 21-20) = 01 (write after last input), 
+        -- stream_port_write_mode (bits 28-27) = 01 (write after last input), 
+        -- arm_preload (bit 26) = 1, 
+        -- kernel_pointer_load (bit 16) = 1
         -- (1 << 18) | (1 << 20) | (1 << 27) | (1 << 26) | (1 << 16) = 0x0C150000
         registers_addr <= x"00000000";
         registers_mosi <= x"0C150000";
@@ -208,6 +233,87 @@ begin
 
         for i in 0 to 17 loop wait until rising_edge(clk); end loop;
 
+        -- Simulate an interrupted input
+        data_in_tvalid <= '0';
+
+        wait until rising_edge(clk);
+
+        data_in_tvalid <= '1';
+
+        for i in 0 to 12 loop wait until rising_edge(clk); end loop;
+
+        data_in_tlast <= '1';
+
+        wait until rising_edge(clk);
+
+        data_in_tvalid <= '0';
+        data_in_tlast  <= '0';
+
+        for i in 0 to 20 loop wait until rising_edge(clk); end loop;
+
+
+        ------------ SECOND TEST: FOUR-SAMPLE KERNEL DECIMATION ----------------
+        
+        -- Internal module reset
+        wait until rising_edge(clk);
+        registers_addr <= x"00000000";
+        registers_mosi <= x"10000000";
+        registers_we   <= '1';
+        registers_en   <= '1';
+        
+        -- Write to kernel pointer start/end register
+        -- both are zero in order to have a single-sample kernel
+        wait until rising_edge(clk);
+        registers_addr <= x"00000001";
+        registers_mosi <= x"00000000";
+        registers_we   <= '1';
+        registers_en   <= '1';
+        
+        wait until rising_edge(clk);
+
+        -- Control register
+        -- accumulator_update_mode (bits 19-18) = 01 (accumulate after arm), 
+        -- accumulator_latch_write (bits 21-20) = 01 (write after last input), 
+        -- stream_port_write_mode (bits 28-27) = 01 (write after last input), 
+        -- arm_preload (bit 26) = 1, 
+        -- kernel_pointer_load (bit 16) = 1
+        -- (1 << 18) | (1 << 20) | (1 << 27) | (1 << 26) | (1 << 16) = 0x0C150000
+        registers_addr <= x"00000000";
+        registers_mosi <= x"0C150000";
+        registers_we   <= '1';
+        registers_en   <= '1';
+
+        wait until rising_edge(clk);
+
+        -- Real preload
+        registers_addr <= x"00000004";
+        registers_mosi <= x"0000000A";
+        registers_we   <= '1';
+        registers_en   <= '1';
+
+        wait until rising_edge(clk);
+
+        -- Imag preload
+        registers_addr <= x"00000005";
+        registers_mosi <= x"0000000C";
+        registers_we   <= '1';
+        registers_en   <= '1';
+
+        wait until rising_edge(clk);
+
+        registers_addr <= x"00000000";
+        registers_mosi <= x"00000000";
+        registers_we   <= '0';
+        registers_en   <= '0';
+        
+        -- Wait a bit and then start sending data
+        for i in 0 to 9 loop wait until rising_edge(clk); end loop;
+
+        data_in_tvalid <= '1';
+
+        for i in 0 to 17 loop wait until rising_edge(clk); end loop;
+
+        -- Simulate an interrupted input
         data_in_tvalid <= '0';
 
         wait until rising_edge(clk);

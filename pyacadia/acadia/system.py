@@ -2269,43 +2269,18 @@ class Acadia:
                dst: WaveformMemory, 
                memory_input = None,
                length_cycles: Union[int, None] = None,
-               output_size_bytes: Union[int, None] = None,
-               offset_bytes: Union[int, Source] = None,
-               command_datamover: bool = True,
                flag: bool = False) -> None:
         """
-        Stream data from a source to a destination WaveformMemory. 
-
-        This function initiates a stream from some source into the input of the 
-        stream processing path and commands the DataMover of the receiving module. 
-        Before calling this function, the module receiving and processing the stream 
-        must have been prepared (by calling a function such as :meth:`configure_dsp` or 
-        :meth:`configure_cmacc`). 
-
-        For all configurations, an offset may be provided and will be interpreted as the 
-        number of bytes into the destination at which to start storing data. 
-        This may either be an int or a sequencer source. It is up to 
-        the user to ensure that when providing an offset, the length of the stream (either
-        provided or inferred) is chosen so that data is not written past the end of the
-        destination memory space.
+        Stream data into the stream processing path. 
 
         :param configuration: Stream configuration to use
         :type configuration: :class:`StreamConfiguration`
         :param dst: Data destination
         :type dst: :class:`WaveformMemory`
         :param memory_input: The input for memory-to-memory streams
-        :type dst: :class:`WaveformMemory`
+        :type memory_input: :class:`WaveformMemory`
         :param length_cycles: Length of stream in cycles.
         :type length_cycles: int
-        :param output_size_bytes: Output stream size in bytes
-        :type output_size_bytes: int
-        :param offset_bytes: Offset within `dst` at which the stream will be written,
-            in units of samples. Note that this offset is applied after any 
-            decimation.
-        :param command_datamover: If `False`, the DataMover will not be commanded.
-            This can be particularly useful for large streams, where the DataMover 
-            commands must be manually managed.
-        :type command_datamover: bool
         """
 
         # Validate parameters
@@ -2348,59 +2323,76 @@ class Acadia:
                 "function": DMASynchronizer.CONSTANT_CONTINUED, 
                 "self": self, 
                 "args": (), 
-                "kwargs": {"channel": configuration.input_source, "length": length_cycles},
+                "kwargs": {"channel": configuration.input_source, "length": length_cycles, "flag": flag},
                 "retval": None})
         else:
             self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
                                    memory_input.byte_address,
                                    memory_input.nbytes)
 
-        # Set up the output
-        # If we're not going to command the DataMover, we don't need anything that follows
-        if not command_datamover:
-            return
-
-        if output_size_bytes is None:
-            if offset_bytes is not None:
-                raise ValueError(f"Use of an offset is not allowed when matching"
-                                f" stream size to destination size."
-                                f" (found offset {offset_bytes}).")
-
-            output_size_bytes = dst.nbytes
-            logger.debug(f"Inferring stream output size from destination ({output_size_bytes} bytes)")
-        elif np.issubdtype(type(output_size_bytes), int) or isinstance(output_size_bytes, (np.uint32, np.int32)):
-            if output_size_bytes <= 0:
-                raise ValueError(f"Received invalid output size: {output_size_bytes}")
-
-            if output_size_bytes == dst.nbytes and offset_bytes is not None:
-                # Is this redundant?
-                raise ValueError("Detected an output size chosen to fill a destination memory"
-                                "with a non-None offset. ")
-                        
-            if output_size_bytes > dst.nbytes:
-                raise ValueError(f"Stream output size ({output_size_bytes} bytes)"
-                                f" exceeds destination size ({dst.nbytes} bytes)")
-
-            logger.debug(f"Using provided stream output size of {output_size_bytes} bytes")
-        else:
-            raise ValueError(f"Received object of invalid type for"
-                            f" output_size_bytes: {type(output_size_bytes)}")
-
-        if offset_bytes is None:
-            offset_bytes = 0
-        elif np.issubdtype(type(offset_bytes), int) or isinstance(offset_bytes, (np.uint32, np.int32)):
-            if offset_bytes < 0:
-                raise ValueError(f"Received invalid offset: {offset_bytes}")
-            logger.debug(f"Using output offset of {offset_bytes} bytes")
-        elif isinstance(offset_bytes, self.sequencer().Register):
-            logger.debug(f"Using indeterminate stream offset {offset_bytes}")
-
-        self._command_datamover(configuration.output_datamover(), 
-                                dst.byte_address + offset_bytes,
-                                output_size_bytes)
 
     @requires_sequencer
-    def stream_direct(self, 
+    def capture_stream(self, 
+                        configuration: StreamConfiguration, 
+                        dst: WaveformMemory, 
+                        size: Union[int, Source, None] = None,
+                        offset: Union[int, Source, None] = None) -> None:
+        """
+        Use a stream processing module's DataMover to capture data from a stream
+        and write it into memory.
+
+        :param configuration: Stream configuration to use
+        :type configuration: :class:`StreamConfiguration`
+        :param dst: Data destination
+        :type dst: :class:`WaveformMemory`
+        :param size: Size of write in bytes. If `None`, it will 
+            default to the size of `dst`.
+        :type size: int, Register, DSP
+        :param offset: Offset within `dst` at which the stream will be written.
+        :type offset: int, Register, DSP
+        """
+
+        if size is None:
+            if offset is not None:
+                raise ValueError(f"Use of an offset is not allowed when matching"
+                                f" stream size to destination size."
+                                f" (found offset {offset}).")
+
+            size = dst.nbytes
+            logger.debug(f"Inferring stream output size from destination ({size} bytes)")
+        elif np.issubdtype(type(size), int) or isinstance(size, (np.uint32, np.int32)):
+            if size <= 0:
+                raise ValueError(f"Received invalid output size: {size}")
+
+            if size == dst.nbytes and offset is not None:
+                # Is this redundant?
+                raise ValueError("Detected an output size chosen to fill a destination memory"
+                                " with a non-None offset.")
+                        
+            if size > dst.nbytes:
+                raise ValueError(f"Stream output size ({size} bytes)"
+                                f" exceeds destination size ({dst.nbytes} bytes)")
+
+            logger.debug(f"Using provided stream output size of {size} bytes")
+        else:
+            raise ValueError(f"Received object of invalid type for"
+                            f" size: {type(size)}")
+
+        if offset is None:
+            offset_bytes = 0
+        elif np.issubdtype(type(offset), int) or isinstance(offset, (np.uint32, np.int32)):
+            if offset < 0:
+                raise ValueError(f"Received invalid offset: {offset}")
+            logger.debug(f"Using output offset of {offset} bytes")
+        elif isinstance(offset, (self.sequencer().Register, self.sequencer().DSP)):
+            logger.debug(f"Using indeterminate stream offset {offset}")
+
+        self._command_datamover(configuration.output_datamover(), 
+                                dst.byte_address + offset,
+                                size)
+
+    @requires_sequencer
+    def stream_fifo(self, 
                       src: Union[Channel, StreamConfiguration, WaveformMemory],
                       dst: WaveformMemory, 
                       length: float = None,
@@ -2415,19 +2407,7 @@ class Acadia:
         amount of time is chosen so as to fill the destination.
         """
         
-        if isinstance(src, StreamConfiguration):
-            if src.module != "fifo":
-                raise TypeError(f"The StreamConfiguration provided to"
-                                f" stream_direct must represent a"
-                                f" FIFO module (received"
-                                f" configuration for module type {src.module})")
-            configuration = src
-        elif isinstance(src, (Channel, str)):
-            configuration = self._request_stream_configuration(self.channel(src), "fifo")
-        elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
-            configuration = self._request_stream_configuration("memory", "fifo")
-        else:
-            raise TypeError(f"Unable to create stream with source {src}")
+        configuration = self._request_stream_configuration(src, "fifo")
 
         if length is None:
             length_cycles = 8 * dst.nbytes // self._firmware["stream_processing_path"]["width"]
@@ -2460,18 +2440,10 @@ class Acadia:
                      dst: WaveformMemory, 
                      length: float = None,
                      output_offset_bytes: Union[int, Source, None] = None,
-                     kernel: Union[np.ndarray, WaveformMemory, float, None] = None,
-                     preload: Union[tuple[int], None] = (0,0),
-                     write_mode: Literal["upper", "lower", "input", "none", None] = "upper", 
-                     last_only: bool = True, 
-                     reset_fifo: bool = False,
-                     accumulator_done: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
+                     kernel: Union[np.ndarray, WaveformMemory, float, None] = None) -> tuple[StreamConfiguration, WaveformMemory]:
         """
         Stream data from an input of the stream processing path, through
         a CMACC, and into memory.
-
-        This function calls :meth:`configure_cmacc`, and many arguments are 
-        passed in directly; see argument descriptions there.
 
         The amount of data accepted into the CMACC is controlled by the 
         ``length`` parameter. If provided, this must be a float representing
@@ -2530,38 +2502,22 @@ class Acadia:
         return configuration, kernel_memory
 
     @requires_sequencer
-    def configure_cmacc(self, 
-                        src: Union[Channel, str, StreamConfiguration, WaveformMemory],
-                        kernel: Union[np.ndarray, float, None] = None,
-                        kernel_pointer_load: bool = True,
-                        arm_preload: bool = True,
-                        accumulator_mode: Literal["none", "after_arm", "after_kernel_start"] = "none",
-                        latch_mode: Literal["none", "last", "kernel", "all"] = "none",
-                        stream_mode: Literal["none", "last", "kernel", "all"] = "none") -> tuple[StreamConfiguration, WaveformMemory]:
+    def assign_cmacc_kernel(self,
+                            configuration: StreamConfiguration,
+                            kernel: Union[np.ndarray, float, None, WaveformMemory] = None) -> WaveformMemory:
         """
-        Configure the CMACC.
-
-        The complex multiplier-accumulator (CMACC) accepts a stream of data,
-        multiplies each incoming sample by the corresponding value of a 
-        "kernel", and progressively sums all of the products ("accumulates") 
-        into a register (the "accumulator"). An output port on the CMACC can
-        be configured to write the value of the accumulator or a copy of the 
-        input stream into memory, and one can configure whether the entire stream
-        is written or exclusively the last value. The amount of data processed 
-        by the CMACC, its method of processing, and the amount of data written 
-        into memory are all independently variable and are described below.
+        Configure a CMACC to use kernel and allocate memory in the CMACC kernel 
+        memory if not already allocated.
         
-        
-        
-        The accumulation kernel to be used is controlled by the ``kernel`` parameter.  
+        The CMACC kernel pointer start and end register will be written so that 
+        the CMACC uses a kernel determined by the ``kernel`` parameter: 
         
         - If this is a numpy array, its shape information 
             is used in order to determine the size of the kernel. A new kernel 
             memory object is allocated and returned. 
             
         - If this is a WaveformMemory whose region is the kernel memory for the source Channel, 
-            no new kernel will be allocated, and the CMACC will be configured to use 
-            this previously-allocated kernel.
+            no new kernel will be allocated.
             
         - If this is a WaveformMemory whose region is not the kernel memory 
             for the source Channel, a new kernel will be allocated with a
@@ -2571,65 +2527,30 @@ class Acadia:
             to be allocated. 
             
         - If ``None``, a single-element kernel is newly allocated to allow for 
-            boxcar accumulation. In this case, note that ``length`` must be provided.
+            boxcar accumulation. 
 
-        The ``write_mode`` parameter controls which data is presented at the
-        output port of the CMACC, with the following options:
-
-        - "upper": The upper 32 bits of each quadrature in the accumulator are presented to the
-            output, and the lower 16 bits of each quadrature are discarded.
-
-        - "lower": The lower 32 bits of each quadrature in the accumulator are written to the
-            output, and the upper 16 bits of the accumulator value are discarded.
-
-        - "input": The input data is duplicated at the output (after the initial
-            factor-of-4 decimation). The accumulator still runs and its value is
-            accessible via the bus interface.
-
-        - "none" or ``None``: No data is written to the output. The accumulator 
-            still runs and its value is accessible via the bus interface.
-
-
-
-        When beginning a capture, the hardware does not adjust the value stored in the 
-        accumulator. This means that incoming samples will be accumulated on top of whatever
-        value was already there; however, by providing a value for ``preload``, a known value will
-        be loaded into the CMACC before beginning the capture. The format for ``preload`` is a tuple
-        of two ``int``s, corresponding to the values to be loaded into the real and imaginary parts of
-        the accumulator. 
-
-        :param src: The source of data to be accumulated by the CMACC
-        :type src: Channel or WaveformMemory
-        :param kernel: The accumulation kernel, or an object that specified its
-            size. If this is a numpy array, its values are ignored, and only its 
-            shape information is used in order to determine the size of the 
-            kernel allocated in kernel memory. If this is a float, this should be
-            the length in seconds of the kernel. If None, a single-element kernel
-            is allocated to allow for boxcar accumulation.
-        :type kernel: np.ndarray, float, None
+        :returns: The kernel assigned, which may or may not be newly allocated.
+        :rtype: WaveformMemory
         """
-        
-        if isinstance(src, StreamConfiguration):
-            if src.module != "cmacc":
+
+        if not isinstance(configuration, StreamConfiguration):
+            raise TypeError(f"CMACC stream must be provided;"
+                            f" received object of type {type(configuration)}.")
+
+        if configuration.module != "cmacc":
                 raise TypeError(f"The StreamConfiguration provided to"
                                 f" configure_cmacc must represent a"
                                 f" CMACC module (received configuration for module"
-                                f" type {src.module})")
-            configuration = src
-        elif isinstance(src, (Channel, str)):
-            configuration = self._request_stream_configuration(self.channel(src), "cmacc")
-        elif isinstance(src, WaveformMemory) or isinstance(type(src), ManagedResource):
-            configuration = self._request_stream_configuration("memory", "cmacc")
-        else:
-            raise TypeError(f"Unable to create stream configuration with source {src}")
-        
+                                f" type {configuration.module})")
+
         kernel_type = self.CMACCKernelArray[configuration.module_resource._resource_id]
-        
+
         # Determine whether we need to allocate a new kernel or not
         if isinstance(kernel, WaveformMemory) and isinstance(kernel._resource, kernel_type):
             # We already have a kernel and we're good to go, don't allocate a new one
             kernel_length_elements = kernel.size
-            logger.debug(f"Using already-allocated kernel WaveformMemory of length {kernel_length_elements} samples")
+            logger.debug(f"Using already-allocated kernel WaveformMemory of length"
+                        f" {kernel_length_elements} samples")
 
         else:
             # We don't already have a kernel, so we need to allocate one
@@ -2637,17 +2558,20 @@ class Acadia:
             if kernel is None:
                 # Boxcar kernel
                 kernel_length_elements = 1
+                logger.debug(f"Allocated boxcar kernel (1 sample)")
             elif np.issubdtype(type(kernel), float):
                 # Use a length in seconds given by kernel
                 kernel_length_elements = self.seconds_to_cycles(kernel)
+                logger.debug(f"Allocated kernel for {kernel} seconds"
+                             f" ({kernel_length_elements} samples)")
             elif isinstance(kernel, (np.ndarray, WaveformMemory)):
                 # Allocate enough space to store the numpy array (after converting to samples)
                 kernel_length_elements = kernel.size
+                logger.debug(f"Allocated kernel to match existing array with"
+                             f" {kernel_length_elements} samples")
             else:
-                raise TypeError(f"Invalid type for specifying CMACC kernel (received {type(kernel)})")
-        
-            logger.debug(f"Allocating kernel WaveformMemory of length"
-                        f" {kernel_length_elements} samples")
+                raise TypeError(f"Invalid type for specifying CMACC kernel"
+                                f" (received {type(kernel)})")
 
             kernel = WaveformMemory(shape=kernel_length_elements, 
                                     dtype="<i2", 
@@ -2659,54 +2583,153 @@ class Acadia:
         kernel_index = kernel._resource._resource_id // (2*kernel.itemsize) 
 
         # Set the kernel start and end addresses
-        # The kernel uses one 32-bit element per cycle
         kernel_reg = kernel_index | ((kernel_index + kernel_length_elements - 1) << 16)
         kernel_reg &= 0xFFFFFFFF
-        self.sequencer().bus_write(address=registers+3, data=kernel_reg)
+        self.sequencer().bus_write(address=registers+1, data=kernel_reg)
+
+        return kernel
+
+    @requires_sequencer
+    def assign_cmacc_preload(self, 
+                            configuration: StreamConfiguration, 
+                            value: Union[int,tuple[int]] = 0) -> None:
+        """
+        Load a value into the preload register of the given CMACC.
+
+        :param configuration: Stream configuration for the CMACC
+        :type configuration: StreamConfiguration
+        :param value: Value to write to the preload register(s). 
+            Real integer or tuple of (real, imag)
+        :type value: int or tuple of int
+        """
+        if configuration.module != "cmacc":
+            raise TypeError(f"The StreamConfiguration provided to"
+                            f" assign_cmacc_preload must represent a"
+                            f" CMACC module (received configuration for module"
+                            f" type {configuration.module})")
+
+        if isinstance(value, int):
+            value = (value, 0)
+        
+        module_name = f"module{configuration.input_switch_slave}_registers"    
+        registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
+        self.sequencer().bus_write(address=registers+4, data=value[0])
+        self.sequencer().bus_write(address=registers+5, data=value[1])
+
+
+    @requires_sequencer
+    def configure_cmacc(self, 
+                        src: Union[Channel, str, StreamConfiguration, WaveformMemory],
+                        kernel_pointer_load: bool = True,
+                        arm_preload: bool = True,
+                        accumulator_update_mode: Literal["none", "after_arm", "after_kernel_start"] = "none",
+                        latch_update_mode: Literal["none", "last", "kernel", "all"] = "none",
+                        stream_update_mode: Literal["none", "last", "kernel", "all"] = "none",
+                        use_upper_data: bool = False,
+                        reset_stream_fifo: bool = False,
+                        reset_module: bool = False) -> StreamConfiguration:
+        """
+        Configure the CMACC by writing to its control register. 
+        
+        See the Acadia manual for detailed descriptions of the functionality 
+        underlying each of the bitfields in the control register.
+
+        :param src: The source of data to be accumulated by the CMACC, which 
+            may be a channel / a string specifying a channel, a WaveformMemory 
+            living in memory
+        :type src: A `str` specifying a channel, a :class:`Channel`, 
+            a :class:`WaveformMemory`, or an existing 
+            :class:`StreamConfiguration`
+        :param kernel_pointer_load: If `True`, the kernel pointer is assigned 
+            to the value in the kernel pointer start address register
+        :type kernel_pointer_load: bool
+        :param arm_preload: If `True`, the preload logic is armed
+        :type arm_preload: bool
+        :param accumulator_update_mode: Accumulator update mode; see manual 
+            for details.
+        :type accumulator_update_mode: str
+        :param latch_update_mode: Latch update mode; see manual for details.
+        :type latch_update_mode: str
+        :param stream_update_mode: Stream update mode; see manual for details.
+        :type stream_update_mode: str
+        :param use_upper_data: Data precision select; see manual for details.
+        :type use_upper_data: bool
+        :param reset_stream_fifo: If `True`, the FIFO that buffers the output
+            stream will be reset
+        :type reset_stream_fifo: bool
+        :param reset_module: If `True`, the CMACC internal logic will be reset
+        :type reset_module: bool
+
+        :return: The stream configuration used
+        :rtype: :class:`StreamConfiguration`
+        """
+        
+        configuration = self._request_stream_configuration(src, "cmacc")
+        registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
             
         control_reg = 0
 
-        # Load the kernel pointer from its buffer register
-        control_reg |= 1 << 0
-        
-        if accumulator_done:
-            control_reg |= 1 << 18
-            
-        if write_mode == "upper":
-            control_reg |= 1 << 21
-        elif write_mode == "lower":
-            control_reg |= 2 << 21
-        elif write_mode == "input":
-            control_reg |= 3 << 21
-        elif write_mode is None or write_mode == "none":
+        if accumulator_update_mode == "none":
             pass
+        elif accumulator_update_mode == "after_arm":
+            control_reg |= (1 << 18)
+        elif accumulator_update_mode == "after_kernel_start":
+            control_reg |= (2 << 18)
         else:
-            raise ValueError(f"Unexpected value for write_mode: {write_mode}")
-        
-        if last_only:
-            control_reg |= 1 << 23
+            raise ValueError(f"Invalid CMACC accumulator update mode {accumulator_update_mode}")
+
+        if latch_update_mode == "none":
+            pass
+        elif latch_update_mode == "last":
+            control_reg |= (1 << 20)
+        elif latch_update_mode == "kernel":
+            control_reg |= (2 << 20)
+        elif latch_update_mode == "all":
+            control_reg |= (3 << 20)
+        else:
+            raise ValueError(f"Invalid CMACC latch update mode {latch_update_mode}")
+
+        if stream_update_mode == "none":
+            pass
+        elif stream_update_mode == "last":
+            control_reg |= (1 << 27)
+        elif stream_update_mode == "kernel":
+            control_reg |= (2 << 27)
+        elif stream_update_mode == "all":
+            control_reg |= (3 << 20)
+        else:
+            raise ValueError(f"Invalid CMACC stream update mode {stream_update_mode}")
+
+        if use_upper_data:
+            control_reg |= (1 << 25)
+
+        if arm_preload:
+            control_reg |= (1 << 26)
+
+        if kernel_pointer_load:
+            control_reg |= (1 << 16)
+
+        if reset_stream_fifo:
+            control_reg |= (1 << 30)
+
+        if reset_module:
+            control_reg |= (1 << 31)
             
-        if reset_fifo:
-            control_reg |= 1 << 24
-            
-        logger.debug(f"Configured CMACC for kernel at address 0x{kernel_index:04X}"
-                     f" of length {kernel_length_elements} and set control register to"
+        logger.debug(f"Configured CMACC using control register value of"
                      f" 0x{control_reg:08X}")
         self.sequencer().bus_write(address=registers+2, data=control_reg)
 
-        return configuration, kernel
+        return configuration
         
     
     @requires_sequencer
-    def cmacc_done(self, configuration: StreamConfiguration):
+    def cmacc_latch_valid(self, configuration: StreamConfiguration):
         """
-        Create a condition to check whether the CMACC accumulation for a given
-        stream configuration is done.
+        Create a condition to check whether the CMACC latch value is valid.
 
         :param configuration: Configuration whose CMACC should be checked
         :type configuration: :class:`StreamConfiguration`
-        :return: A condition for checking whether the CMACC for the given
-            configuration has completed its accumulation
+        :return: A condition for checking whether the CMACC latch is valid.
         """
         if not isinstance(configuration.module_resource, 
                           self._stream_module_resources["cmacc"]):
@@ -2718,8 +2741,8 @@ class Acadia:
         module_name = f"module{configuration.input_switch_slave}_registers"
         registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
         
-        return self.sequencer().bus_read(registers+2, 
-                                         latency=self._bus_latency(module_name)) & (1 << 18)
+        return self.sequencer().bus_read(registers, 
+                                         latency=self._bus_latency(module_name)) & (1 << 22)
         
     @requires_sequencer
     def cmacc_get_quadrant(self, 
@@ -2738,14 +2761,14 @@ class Acadia:
         """
         
         if wait_for_completion:
-            with self.sequencer().repeat_until(self.cmacc_done(configuration)):
+            with self.sequencer().repeat_until(self.cmacc_latch_valid(configuration)):
                 pass
             
         module_name = f"module{configuration.input_switch_slave}_registers"    
         registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
         latency = 0 if wait_for_completion else self._bus_latency(module_name)
-        value = self.sequencer().bus_read(registers+2, latency=latency)
-        return value & ((1 << 20) | (1 << 19))
+        value = self.sequencer().bus_read(registers, latency=latency)
+        return value & ((1 << 24) | (1 << 23))
     
     @requires_sequencer
     def cmacc_get_quadrature(self, 
@@ -2753,40 +2776,17 @@ class Acadia:
                            wait_for_completion: bool = True,
                            imag=False):
         """
-        Get a quadrature of the CMACC value. By default, we'll wait for the 
-        CMACC value to be available and then return the quadrant information
-        in a way which optimizes latency (because the bus address for 
-        checking completion is the same for checking quadrant, we don't need
-        to incur the bus latency overhead a second time). Otherwise, a regular
-        bus read will be performed with all typical latency overheads.
+        Get a quadrature of the CMACC latch. 
         """
         
         if wait_for_completion:
-            with self.sequencer().repeat_until(self.cmacc_done(configuration)):
+            with self.sequencer().repeat_until(self.cmacc_latch_valid(configuration)):
                 pass
             
         module_name = f"module{configuration.input_switch_slave}_registers"    
         registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
         latency = 0 if wait_for_completion else self._bus_latency(module_name)
-        return self.sequencer().bus_read(registers+imag, latency=latency)
-    
-    @requires_sequencer
-    def cmacc_load(self, 
-                    configuration: StreamConfiguration, 
-                    value: tuple[int] = (0,0)):
-        """
-        Load a value into the accumulator of the given CMACC.
-        """
-        if configuration.module != "cmacc":
-            raise TypeError(f"The StreamConfiguration provided to"
-                            f" load_cmacc must represent a"
-                            f" CMACC module (received configuration for module"
-                            f" type {configuration.module})")
-        
-        module_name = f"module{configuration.input_switch_slave}_registers"    
-        registers = self._firmware.sequencer_bus_decoder[module_name].address().value()
-        self.sequencer().bus_write(address=registers, data=value[0])
-        self.sequencer().bus_write(address=registers+1, data=value[1])
+        return self.sequencer().bus_read(registers+2+imag, latency=latency)
 
         
     @DMASynchronizer.synchronized(DMASynchronizer.BARRIER, "channel_synchronizer")
@@ -3702,7 +3702,7 @@ class Acadia:
         return latency
     
     def _request_stream_configuration(self, 
-                                      input_source: Union[Channel, str], 
+                                      input_source: Union[Channel, str, WaveformMemory, StreamConfiguration], 
                                       module: str) -> StreamConfiguration:
         """
         Request configuration parameters for a stream. Streams are uniquely 
@@ -3717,10 +3717,31 @@ class Acadia:
             connected to the input switch. If a string, it is understood to
             specify the kind of input to request.
         :type input_source: :class:`Channel` or str
-        :param module: The kind of stream processing module to use. Must be one
-            of "adder", "dsp", or "memory".
+        :param module: The kind of stream processing module to use.".
         :type module: str
         """
+        if isinstance(input_source, StreamConfiguration):
+            if input_source.module != module:
+                raise ValueError(f"Requested a StreamConfiguration for a"
+                                f" {module} module but provided a source"
+                                f" StreamConfiguration with module {input_source.module}")
+            return input_source
+
+        elif isinstance(input_source, WaveformMemory):
+            input_source = "memory"
+
+        elif isinstance(input_source, str):
+            # Try to convert the string to a channel for use below
+            try:
+                input_source = self.channel(input_source)
+            except:
+                pass
+        elif isinstance(input_source, Channel):
+            pass
+        else:
+            raise TypeError(f"Requested stream configuration for input"
+                            f" source with invalid type {type(input_source)}")
+
         logger.debug(f"Stream requested for input {input_source} with module type {module}")
         for cfg in self._stream_configurations:
             if cfg.input_source == input_source and cfg.module == module:
