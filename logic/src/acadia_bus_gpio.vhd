@@ -4,12 +4,13 @@
 -- 
 -- Create Date: 10/27/2024 03:36:24 PM
 -- Design Name: acadia
--- Module Name: acadia_clocking - rtl
+-- Module Name: acadia_bus_gpio - rtl
 -- Project Name: acadia
 -- Target Devices: ZCU216
 -- Tool Versions: 
 -- Description: 
---    Module for configuring and routing clocks.
+--    A module with a standard GPIO interface able to be controlled from 
+--    the sequencer's bus.
 -- 
 -- Dependencies: 
 -- 

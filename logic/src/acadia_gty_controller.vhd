@@ -777,6 +777,21 @@ begin
 
         MGT128_txusrclk2 <= MGT128_txusrclk2_int;
         MGT128_rxusrclk2 <= MGT128_rxusrclk2_int;
+
+        -- Process the data coming out of the GTY interface
+        -- Message format:
+        --   Bits 7-0: Comma
+        --       K28.0 - no data valid
+        --       K28.1 - channel 0 valid, channel 1 invalid
+        --       K28.2 - channel 0 invalid, channel 1 valid
+        --       K28.3 - channel 0 valid, channel 1 valid
+        --   Bits 23-8: Channel 0 Data
+        --   Bits 27-24: Channel 1 Data
+        --   Bits 31-28: Reserved
+
+        -- All other K characters except K28.4/5/6 have 7 as their second bits, 
+        -- so assuming that they never get sent, we can just check the lower bits for
+        -- equality with 0/1/2/3 in order to set the valid signals
     
 
 end rtl;

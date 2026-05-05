@@ -265,21 +265,21 @@ begin
         -- both are zero in order to have a single-sample kernel
         wait until rising_edge(clk);
         registers_addr <= x"00000001";
-        registers_mosi <= x"00000000";
+        registers_mosi <= x"00030000";
         registers_we   <= '1';
         registers_en   <= '1';
         
         wait until rising_edge(clk);
 
         -- Control register
-        -- accumulator_update_mode (bits 19-18) = 01 (accumulate after arm), 
-        -- accumulator_latch_write (bits 21-20) = 01 (write after last input), 
-        -- stream_port_write_mode (bits 28-27) = 01 (write after last input), 
-        -- arm_preload (bit 26) = 1, 
+        -- accumulator_update_mode (bits 19-18) = 10 (accumulate after first kernel point), 
+        -- accumulator_latch_write (bits 21-20) = 01 (latch after last input), 
+        -- stream_port_write_mode (bits 28-27) = 10 (write after last kernel point), 
+        -- arm_preload (bit 26) = 0, 
         -- kernel_pointer_load (bit 16) = 1
-        -- (1 << 18) | (1 << 20) | (1 << 27) | (1 << 26) | (1 << 16) = 0x0C150000
+        -- (2 << 18) | (1 << 20) | (2 << 27) | (0 << 26) | (1 << 16) = 0x0C150000
         registers_addr <= x"00000000";
-        registers_mosi <= x"0C150000";
+        registers_mosi <= x"10190000";
         registers_we   <= '1';
         registers_en   <= '1';
 
