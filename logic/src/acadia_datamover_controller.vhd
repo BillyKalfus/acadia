@@ -143,19 +143,19 @@ architecture rtl of acadia_datamover_controller is
     ATTRIBUTE X_INTERFACE_INFO of master_bus_we  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus WE";
     ATTRIBUTE X_INTERFACE_INFO of master_bus_en  : SIGNAL is "xilinx.com:interface:bram_rtl:1.0 master_bus EN";
 
-    signal rst        : std_logic;
+    signal rst             : std_logic;
             
-    signal dispatch_state               : std_logic_vector(2 downto 0); 
-    signal address_lo           : std_logic_vector(31 downto 0);
-    signal address_hi           : std_logic_vector(AXI_ADDRESS_WIDTH-32-1 downto 0);
+    signal dispatch_state  : std_logic_vector(2 downto 0); 
+    signal address_lo      : std_logic_vector(31 downto 0);
+    signal address_hi      : std_logic_vector(AXI_ADDRESS_WIDTH-32-1 downto 0);
 
-    signal cmd_addr                  : std_logic_vector(AXI_ADDRESS_WIDTH-1 downto 0);
-    signal cmd_btt                   : std_logic_vector(22 downto 0);
-    signal cmd_tag                   : std_logic_vector(3 downto 0);
-    signal cmd_user                  : std_logic_vector(3 downto 0);
-    signal cmd_cache                 : std_logic_vector(3 downto 0);
-    signal cmd_eof                   : std_logic;
-    signal cmd_type                  : std_logic;
+    signal cmd_addr        : std_logic_vector(AXI_ADDRESS_WIDTH-1 downto 0);
+    signal cmd_btt         : std_logic_vector(22 downto 0);
+    signal cmd_tag         : std_logic_vector(3 downto 0);
+    signal cmd_user        : std_logic_vector(3 downto 0);
+    signal cmd_cache       : std_logic_vector(3 downto 0);
+    signal cmd_eof         : std_logic;
+    signal cmd_type        : std_logic;
 
     -- The big command size is chosen to be a power of 2 so that we only need to do arithmetic on 
     -- some of the upper bits of the size register. If the big command size is written as (1 << x), 
@@ -280,7 +280,7 @@ begin
                     cmd_tag   <= master_bus_mosi(5 downto 2);
                     cmd_eof   <= master_bus_mosi(1);
                     cmd_type  <= master_bus_mosi(0);
-                elsif(master_bus_addr(1 downto 0) = "011") then
+                elsif(master_bus_addr(2 downto 0) = "011") then
                     rst <= '1';
                 end if;
             end if;

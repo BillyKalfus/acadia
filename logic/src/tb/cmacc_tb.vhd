@@ -127,7 +127,7 @@ begin
             for i in 0 to 7 loop
                 data_in_tdata(i*16 + 15 downto i*16) <= std_logic_vector(counter + to_unsigned(i, counter'length));
             end loop;
-            counter := counter + 1;
+            counter := counter + 8;
         end if;
     end process data_in_proc;
     

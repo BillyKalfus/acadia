@@ -954,11 +954,6 @@ class Acadia:
         self._psgpio_mem = self._attach_memory(0xFF0A0000, 0x400, dtype=np.uint32)
             
         # Configure and connect to the sysfs interface for various GPIO        
-        self._sequencer_gpio = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["sequencer_run"]
-        PSGPIO.sysfs_export(self._sequencer_gpio)
-        PSGPIO.sysfs_set_direction(self._sequencer_gpio, "out")
-        PSGPIO.sysfs_write(self._sequencer_gpio, 0)
-        
         self._sequencer_nrst = self._firmware["ps_gpio"]["sysfs_offset"] + self._firmware["ps_gpio"]["sequencer_nrst"]
         PSGPIO.sysfs_export(self._sequencer_nrst)
         PSGPIO.sysfs_set_direction(self._sequencer_nrst, "out")
@@ -1827,12 +1822,13 @@ class Acadia:
         """
         Allocate a waveform. This function allows for a few different signatures; 
         the first argument is always a :class:`Channel` object. 
-        argument ``length`` determines the required signature:
+
+        The argument ``length`` determines the size of the allocated memory:
 
         - If a ``float``, this should contain the length
             of the waveform in seconds. The corresponding amount of memory will
             be allocated, and potentially reduced by a decimation factor 
-            (if provided). Decimation is not allowed for DAC channels.
+            (if provided). Decimation is allowed for ADC channels but not for DAC channels.
 
         - If a numpy array with a complex or float dtype, the waveform is 
             allocated so that the data in the array could be stored after 
@@ -1843,7 +1839,7 @@ class Acadia:
             contain the sample data that will eventually be stored in the 
             waveform. The last dimension of the array must be of length 2.
             Note that this does not store the sample data in any way; it just
-            uses it to determine the shape of aray must be allocated. 
+            uses it to determine the shape of array that must be allocated. 
             Decimation may not be provided.
 
         - If ``None``, then a single sample for a decimated waveform is created.
@@ -2002,49 +1998,81 @@ class Acadia:
                         f" {shape} samples")
 
         return WaveformMemory(shape=shape, dtype=dtype, resource_allocator=region)
+
+    def _convert_length(self, length: Union[float, Symbol, Operation]) -> Union[int, Symbol, Operation]:
+        """
+        Convert a length parameter into a number of cycles. 
+
+        When a `float` is provided, this is the number of seconds for the dwell.
+        When a sequencer source is provided, no conversion is performed; it is 
+        assumed that the source contains the length in units of cycles.
+        """
+        
+        if np.issubdtype(type(length), float):
+            return self.seconds_to_cycles(length)
+
+        if isinstance(length, self.sequencer().Register):
+            # Do nothing, registers can be passed directly into the synchronizer
+            logger.debug(f"Using indeterminate length on channel {channel} from {length}")
+            return length
+
+        if isinstance(length, self.sequencer().DSP):
+            # Need to be more cautious, but is acceptable
+            logger.warning(f"Using indeterminate length from {length} on channel {channel};"
+                            f" ensure that the DSP is not automatically updating,"
+                            f" as this can lead undefined behavior when the DSP"
+                            f" value is reused during alignment.")
+            return length
+
+        if isinstance(length, Symbol):
+            if np.issubdtype(length.value_type(), float):
+                return Operation(Acadia.seconds_to_cycles, self, length)
+
+            if np.issubdtype(length.value_type(), int) or length.value_type() in [np.int32, np.uint32]:
+                return length
+
+            raise TypeError(f"Symbolic length must use either"
+                            f" int or float for a value type;"
+                            f" found {length.value_type()}")
+
+        if isinstance(length, Operation):
+            logger.debug(f"Found length derived from an Operation;"
+                        f" assuming that the result is in units of cycles.")
+            return length
+        
+        raise TypeError(f"Invalid type for length conversion: {type(length)}")
         
     @requires_sequencer
-    def schedule_waveform(self, 
+    def schedule_dac_waveform(self, 
                         waveform: WaveformMemory, 
-                        channel: Union[Channel, str, None] = None,
                         flag: bool = False,
                         stretch_length: Union[float, Symbol, Operation] = None,
                         stretch_length_is_minus_one: bool = False):
         """
-        Schedule a waveform on a channel's DMA.
+        Schedule a waveform on a DAC channel's DMA.
 
-        For WaveformMemory objects allocated in a DAC channel's waveform memory,
-        the channel to stream on may be inferred. However, because memory for
-        ADC capture isn't bonded with a particular channel, the DMA to command
-        cannot be inferred. Therefore, the channel must be specified explicitly.
+        The channel to stream is inferred from the provided WaveformMemory object.
+
+        The waveform can be optionally "stretched". Stretching refers to playing the first half of a waveform,
+        then repeating only the sample in the middle for some length of time,
+        then playing the second half. This creates a "flat top" on the
+        signal. When this is not ``None``, three DMA commands are generated,
+        corresponding to the sequence described above. 
+        
+        In reality, the DMA doesn't repeat the sample in the middle, it 
+        parks at the memory address in the middle of the waveform. Because the 
+        waveform memory issues multiple samples per cycle, it's actually a 
+        sequence of a few samples that are repeated. It's assumed that the 
+        waveform memory has been correctly populated so as to produce the 
+        correct behavior.
         
         :param waveform: Signal to stream
         :type waveform: :class:`WaveformMemory`
-        :param channel: Channel to stream
-        :type channel: :class:`Channel`
         :param flag: The value of the DMA flag output for the DMA command(s) 
             generated.
         :type flag: bool
-        :param stretch_length: The amount by which to "stretch" the
-            waveform. Stretching refers to playing the first half of a waveform,
-            then repeating only the sample in the middle for some length of time,
-            then playing the second half. This creates a "flat top" on the
-            signal. When this is not ``None``, three DMA commands are generated,
-            corresponding to the sequence described above. 
-            
-            In reality, the DMA doesn't repeat the sample in the middle, it 
-            parks at the memory address in the middle of the waveform. Because the 
-            waveform memory issues multiple samples per cycle, it is in fact a 
-            sequence of a few samples that are repeated. It is assumed that the 
-            waveform memory has been correctly populated so as to produce the 
-            correct behavior.
-
-            When a `float` is provided, this is the number of seconds by which to
-            stretch the waveform (more accurately, this corresponds to the number
-            of stretch cycles added). When a sequencer source is provided, no 
-            conversion is performed; it is assumed that the source contains the 
-            number of stretch cycles.
-        :type stretch_length: float, Register, DSP
+        :param stretch_length: Length of time added to waveform; see :meth:`_convert_length` for details.
+        :type stretch_length: float, Symbol, Operation, Register, DSP
         :param stretch_length_is_minus_one: If ``True``, the provided length is understood 
             to be one less than the actual length to be included in the command. 
         :type stretch_length_is_minus_one: bool
@@ -2054,32 +2082,19 @@ class Acadia:
 
         if waveform._resource is None:
             raise ValueError("Cannot schedule waveform without resource.")
+       
+        if not isinstance(waveform._resource, tuple(self.DACArray)):
+            raise TypeError("Waveforms to be scheduled for DAC channels must be located in DAC waveform memory.")
 
-        if isinstance(channel, str):
-            channel = self.channel(channel)
-
+        # Extract the channel from the waveform region
+        channel = None
+        for idx,t in enumerate(self.DACArray):
+            if isinstance(waveform._resource, t):
+                channel = self.DAC(idx)
+                break
+        
         if channel is None:
-            # See if we can extract the channel from the waveform region
-            if not isinstance(waveform._resource, tuple(self.DACArray)):
-                raise TypeError("Waveforms to be scheduled for DAC channels must be located in DAC waveform memory.")
-
-            channel = None
-            for idx,t in enumerate(self.DACArray):
-                if isinstance(waveform._resource, t):
-                    channel = self.DAC(idx)
-                    break
-            
-            if channel is None:
-                raise TypeError(f"Something weird failed")
-
-        elif isinstance(channel, Channel):
-            # If we have a DAC channel, ensure that the waveform we're commanding
-            # is in the correct region
-            if channel.is_dac and not isinstance(waveform._resource, self.DACArray[channel.num()]):
-                raise TypeError(f"Channel {channel} provided to schedule_waveform for a waveform"
-                                f" located in {type(waveform._resource)}")
-        else:
-            raise TypeError(f"Received invalid type for channel: {type(channel)}")
+            raise TypeError(f"Unable to extract DAC channel from DACArray instance")
 
         if not isinstance(stretch_length_is_minus_one, bool):
             raise TypeError(f"In schedule_waveform, stretch_length_is_minus_one must be a bool"
@@ -2107,32 +2122,7 @@ class Acadia:
 
             return
 
-        if np.issubdtype(type(stretch_length), float):
-            stretch_length = self.seconds_to_cycles(stretch_length)
-        elif isinstance(stretch_length, self.sequencer().Register):
-            # Do nothing, registers can be passed directly into the synchronizer
-            logger.debug(f"Adding indeterminate stretch length on channel {channel} from {stretch_length}")
-        elif isinstance(stretch_length, self.sequencer().DSP):
-            # Need to be more cautious, but is acceptable
-            logger.warning(f"Scheduling stretch on channel {channel} from {length};"
-                            f" ensure that the DSP is not automatically updating,"
-                            f" as this can lead undefined behavior when the DSP"
-                            f" value is reused during alignment.")
-        elif isinstance(stretch_length, Symbol):
-            if np.issubdtype(stretch_length.value_type(), float):
-                stretch_length = Operation(Acadia.seconds_to_cycles, self, stretch_length)
-            elif np.issubdtype(stretch_length.value_type(), int) or stretch_length.value_type() in [np.int32, np.uint32]:
-                pass # We can just leave this as-is
-            else:
-                raise TypeError(f"Symbolic stretch length must use either"
-                                f" int or float for a value type;"
-                                f" found {stretch_length.value_type()}")
-        elif isinstance(stretch_length, Operation):
-            logger.debug(f"Found stretch length derived from an Operation;"
-                        f" assuming that the result is in units of cycles.")
-            # No further action required
-        else:
-            raise TypeError(f"Invalid type for stretch length: {type(stretch_length)}")
+        stretch_length_cycles = self._convert_length(stretch_length)
 
         self.channel_synchronizer.add({
             "function": DMASynchronizer.ARBITRARY, 
@@ -2151,7 +2141,7 @@ class Acadia:
             "args": (), 
             "kwargs": {
                 "channel": channel, 
-                "length": stretch_length,
+                "length": stretch_length_cycles,
                 "length_is_minus_one": stretch_length_is_minus_one,
                 "flag": flag},
             "retval": None})
@@ -2177,7 +2167,8 @@ class Acadia:
         logger.debug(f"Scheduled stretched waveform on channel"
                      f" {channel} with first arbitrary part lasting"
                      f" {length_cycles // 2} cycles, a stretch length of"
-                     f" {stretch_length}, and a second arbitrary part lasting"
+                     f" {stretch_length} ({stretch_length_cycles} cycles),"
+                     f" and a second arbitrary part lasting"
                      f" {(length_cycles - 1) // 2} cycles. Flag {flag}")
 
     @requires_sequencer
@@ -2205,52 +2196,24 @@ class Acadia:
             "retval": None})
 
     @requires_sequencer
-    def dwell(self,
-                channel: Union[Channel, str, None] = None,
-                length: Union[float, Symbol, Operation] = None,
-                length_is_minus_one: bool = False,
-                flag: bool = False) -> None:
+    def schedule_dwell(self,
+                        channel: Union[Channel, str, None] = None,
+                        length: Union[float, Symbol, Operation] = None,
+                        length_is_minus_one: bool = False,
+                        flag: bool = False) -> None:
         """
         Schedule a dwell on a channel's DMA.
 
         :param channel: Channel to stream
         :type channel: :class:`Channel`
-        :param length: The length of the dwell.
-            When a `float` is provided, this is the number of seconds for the dwell.
-            When a sequencer source is provided, no conversion is performed; it is 
-            assumed that the source contains the length in units of cycles.
-        :type length: float, Register, DSP
+        :param length: Length of dwell; see :meth:`_convert_length` for details.
+        :type length: float, Symbol, Operation, Register, DSP
         :param length_is_minus_one: If ``True``, the provided length is understood 
             to be one less than the actual length to be included in the command. 
         :type length_is_minus_one: bool
         """
 
-        if np.issubdtype(type(length), float):
-            length = self.seconds_to_cycles(length)
-        elif isinstance(length, self.sequencer().Register):
-            # Do nothing, registers can be passed directly into the synchronizer
-            logger.debug(f"Scheduling dwell on channel {channel} from {length}")
-        elif isinstance(length, self.sequencer().DSP):
-            # Need to be more cautious, but is acceptable
-            logger.warning(f"Scheduling dwell on channel {channel} from {length};"
-                            f" ensure that the DSP is not automatically updating,"
-                            f" as this can lead undefined behavior when the DSP"
-                            f" value is reused during alignment.")
-        elif isinstance(length, Symbol):
-            if np.issubdtype(length.value_type(), float):
-                length = Operation(Acadia.seconds_to_cycles, self, length)
-            elif np.issubdtype(length.value_type(), int) or length.value_type() in [np.uint32, np.int32]:
-                pass # We can just leave this as-is
-            else:
-                raise TypeError(f"Symbolic length must use either"
-                                f" int or float for a value type;"
-                                f" found {length.value_type()}")
-        elif isinstance(length, Operation):
-            logger.debug(f"Found length derived from an Operation;"
-                        f" assuming that the result is in units of cycles.")
-            # No further action required
-        else:
-            raise TypeError(f"Invalid type for length: {type(length)}")
+        length_cycles = self._convert_length(length)
 
         self.channel_synchronizer.add({
             "function": DMASynchronizer.DWELL, 
@@ -2258,29 +2221,70 @@ class Acadia:
             "args": (), 
             "kwargs": {
                 "channel": self.channel(channel), 
-                "length": length,
+                "length": length_cycles,
                 "length_is_minus_one": length_is_minus_one,
                 "flag": flag},
             "retval": None})
         
     @requires_sequencer
-    def stream(self, 
-               configuration: StreamConfiguration, 
-               dst: WaveformMemory, 
-               memory_input = None,
-               length_cycles: Union[int, None] = None,
-               flag: bool = False) -> None:
+    def schedule_adc_stream(self, 
+                            configuration_or_channel: Union[StreamConfiguration, Channel], 
+                            length: Union[float, Symbol, Operation],
+                            length_is_minus_one: bool = False,
+                            flag: bool = False) -> None:
         """
-        Stream data into the stream processing path. 
+        Stream data from an ADC into a module in the stream processing path. 
 
         :param configuration: Stream configuration to use
         :type configuration: :class:`StreamConfiguration`
-        :param dst: Data destination
-        :type dst: :class:`WaveformMemory`
-        :param memory_input: The input for memory-to-memory streams
-        :type memory_input: :class:`WaveformMemory`
-        :param length_cycles: Length of stream in cycles.
-        :type length_cycles: int
+        :param length: Length of stream; see :meth:`_convert_length` for details.
+        :type length: float, Symbol, Operation, Register, DSP
+        :param length_is_minus_one: If ``True``, the provided length is understood 
+            to be one less than the actual length to be included in the command. 
+        :type length_is_minus_one: bool
+        :param flag: The flag signal for the DMA stream
+        """
+
+        # Validate parameters
+        if isinstance(configuration_or_channel, StreamConfiguration):
+            if not isinstance(configuration_or_channel.input_source, Channel):
+                raise TypeError(f"Must use a StreamConfiguration with an ADC channel input;"
+                                f" received {configuration_or_channel.input_source}")
+
+            channel = configuration_or_channel
+
+        elif isinstance(configuration_or_channel, Channel):
+            channel = configuration_or_channel
+
+        else:
+            raise TypeError(f"Received invalid type for ADC stream source"
+                            f" (received type {type(configuration_or_channel)})")
+
+        length_cycles = self._convert_length(length)
+       
+        self.channel_synchronizer.add({
+            "function": DMASynchronizer.CONSTANT_CONTINUED, 
+            "self": self, 
+            "args": (), 
+            "kwargs": {
+                "channel": channel, 
+                "length": length_cycles, 
+                "length_is_minus_one": length_is_minus_one,
+                "flag": flag},
+            "retval": None})
+
+    @requires_sequencer
+    def stream_memory(self, 
+                        configuration: Union[StreamConfiguration, Channel], 
+                        input: Any) -> None:
+        """
+        Stream data from memory into a module in the stream processing path. 
+
+        :param configuration: Stream configuration to use
+        :type configuration: :class:`StreamConfiguration`
+        :param input: The memory to be streamed as the input to the stream 
+            processing path
+        :type input: :class:`WaveformMemory`
         """
 
         # Validate parameters
@@ -2293,53 +2297,20 @@ class Acadia:
                 raise TypeError(f"Cannot provide a memory input when using stream"
                                 " configurations with Channel inputs")
 
-        logger.debug(f"Creating stream with configuration {configuration}")
-
-        if not isinstance(dst, WaveformMemory):
-            raise TypeError(f"Stream destination must be a WaveformMemory;"
-                            f" received {type(dst)}")
-
-        logger.debug(f"Stream destination at address {dst.byte_address:010X}")
-
-        if np.issubdtype(type(length_cycles), int) or isinstance(length_cycles, (np.uint32, np.int32)):
-            if length_cycles <= 0:
-                raise ValueError(f"Received invalid length_cycles: {length_cycles}")
-            logger.debug(f"Using stream length {length_cycles} cycles")
-        elif isinstance(length_cycles, self.sequencer().Register):
-            logger.debug(f"Using indeterminate stream length from {length_cycles}")
-        elif isinstance(length_cycles, self.sequencer().DSP):
-            logger.warning(f"Scheduling stream from {length};"
-                            f" ensure that the DSP is not automatically updating,"
-                            f" as this can lead undefined behavior when the DSP"
-                            f" value is reused during alignment.")
-        else:
-            raise TypeError(f"Received object of invalid type for length_cycles:"
-                            f" {type(length_cycles)}")
-
-        # We can now add instructions to start the input stream 
-        if isinstance(configuration.input_source, Channel):
-            # notify the synchronizer, which will then add the DMA command for us   
-            self.channel_synchronizer.add({
-                "function": DMASynchronizer.CONSTANT_CONTINUED, 
-                "self": self, 
-                "args": (), 
-                "kwargs": {"channel": configuration.input_source, "length": length_cycles, "flag": flag},
-                "retval": None})
-        else:
-            self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
-                                   memory_input.byte_address,
-                                   memory_input.nbytes)
+        self._command_datamover(f"input{configuration.input_switch_master}_datamover", 
+                                memory_input.byte_address,
+                                memory_input.nbytes)
 
 
     @requires_sequencer
-    def capture_stream(self, 
-                        configuration: StreamConfiguration, 
-                        dst: WaveformMemory, 
-                        size: Union[int, Source, None] = None,
-                        offset: Union[int, Source, None] = None) -> None:
+    def write_stream(self, 
+                    configuration: StreamConfiguration, 
+                    dst: WaveformMemory, 
+                    size: Union[int, Source, None] = None,
+                    offset: Union[int, Source, None] = None) -> None:
         """
-        Use a stream processing module's DataMover to capture data from a stream
-        and write it into memory.
+        Use a stream processing module's DataMover to write data from a stream
+        into memory.
 
         :param configuration: Stream configuration to use
         :type configuration: :class:`StreamConfiguration`
@@ -2390,116 +2361,6 @@ class Acadia:
         self._command_datamover(configuration.output_datamover(), 
                                 dst.byte_address + offset,
                                 size)
-
-    @requires_sequencer
-    def stream_fifo(self, 
-                      src: Union[Channel, StreamConfiguration, WaveformMemory],
-                      dst: WaveformMemory, 
-                      length: float = None,
-                      output_offset_bytes: Union[int, Source, None] = None,
-                      flag: bool = False) -> tuple[StreamConfiguration, WaveformMemory]:
-        """
-        Stream data from an input of the stream processing path directly into memory. 
-        
-        The amount of data streamed into memory is controlled by the 
-        ``length`` parameter. If provided, this must be a float representing
-        the number of seconds for which to accept data. If not provided, the
-        amount of time is chosen so as to fill the destination.
-        """
-        
-        configuration = self._request_stream_configuration(src, "fifo")
-
-        if length is None:
-            length_cycles = 8 * dst.nbytes // self._firmware["stream_processing_path"]["width"]
-        elif np.issubdtype(type(length), float):
-            length_cycles = self.seconds_to_cycles(length)
-        else:
-            raise TypeError(f"Invalid type for direct stream length: {type(length)}")
-
-        if dst.itemsize != 2:
-            raise TypeError(f"Destinations for direct streams must have 16-bit quadratures;"
-                            f" found dtype {dst.dtype}")
-
-        # Because this is a direct stream, we can infer the output size from the length of the stream
-        output_size_bytes = length_cycles * self._firmware["stream_processing_path"]["width"] // 8
-
-        logger.debug(f"Direct stream of length {length_cycles} cycles"
-                     f" and {output_size_bytes} bytes.")
-
-        self.stream(configuration=configuration, 
-                    dst=dst, 
-                    memory_input=(src if isinstance(src, WaveformMemory) else None),
-                    length_cycles=length_cycles,
-                    output_size_bytes=output_size_bytes,
-                    offset_bytes=output_offset_bytes,
-                    flag=flag)
-
-    @requires_sequencer
-    def stream_cmacc(self, 
-                     src: Union[Channel, str, StreamConfiguration, WaveformMemory],
-                     dst: WaveformMemory, 
-                     length: float = None,
-                     output_offset_bytes: Union[int, Source, None] = None,
-                     kernel: Union[np.ndarray, WaveformMemory, float, None] = None) -> tuple[StreamConfiguration, WaveformMemory]:
-        """
-        Stream data from an input of the stream processing path, through
-        a CMACC, and into memory.
-
-        The amount of data accepted into the CMACC is controlled by the 
-        ``length`` parameter. If provided, this must be a float representing
-        the number of seconds for which to accept data. If not provided, the
-        amount of time is chosen to match that of the accumulation kernel.
-
-        If ``kernel`` is ``None``, a single-element kernel is newly allocated to allow for 
-            boxcar accumulation. In this case, note that ``length`` must be provided.
-
-        """
-
-        if length is None and (kernel is None or (hasattr(kernel, "size") and kernel.size == 1)):
-            raise ValueError(f"Must provide length when kernel is not"
-                                " provided or a boxcar kernel is used.")
-
-        # 32-bit quadratures are required for CMACC output
-        if dst.itemsize != 4:
-            raise TypeError(f"CMACC streams require destinations with"
-                            f" 32-bit quadratures; destination has dtype"
-                            f" {dst.dtype}")
-
-        configuration, kernel_memory = self.configure_cmacc(
-            src, kernel, write_mode, last_only, reset_fifo, accumulator_done)
-
-        if preload is not None:
-            self.cmacc_load(configuration, preload)
-
-        if length is None:
-            # infer the length in time from the kernel (one cycle per kernel sample)
-            # we already checked whether we have a boxcar kernel, so we're good to just
-            # look at the kernel size
-            length_cycles = kernel_memory.size
-            logger.debug(f"Inferring CMACC stream length from kernel memory ({length_cycles} cycles)")
-        elif np.issubdtype(type(length), float):
-            length_cycles = self.seconds_to_cycles(length)
-            logger.debug(f"Converted float to CMACC stream length ({length_cycles} cycles)")
-        else:
-            raise TypeError(f"Received invalid type for CMACC stream length: {type(length)}")
-
-        # If we're not writing only the last sample, 
-        # then we're writing one sample every cycle
-        if last_only:
-            output_size_samples = 1
-        else:
-            output_size_samples = length_cycles
-
-        output_size_bytes = output_size_samples * (2*dst.itemsize)
-        
-        self.stream(configuration=configuration, 
-                    dst=dst,
-                    length_cycles=length_cycles,
-                    output_size_bytes=output_size_bytes,
-                    offset_bytes=output_offset_bytes,
-                    memory_input=(src if configuration.input_source == "memory" else None))
-
-        return configuration, kernel_memory
 
     @requires_sequencer
     def assign_cmacc_kernel(self,
@@ -2664,7 +2525,7 @@ class Acadia:
         :rtype: :class:`StreamConfiguration`
         """
         
-        configuration = self._request_stream_configuration(src, "cmacc")
+        configuration = self.request_stream_configuration(src, "cmacc")
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
             
         control_reg = 0
@@ -3597,7 +3458,8 @@ class Acadia:
                            address: Union[int, Symbol], 
                            size: Union[int, Symbol], 
                            tag: int = 0xA, 
-                           incr: bool = True):
+                           incr: bool = True,
+                           write_misc: bool = True):
         """
         Configure a DataMover (either MM2S or S2MM).
 
@@ -3613,26 +3475,11 @@ class Acadia:
         :type tag: int, optional
         :param incr: If ``True``\, the AXI transaction is in INCR mode.
         :type incr: bool, optional
-        :param address_base: If provided, uses the provided value for the upper
-            bits of the destination address. This allows the lower 32 bits 
-            (provided in ``address``) to be an object on which a bitshift 
-            cannot be performed, such as a :class:`Sequencer.Register` or
-            :class:`Sequencer.DSP`\.
-        :type address_base: int, optional
+        :param write_misc: When `True`, the miscellaneous field register will be
+            written. This can be omitted for repeated transfers with identical values
+            for the miscellaneous fields and the address high bits.
+        :type write_misc: bool, optional
         """
-
-        if np.issubdtype(type(size), int) or isinstance(size, (np.uint32, np.int32)):
-            if size > 2**23:
-                raise ValueError(f"Size must be less than 8 MB; received {size}.")
-        elif isinstance(size, Symbol) and (np.issubdtype(size.value_type(), int) or size.value_type() in [np.uint32, np.int32]):
-            if size.assigned() and size.value() > 2**23:
-                raise ValueError(f"Size must be less than 8 MB; received {size}.")
-            else:
-                logger.warning("Unable to verify size of transfer;"
-                                 "ensure that the size is less than 8 MB.") 
-        else:
-            logger.warning("Unable to verify size of transfer;"
-                            "ensure that the size is less than 8 MB.")
                 
         transfer_type = int(incr) # INCR transaction
         transfer_eof = 0 # TLAST will arrive with the data
@@ -3661,7 +3508,7 @@ class Acadia:
                             comment=f"Transfer size for DataMover {datamover_name}")
         self._active_sequencer.bus_write(address=bus_address_base, 
                             data=(address & 0xFFFFFFFF),
-                            comment=f"Base address and dispatch for DataMover {datamover_name}")
+                            comment=f"Address (and implicit dispatch) for DataMover {datamover_name}")
                
     def _bus_latency(self, port: str) -> int:
         """
@@ -3701,7 +3548,7 @@ class Acadia:
             
         return latency
     
-    def _request_stream_configuration(self, 
+    def request_stream_configuration(self, 
                                       input_source: Union[Channel, str, WaveformMemory, StreamConfiguration], 
                                       module: str) -> StreamConfiguration:
         """

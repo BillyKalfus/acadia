@@ -313,13 +313,27 @@ begin
     dacio_buf_i(3 downto 0) <= "0000"                       when dacio_sel0 = x"0" else
                                sequencer_gpio_o(3 downto 0) when dacio_sel0 = x"1" else
                                ps_gpio_o(3 downto 0)        when dacio_sel0 = x"2" else
-                               dma_flags(3 downto 0)        when dacio_sel0 = x"3" else 
+                               dma_flags(3 downto 0)        when dacio_sel0 = x"8" else 
+                               dma_flags(7 downto 4)        when dacio_sel0 = x"9" else 
+                               dma_flags(11 downto 8)       when dacio_sel0 = x"A" else 
+                               dma_flags(15 downto 12)      when dacio_sel0 = x"B" else 
+                               dma_flags(19 downto 16)      when dacio_sel0 = x"C" else 
+                               dma_flags(23 downto 20)      when dacio_sel0 = x"D" else 
+                               dma_flags(27 downto 24)      when dacio_sel0 = x"E" else 
+                               dma_flags(31 downto 28)      when dacio_sel0 = x"F" else 
                                "0000";
 
     dacio_buf_t(3 downto 0) <= "1111"                       when dacio_sel0 = x"0" else
                                sequencer_gpio_t(3 downto 0) when dacio_sel0 = x"1" else
                                ps_gpio_t(3 downto 0)        when dacio_sel0 = x"2" else
-                               "0000"                       when dacio_sel0 = x"3" else 
+                               "0000"                       when dacio_sel0 = x"8" else
+                               "0000"                       when dacio_sel0 = x"9" else
+                               "0000"                       when dacio_sel0 = x"A" else
+                               "0000"                       when dacio_sel0 = x"B" else
+                               "0000"                       when dacio_sel0 = x"C" else
+                               "0000"                       when dacio_sel0 = x"D" else
+                               "0000"                       when dacio_sel0 = x"E" else
+                               "0000"                       when dacio_sel0 = x"F" else
                                "1111";
 
     sequencer_gpio_i(3 downto 0) <= dacio_buf_o(3 downto 0);
@@ -329,13 +343,27 @@ begin
     dacio_buf_i(7 downto 4) <= "0000"                       when dacio_sel1 = x"0" else
                                sequencer_gpio_o(7 downto 4) when dacio_sel1 = x"1" else
                                ps_gpio_o(7 downto 4)        when dacio_sel1 = x"2" else
-                               dma_flags(7 downto 4)        when dacio_sel1 = x"3" else 
+                               dma_flags(3 downto 0)        when dacio_sel1 = x"8" else 
+                               dma_flags(7 downto 4)        when dacio_sel1 = x"9" else 
+                               dma_flags(11 downto 8)       when dacio_sel1 = x"A" else 
+                               dma_flags(15 downto 12)      when dacio_sel1 = x"B" else 
+                               dma_flags(19 downto 16)      when dacio_sel1 = x"C" else 
+                               dma_flags(23 downto 20)      when dacio_sel1 = x"D" else 
+                               dma_flags(27 downto 24)      when dacio_sel1 = x"E" else 
+                               dma_flags(31 downto 28)      when dacio_sel1 = x"F" else  
                                "0000";
 
     dacio_buf_t(7 downto 4) <= "1111"                       when dacio_sel1 = x"0" else
                                sequencer_gpio_t(7 downto 4) when dacio_sel1 = x"1" else
                                ps_gpio_t(7 downto 4)        when dacio_sel1 = x"2" else
-                               "0000"                       when dacio_sel1 = x"3" else 
+                               "0000"                       when dacio_sel1 = x"8" else
+                               "0000"                       when dacio_sel1 = x"9" else
+                               "0000"                       when dacio_sel1 = x"A" else
+                               "0000"                       when dacio_sel1 = x"B" else
+                               "0000"                       when dacio_sel1 = x"C" else
+                               "0000"                       when dacio_sel1 = x"D" else
+                               "0000"                       when dacio_sel1 = x"E" else
+                               "0000"                       when dacio_sel1 = x"F" else
                                "1111";
 
     sequencer_gpio_i(7 downto 4) <= dacio_buf_o(7 downto 4);
@@ -345,7 +373,14 @@ begin
     dacio_buf_i(11 downto 8) <= "0000"                       when dacio_sel2 = x"0" else
                                sequencer_gpio_o(11 downto 8) when dacio_sel2 = x"1" else
                                ps_gpio_o(11 downto 8)        when dacio_sel2 = x"2" else
-                               dma_flags(11 downto 8)        when dacio_sel2 = x"3" else 
+                               "0000"                        when dacio_sel2 = x"8" else
+                               "0000"                        when dacio_sel2 = x"9" else
+                               "0000"                        when dacio_sel2 = x"A" else
+                               "0000"                        when dacio_sel2 = x"B" else
+                               "0000"                        when dacio_sel2 = x"C" else
+                               "0000"                        when dacio_sel2 = x"D" else
+                               "0000"                        when dacio_sel2 = x"E" else
+                               "0000"                        when dacio_sel2 = x"F" else
                                "0000";
 
     dacio_buf_t(11 downto 8) <= "1111"                       when dacio_sel2 = x"0" else
@@ -361,13 +396,27 @@ begin
     dacio_buf_i(15 downto 12) <= "0000"                       when dacio_sel3 = x"0" else
                                sequencer_gpio_o(15 downto 12) when dacio_sel3 = x"1" else
                                ps_gpio_o(15 downto 12)        when dacio_sel3 = x"2" else
-                               dma_flags(15 downto 12)        when dacio_sel3 = x"3" else 
+                               dma_flags(3 downto 0)          when dacio_sel3 = x"8" else 
+                               dma_flags(7 downto 4)          when dacio_sel3 = x"9" else 
+                               dma_flags(11 downto 8)         when dacio_sel3 = x"A" else 
+                               dma_flags(15 downto 12)        when dacio_sel3 = x"B" else 
+                               dma_flags(19 downto 16)        when dacio_sel3 = x"C" else 
+                               dma_flags(23 downto 20)        when dacio_sel3 = x"D" else 
+                               dma_flags(27 downto 24)        when dacio_sel3 = x"E" else 
+                               dma_flags(31 downto 28)        when dacio_sel3 = x"F" else 
                                "0000";
 
     dacio_buf_t(15 downto 12) <= "1111"                       when dacio_sel3 = x"0" else
                                sequencer_gpio_t(15 downto 12) when dacio_sel3 = x"1" else
                                ps_gpio_t(15 downto 12)        when dacio_sel3 = x"2" else
-                               "0000"                         when dacio_sel3 = x"3" else 
+                               "0000"                         when dacio_sel3 = x"8" else
+                               "0000"                         when dacio_sel3 = x"9" else
+                               "0000"                         when dacio_sel3 = x"A" else
+                               "0000"                         when dacio_sel3 = x"B" else
+                               "0000"                         when dacio_sel3 = x"C" else
+                               "0000"                         when dacio_sel3 = x"D" else
+                               "0000"                         when dacio_sel3 = x"E" else
+                               "0000"                         when dacio_sel3 = x"F" else
                                "1111";
 
     sequencer_gpio_i(15 downto 12) <= dacio_buf_o(15 downto 12);
@@ -377,13 +426,27 @@ begin
     adcio_buf_i(3 downto 0) <= "0000"                         when adcio_sel0 = x"0" else
                                sequencer_gpio_o(19 downto 16) when adcio_sel0 = x"1" else
                                ps_gpio_o(19 downto 16)        when adcio_sel0 = x"2" else
-                               dma_flags(19 downto 16)        when adcio_sel0 = x"3" else 
+                               dma_flags(3 downto 0)          when adcio_sel0 = x"8" else 
+                               dma_flags(7 downto 4)          when adcio_sel0 = x"9" else 
+                               dma_flags(11 downto 8)         when adcio_sel0 = x"A" else 
+                               dma_flags(15 downto 12)        when adcio_sel0 = x"B" else 
+                               dma_flags(19 downto 16)        when adcio_sel0 = x"C" else 
+                               dma_flags(23 downto 20)        when adcio_sel0 = x"D" else 
+                               dma_flags(27 downto 24)        when adcio_sel0 = x"E" else 
+                               dma_flags(31 downto 28)        when adcio_sel0 = x"F" else  
                                "0000";
 
     adcio_buf_t(3 downto 0) <= "1111"                         when adcio_sel0 = x"0" else
                                sequencer_gpio_t(19 downto 16) when adcio_sel0 = x"1" else
                                ps_gpio_t(19 downto 16)        when adcio_sel0 = x"2" else
-                               "0000"                         when adcio_sel0 = x"3" else 
+                               "0000"                         when adcio_sel0 = x"8" else
+                               "0000"                         when adcio_sel0 = x"9" else
+                               "0000"                         when adcio_sel0 = x"A" else
+                               "0000"                         when adcio_sel0 = x"B" else
+                               "0000"                         when adcio_sel0 = x"C" else
+                               "0000"                         when adcio_sel0 = x"D" else
+                               "0000"                         when adcio_sel0 = x"E" else
+                               "0000"                         when adcio_sel0 = x"F" else
                                "1111";
 
     sequencer_gpio_i(19 downto 16) <= adcio_buf_o(3 downto 0);
@@ -393,13 +456,27 @@ begin
     adcio_buf_i(7 downto 4) <= "0000"                         when adcio_sel1 = x"0" else
                                sequencer_gpio_o(23 downto 20) when adcio_sel1 = x"1" else
                                ps_gpio_o(23 downto 20)        when adcio_sel1 = x"2" else
-                               dma_flags(23 downto 20)        when adcio_sel1 = x"3" else 
+                               dma_flags(3 downto 0)          when adcio_sel1 = x"8" else 
+                               dma_flags(7 downto 4)          when adcio_sel1 = x"9" else 
+                               dma_flags(11 downto 8)         when adcio_sel1 = x"A" else 
+                               dma_flags(15 downto 12)        when adcio_sel1 = x"B" else 
+                               dma_flags(19 downto 16)        when adcio_sel1 = x"C" else 
+                               dma_flags(23 downto 20)        when adcio_sel1 = x"D" else 
+                               dma_flags(27 downto 24)        when adcio_sel1 = x"E" else 
+                               dma_flags(31 downto 28)        when adcio_sel1 = x"F" else 
                                "0000";
 
     adcio_buf_t(7 downto 4) <= "1111"                         when adcio_sel1 = x"0" else
                                sequencer_gpio_t(23 downto 20) when adcio_sel1 = x"1" else
                                ps_gpio_t(23 downto 20)        when adcio_sel1 = x"2" else
-                               "0000"                         when adcio_sel1 = x"3" else 
+                               "0000"                         when adcio_sel1 = x"8" else
+                               "0000"                         when adcio_sel1 = x"9" else
+                               "0000"                         when adcio_sel1 = x"A" else
+                               "0000"                         when adcio_sel1 = x"B" else
+                               "0000"                         when adcio_sel1 = x"C" else
+                               "0000"                         when adcio_sel1 = x"D" else
+                               "0000"                         when adcio_sel1 = x"E" else
+                               "0000"                         when adcio_sel1 = x"F" else
                                "1111";
 
     sequencer_gpio_i(23 downto 20) <= adcio_buf_o(7 downto 4);
@@ -409,13 +486,27 @@ begin
     adcio_buf_i(11 downto 8) <= "0000"                        when adcio_sel2 = x"0" else
                                sequencer_gpio_o(27 downto 24) when adcio_sel2 = x"1" else
                                ps_gpio_o(27 downto 24)        when adcio_sel2 = x"2" else
-                               dma_flags(27 downto 24)        when adcio_sel2 = x"3" else 
+                               dma_flags(3 downto 0)          when adcio_sel2 = x"8" else 
+                               dma_flags(7 downto 4)          when adcio_sel2 = x"9" else 
+                               dma_flags(11 downto 8)         when adcio_sel2 = x"A" else 
+                               dma_flags(15 downto 12)        when adcio_sel2 = x"B" else 
+                               dma_flags(19 downto 16)        when adcio_sel2 = x"C" else 
+                               dma_flags(23 downto 20)        when adcio_sel2 = x"D" else 
+                               dma_flags(27 downto 24)        when adcio_sel2 = x"E" else 
+                               dma_flags(31 downto 28)        when adcio_sel2 = x"F" else 
                                "0000";
 
     adcio_buf_t(11 downto 8) <= "1111"                        when adcio_sel2 = x"0" else
                                sequencer_gpio_t(27 downto 24) when adcio_sel2 = x"1" else
                                ps_gpio_t(27 downto 24)        when adcio_sel2 = x"2" else
-                               "0000"                         when adcio_sel2 = x"3" else 
+                               "0000"                         when adcio_sel2 = x"8" else
+                               "0000"                         when adcio_sel2 = x"9" else
+                               "0000"                         when adcio_sel2 = x"A" else
+                               "0000"                         when adcio_sel2 = x"B" else
+                               "0000"                         when adcio_sel2 = x"C" else
+                               "0000"                         when adcio_sel2 = x"D" else
+                               "0000"                         when adcio_sel2 = x"E" else
+                               "0000"                         when adcio_sel2 = x"F" else
                                "1111";
 
     sequencer_gpio_i(27 downto 24) <= adcio_buf_o(11 downto 8);
@@ -425,13 +516,27 @@ begin
     adcio_buf_i(15 downto 12) <= "0000"                       when adcio_sel3 = x"0" else
                                sequencer_gpio_o(31 downto 28) when adcio_sel3 = x"1" else
                                ps_gpio_o(31 downto 28)        when adcio_sel3 = x"2" else
-                               dma_flags(31 downto 28)        when adcio_sel3 = x"3" else 
+                               dma_flags(3 downto 0)          when adcio_sel3 = x"8" else 
+                               dma_flags(7 downto 4)          when adcio_sel3 = x"9" else 
+                               dma_flags(11 downto 8)         when adcio_sel3 = x"A" else 
+                               dma_flags(15 downto 12)        when adcio_sel3 = x"B" else 
+                               dma_flags(19 downto 16)        when adcio_sel3 = x"C" else 
+                               dma_flags(23 downto 20)        when adcio_sel3 = x"D" else 
+                               dma_flags(27 downto 24)        when adcio_sel3 = x"E" else 
+                               dma_flags(31 downto 28)        when adcio_sel3 = x"F" else 
                                "0000";
 
     adcio_buf_t(15 downto 12) <= "1111"                       when adcio_sel3 = x"0" else
                                sequencer_gpio_t(31 downto 28) when adcio_sel3 = x"1" else
                                ps_gpio_t(31 downto 28)        when adcio_sel3 = x"2" else
-                               "0000"                         when adcio_sel3 = x"3" else 
+                               "0000"                         when adcio_sel3 = x"8" else
+                               "0000"                         when adcio_sel3 = x"9" else
+                               "0000"                         when adcio_sel3 = x"A" else
+                               "0000"                         when adcio_sel3 = x"B" else
+                               "0000"                         when adcio_sel3 = x"C" else
+                               "0000"                         when adcio_sel3 = x"D" else
+                               "0000"                         when adcio_sel3 = x"E" else
+                               "0000"                         when adcio_sel3 = x"F" else
                                "1111";
 
     sequencer_gpio_i(31 downto 28) <= adcio_buf_o(15 downto 12);
@@ -468,5 +573,24 @@ begin
                                "1111"                       when pmod0_sel1 = x"3" else 
                                "1111";
 
+
+    -- Generate the buffers for the DACIO and the ADCIO
+    DACIO_buf_gen: for i in 15 downto 0 generate
+        DACIO_buf: IOBUF port map(
+            I => dacio_buf_i(i), 
+            O => dacio_buf_o(i), 
+            T => dacio_buf_t(i), 
+            IO => DACIO(i)
+        );
+    end generate DACIO_buf_gen;
+
+    ADCIO_buf_gen: for i in 15 downto 0 generate
+        ADCIO_buf: IOBUF port map(
+            I => adcio_buf_i(i), 
+            O => adcio_buf_o(i), 
+            T => adcio_buf_t(i), 
+            IO => ADCIO(i)
+        );
+    end generate ADCIO_buf_gen;
     
 end rtl;

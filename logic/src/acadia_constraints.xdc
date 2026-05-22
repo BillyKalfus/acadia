@@ -1,3 +1,7 @@
+# Set false paths through some asynchronous physical ports
+set_false_path -through [get_ports DACIO*]
+set_false_path -through [get_ports ADCIO*]
+
 # Pins for SPI Mux
 set_property PACKAGE_PIN G10      [get_ports "CLK104_SPI_sel[0]"] ;
 set_property PACKAGE_PIN H11      [get_ports "CLK104_SPI_sel[1]"] ;

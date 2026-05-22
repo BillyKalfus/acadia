@@ -3,7 +3,7 @@ import numpy as np
 # ------------- SETTINGS ------------- #
 # The value of the real quadrature of the first sample to enter the CMACC. 
 # Every following quadrature value sequentially increments by one.
-starting_sample = 0x63
+starting_sample = 0x0560
 
 # Accumulator Update Mode
 #     When 00, the accumulator never updates, and computes input+preload for every sample.
@@ -12,7 +12,7 @@ starting_sample = 0x63
 #     When 10, the accumulator loads input+preload for the first point of each kernel, 
 #         and accum+input for every following point.
 #     When 11, the accumulator never updates, and computes input+preload for every sample.
-accumulator_update_mode = 1
+accumulator_update_mode = 2
 
 # Preload values (shifted by 15, since the preload loads the upper 
 # 32 bits of the accumulator and clears the lower ones.)
@@ -21,14 +21,21 @@ accumulator_im_preload = (0xC << 15)
 
 # Samples where the input is valid
 # By default all inputs are valid, but we can optionally make some invalid here
-input_valid = np.empty((528-400) // 4, dtype=bool)
+start_time = 692
+input_valid = np.empty((820-start_time) // 4, dtype=bool)
 input_valid.fill(True)
-input_valid[(470-400) // 4] = False
+input_valid[(764-start_time) // 4] = False
 
 # The integration kernel
-kernel = np.empty((1,2), dtype=np.uint16)
-kernel[0,0] = 0x8FFF
-kernel[0,1] = 0
+kernel = np.empty((4,2), dtype=np.uint16)
+kernel[0,0] = 0x5678
+kernel[0,1] = 0x1234
+kernel[1,0] = 0x8FFF
+kernel[1,1] = 0x0000
+kernel[2,0] = 0x0000
+kernel[2,1] = 0xFACE
+kernel[3,0] = 0xB00C
+kernel[3,1] = 0xABCD
 
 # ------------- EXECUTION --------------- #
 
@@ -91,12 +98,13 @@ for i in range(len(input_valid)):
     full_product_re = a_re_b_re - a_im_b_im
     full_product_im = a_im_b_re + a_re_b_im
 
-    print(f"-------- Input cycle {i} (sim time = {400 + i*4}) --------")
+    print(f"-------- Input cycle {i} (sim time = {start_time + i*4}) --------")
     print(f"Input real: {','.join(input_re_element_strs)}")
     print(f"Input imag: {','.join(input_im_element_strs)}")
     print(f"Input valid: {input_valid[i]}")
     print(f"Input last: {input_last}")
     print(f"")
+
     print(f"Kernel pointer: {kernel_pointer:04x}")
     print(f"Kernel real: {int(kernel[kernel_pointer,0]):04x}")
     print(f"Kernel imag: {int(kernel[kernel_pointer,1]):04x}")
@@ -104,16 +112,21 @@ for i in range(len(input_valid)):
     print(f"Kernel last: {kernel_last}")
     print(f"")
     
-    
-    print(f"Summed input: ({a_re:08x}, {a_im:08x})")
+    print(f"Summed input data: evaluate just after transition at t={start_time + i*4 + 4}")
+    print(f"({a_re:08x}, {a_im:08x})")
+    print("")
+
+    print(f"Partial products and full product: evaluate just after transition at t={start_time + i*4 + 8}")
     print(f"a_re_b_re: {a_re_b_re:012x}")
     print(f"a_im_b_im: {a_im_b_im:012x}")
     print(f"a_re_b_im: {a_re_b_im:012x}")
     print(f"a_im_b_re: {a_im_b_re:012x}")
     print(f"Full product: ({full_product_re:012x}, {full_product_im:012x})")
-
     print(f"")
-    print(f"Starting accumulator value: ({accum_re:012x}, {accum_im:012x})")
+
+    # print(f"Starting accumulator value: evaluate just before t={start_time + i*4 + 8}")
+    # print(f"({accum_re:012x}, {accum_im:012x})")
+    # print("")
 
     if input_valid[i]:
         kernel_pointer = (kernel_pointer + 1) % kernel.shape[0]
@@ -136,7 +149,8 @@ for i in range(len(input_valid)):
             accum_re = accumulator_re_preload + full_product_re
             accum_im = accumulator_im_preload + full_product_im
 
-    print(f"New accumulator value: ({accum_re:012x}, {accum_im:012x})")
+    print(f"New accumulator value: evaluate just after t={start_time + i*4 + 12}")
+    print(f"({accum_re:012x}, {accum_im:012x})")
     print(f"")
 
             
