@@ -406,7 +406,7 @@ static PyObject* PyChannel_get_fabric_clock_frequency(PyObject* self)
     #endif
 }
 
-static const char CHANNEL_GET_VALID_FABRIC_WRITE_WORDS_DOCSTRING[] = "Retrieves number of valid write words at the fabric interface of the channel.";
+static const char CHANNEL_GET_VALID_FABRIC_WRITE_WORDS_DOCSTRING[] = "Retrieves number of valid write words at the fabric interface of a DAC channel.";
 static PyObject* PyChannel_get_valid_fabric_write_words(PyObject* self)
 {
     #ifdef __aarch64__
@@ -414,7 +414,6 @@ static PyObject* PyChannel_get_valid_fabric_write_words(PyObject* self)
     ChannelObject* self_channel = (ChannelObject*)self;
     uint32_t fabric_words;
 
-    // Get the fabric clock
     if(XRFdc_GetFabWrVldWords((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, &fabric_words) != XRFDC_SUCCESS)
     {
         return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric valid words in %s", __FUNCTION__);
@@ -427,7 +426,32 @@ static PyObject* PyChannel_get_valid_fabric_write_words(PyObject* self)
     #endif
 }
 
-static const char CHANNEL_GET_VALID_FABRIC_READ_WORDS_DOCSTRING[] = "Retrieves number of valid read words at the fabric interface of the channel.";
+static const char CHANNEL_SET_VALID_FABRIC_WRITE_WORDS_DOCSTRING[] = "Sets number of valid write words at the fabric interface of a DAC channel.";
+static PyObject* PyChannel_set_valid_fabric_write_words(PyObject* self, PyObject* words_obj)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    uint32_t words;
+
+    if(!PyArg_Parse(words_obj, "I", &words))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if(XRFdc_SetFabWrVldWords((&xrfdc), self_channel->tile, self_channel->block, words) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric valid words in %s", __FUNCTION__);
+    }
+
+    Py_RETURN_NONE;
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_GET_VALID_FABRIC_READ_WORDS_DOCSTRING[] = "Retrieves number of valid read words at the fabric interface of an ADC channel.";
 static PyObject* PyChannel_get_valid_fabric_read_words(PyObject* self)
 {
     #ifdef __aarch64__
@@ -435,13 +459,37 @@ static PyObject* PyChannel_get_valid_fabric_read_words(PyObject* self)
     ChannelObject* self_channel = (ChannelObject*)self;
     uint32_t fabric_words;
 
-    // Get the fabric clock
     if(XRFdc_GetFabRdVldWords((&xrfdc), self_channel->is_dac, self_channel->tile, self_channel->block, &fabric_words) != XRFDC_SUCCESS)
     {
         return PyErr_Format(PyExc_ValueError, "Failed to retrieve fabric valid words in %s", __FUNCTION__);
     }
 
     return PyLong_FromLong(fabric_words);
+
+    #else
+    return RFDC_WRONG_HARDWARE_EXCEPTION;
+    #endif
+}
+
+static const char CHANNEL_SET_VALID_FABRIC_READ_WORDS_DOCSTRING[] = "Sets number of valid read words at the fabric interface of an ADC channel.";
+static PyObject* PyChannel_set_valid_fabric_read_words(PyObject* self, PyObject* words_obj)
+{
+    #ifdef __aarch64__
+
+    ChannelObject* self_channel = (ChannelObject*)self;
+    uint32_t words;
+
+    if(!PyArg_Parse(words_obj, "I", &words))
+    {
+        return PyErr_Format(PyExc_ValueError, "Unable to parse arguments in %s", __FUNCTION__);
+    }
+
+    if(XRFdc_SetFabRdVldWords((&xrfdc), self_channel->tile, self_channel->block, words) != XRFDC_SUCCESS)
+    {
+        return PyErr_Format(PyExc_ValueError, "Failed to set fabric valid words in %s", __FUNCTION__);
+    }
+
+    Py_RETURN_NONE;
 
     #else
     return RFDC_WRONG_HARDWARE_EXCEPTION;
@@ -1366,7 +1414,9 @@ static PyMethodDef PyChannelMethods[] = {
     {"get_allowed_analog_sample_rates", (PyCFunction)PyChannel_get_allowed_analog_sample_rates, METH_NOARGS, CHANNEL_GET_ALLOWED_ANALOG_SAMPLE_RATES_DOCSTRING},
     {"get_fabric_clock_frequency", (PyCFunction)PyChannel_get_fabric_clock_frequency, METH_NOARGS, CHANNEL_GET_FABRIC_CLOCK_FREQUENCY_DOCSTRING},
     {"get_valid_fabric_read_words", (PyCFunction)PyChannel_get_valid_fabric_read_words, METH_NOARGS, CHANNEL_GET_VALID_FABRIC_READ_WORDS_DOCSTRING},
+    {"set_valid_fabric_read_words", (PyCFunction)PyChannel_set_valid_fabric_read_words, METH_O, CHANNEL_SET_VALID_FABRIC_READ_WORDS_DOCSTRING},
     {"get_valid_fabric_write_words", (PyCFunction)PyChannel_get_valid_fabric_write_words, METH_NOARGS, CHANNEL_GET_VALID_FABRIC_WRITE_WORDS_DOCSTRING},
+    {"set_valid_fabric_write_words", (PyCFunction)PyChannel_set_valid_fabric_write_words, METH_O, CHANNEL_SET_VALID_FABRIC_WRITE_WORDS_DOCSTRING},
     {"frequency_to_nco_word", (PyCFunction)PyChannel_frequency_to_nco_word, METH_O, CHANNEL_FREQUENCY_TO_NCO_WORD_DOCSTRING},
     {"set_nco_frequency_word", (PyCFunction)PyChannel_set_nco_frequency_word, METH_O, CHANNEL_SET_NCO_FREQUENCY_WORD_DOCSTRING},
     {"set_nco_frequency", (PyCFunction)PyChannel_set_nco_frequency, METH_O, CHANNEL_SET_NCO_FREQUENCY_DOCSTRING},

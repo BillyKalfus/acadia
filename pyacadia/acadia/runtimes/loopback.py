@@ -25,15 +25,28 @@ class LoopbackRuntime(Runtime):
         # Create the waveforms that we'll need 
         stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
         capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["memory"]) 
+
+        # We'll configure the stream path so that samples from the ADC end up
+        # getting directly passed to a DataMover
+        stream_config = acadia.request_stream_configuration(capture_channel, "fifo")
         
         # Create a record group for saving captured data
         self.data.add_group("traces", uniform=True)
                 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
+
+            # We command the DataMover to begin accepting samples BEFORE scheduling the ADC,
+            # so that as soon as samples arrive at the DataMover they're accepted rather than 
+            # needing to be buffered in the FIFO. This isn't necessarily required since the time 
+            # to exit the synchronizer is so quick and the FIFO has plenty of depth, but if either one
+            # of these weren't true, then the FIFO could overflow and samples would be dropped. 
+            # Commanding the DataMover first prevents this from happening entirely.
+            a.write_stream(stream_config, capture_waveform)
+
             with a.channel_synchronizer():
-                a.schedule_waveform(stimulus_waveform, stretch_length=1e-6)
-                a.stream_direct(capture_channel, capture_waveform)
+                a.schedule_dac_waveform(stimulus_waveform, stretch_length=1e-6)
+                a.schedule_adc_stream(stream_config, self.capture["memory"]["length"])
 
         # Compile the sequence
         acadia.compile(sequence)
@@ -55,13 +68,9 @@ class LoopbackRuntime(Runtime):
         acadia.assemble()
         acadia.load()
 
-        for i in range(self.iterations):
+        for i in self.iterate(self.iterations):
             acadia.run()
             self.data["traces"].write(capture_waveform.array)
-            
-            if self.data.serve() == DataManager.serve_hangup():
-                self.data.disconnect()
-                return
         
         self.final_serve()
 
@@ -123,12 +132,10 @@ class LoopbackRuntime(Runtime):
     def finalize(self):
         super().finalize()
         self.progress_bar.close()
-        if self.plot:
-            self.savefig(self.fig)  
 
 def run(plot=True):   
     stimulus: dict = {
-        "channel": "DAC1",
+        "channel": "DAC4",
 
         "datapath": {
             "vop": 4000,
@@ -144,7 +151,7 @@ def run(plot=True):
     }
 
     capture: dict = {
-        "channel": "ADC1",
+        "channel": "ADC0",
 
         "datapath": {
             "nco_frequency": -4.5e9
@@ -162,7 +169,7 @@ def run(plot=True):
         get_ipython().run_line_magic("matplotlib", "widget")
 
     rt = LoopbackRuntime(stimulus, capture, plot=plot, iterations=100000)
-    rt.deploy("192.168.2.69", log_debug=True)    
+    rt.deploy("10.66.138.216", log_debug=True)    
     rt.display()
 
     return rt

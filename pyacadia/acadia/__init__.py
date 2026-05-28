@@ -7,6 +7,7 @@ from .processing import DynamicLine, DynamicErrorbar
 from .runtime import Runtime
 from .system import Acadia
 from .waveforms import WaveformMemory
+from .firmware import Firmware
 
 from .runtimes import *
 from .runtimes import __all__ as runtimes_all
@@ -18,5 +19,6 @@ __all__ = ["Channel",
            "RFClk", "PSGPIO", "ZDMA", "AXISSwitch", "ZCU216Sensors",
            "DynamicLine", "DynamicErrorbar",
            "Runtime",
+           "Firmware",
            "Acadia",
            "WaveformMemory"] + runtimes_all

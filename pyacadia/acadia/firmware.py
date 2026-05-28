@@ -161,7 +161,7 @@ class Firmware:
             "direction": BusDataport.INPUT,
             "offset": 0,
             "width": 8,
-            "pipeline": self.config["sequencer_bus"]["ps_gdma_irq_dataport"]["pipeline"]\
+            "pipeline": self.config["sequencer_bus"]["ps_gdma_irq_dataport"]["pipeline"]
         }]
 
         self.ps_gdma_irq = BusDataport(name="ps_gdma_irq_dataport", ports=_ps_gdma_irq_dataports)

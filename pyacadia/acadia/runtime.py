@@ -362,24 +362,24 @@ class Runtime:
     def is_done(self) -> bool:
         return self._event_loop is not None and not self._event_loop.is_alive()
 
-    def savefig(self, figure, name: str = None) -> None:
-        if name is None:
-            idx = 0
-            while os.path.exists(os.path.join(self.local_directory, f"fig{idx}.png")):
-                idx += 1
-            name = f"fig{idx}"
-        # Pickle the figure for later use
-        with open(os.path.join(self.local_directory, f"{name}.pkl"), "wb") as f:
-            pickle.dump(figure, f)
+    def iterate(self, iterations: int):
+        """
+        A simple for-loop iterator that automatically synchronizes 
+        the DataManager with the host after each iteration.
 
-        # Save an image file
-        figure.canvas.close()
-        image_filename = os.path.join(self.local_directory, f"{name}.png")
-        figure.savefig(image_filename, dpi=500)
-        
-        # Replace the interactive canvas with a static image
-        from IPython.display import Image, display
-        display(Image(image_filename))
+        :param iterations: Number of iterations to loop over
+        :type iterations: int
+        """
+        if not isinstance(iterations, int):
+            raise TypeError(f"Iteration count must be of type `int`;"
+                            f" received object of type {type(iterations)}")
+
+        for i in range(iterations):
+            yield i
+
+            if self.data.serve() == DataManager.serve_hangup():
+                self.data.disconnect()
+                return
     
     # ----------------------- Internal utility functions --------------------- #
 

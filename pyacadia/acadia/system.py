@@ -570,16 +570,16 @@ class DMASynchronizer(Synchronizer):
             
             # The only parent object that we could have had was an Acadia object,
             # so we know on which object we should call dma_trigger
-            dma_trigger_device = self._acadia._firmware.sequencer_bus_decoder["dma_trigger"]
+            dma_trigger_device = self._acadia._firmware.sequencer_bus_decoder["dma_trigger_dataport"]
             self._acadia.sequencer().bus_write(address=dma_trigger_device.address().value(),
                             data=dma_mask,
                             comment="Trigger DMAs")
 
         if self._dma_block:
             # Wait until all the DMAs in the mask have completed
-            dma_running_device = self._acadia._firmware.sequencer_bus_decoder["dma_running"]
+            dma_running_device = self._acadia._firmware.sequencer_bus_decoder["dma_running_dataport"]
             bus_op = self._acadia.sequencer().bus_read(dma_running_device.address().value(),
-                        latency=self._acadia._bus_latency("dma_running"))
+                        latency=self._acadia._bus_latency("dma_running_dataport"))
             with self._acadia.sequencer().repeat_until(bus_op & dma_mask == 0):
                 pass
 
@@ -1022,7 +1022,7 @@ class Acadia:
         s = self.sequencer()
         
         # Drive the sequencer done pin low
-        s.bus_write(address=self._firmware.sequencer_bus_decoder["ps_gpio5"].address(), data=0)
+        s.bus_write(address=self._firmware.sequencer_bus_decoder["sequencer_done_dataport"].address(), data=0)
         
         # Store this particular Sequencer instance as an instance member of the 
         # Acadia object so that helper functions of the Acadia object know to 
@@ -1056,7 +1056,7 @@ class Acadia:
         s.nop()
 
         # Report to the PS that the sequencer is halted
-        s.bus_write(address=self._firmware.sequencer_bus_decoder["ps_gpio5"].address(), data=1)
+        s.bus_write(address=self._firmware.sequencer_bus_decoder["sequencer_done_dataport"].address(), data=1)
 
         s.halt()
         
@@ -2251,7 +2251,7 @@ class Acadia:
                 raise TypeError(f"Must use a StreamConfiguration with an ADC channel input;"
                                 f" received {configuration_or_channel.input_source}")
 
-            channel = configuration_or_channel
+            channel = configuration_or_channel.input_source
 
         elif isinstance(configuration_or_channel, Channel):
             channel = configuration_or_channel
@@ -2350,7 +2350,7 @@ class Acadia:
                             f" size: {type(size)}")
 
         if offset is None:
-            offset_bytes = 0
+            offset = 0
         elif np.issubdtype(type(offset), int) or isinstance(offset, (np.uint32, np.int32)):
             if offset < 0:
                 raise ValueError(f"Received invalid offset: {offset}")
@@ -2765,7 +2765,7 @@ class Acadia:
         for channel in channels:
             mask |= 1 << (channel.num() if channel.is_dac else (channel.num() + 16))
 
-        dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger"]
+        dma_trigger_device = self._firmware.sequencer_bus_decoder["dma_trigger_dataport"]
         self.sequencer().bus_write(address=dma_trigger_device.address().value(),
                                  data=mask,
                                  comment="DMA trigger")
@@ -2779,9 +2779,9 @@ class Acadia:
         for channel in channels:
             mask |= (channel.num() if channel.is_dac else (channel.num() + 16))
 
-        dma_running_device = self._firmware.sequencer_bus_decoder["dma_running"]
+        dma_running_device = self._firmware.sequencer_bus_decoder["dma_running_dataport"]
         dma_running = self.sequencer().bus_read(address=dma_running_device.address().value(),
-                                                      latency=self._bus_latency("dma_running"))
+                                                      latency=self._bus_latency("dma_running_dataport"))
         with self.sequencer().repeat_until(dma_running & mask == 0):
             pass
         
@@ -2879,7 +2879,7 @@ class Acadia:
         bus_address = self._firmware.dma_running.address().value()
 
         return self.sequencer().bus_read(bus_address, 
-                                        latency=self._bus_latency("dma_running"))
+                                        latency=self._bus_latency("dma_running_dataport"))
 
     # -------------- RUNTIME UTILITIES ----------- #
     
