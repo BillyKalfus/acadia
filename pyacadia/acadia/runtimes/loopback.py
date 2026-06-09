@@ -23,8 +23,8 @@ class LoopbackRuntime(Runtime):
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create the waveforms that we'll need 
-        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
-        capture_waveform = acadia.create_waveform_memory(capture_channel, **self.capture["memory"]) 
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, length=self.stimulus["length"])
+        capture_waveform = acadia.create_waveform_memory(capture_channel, length=self.capture["length"], region="plddr") 
 
         # We'll configure the stream path so that samples from the ADC end up
         # getting directly passed to a DataMover
@@ -46,7 +46,7 @@ class LoopbackRuntime(Runtime):
 
             with a.channel_synchronizer():
                 a.schedule_dac_waveform(stimulus_waveform, stretch_length=1e-6)
-                a.schedule_adc_stream(stream_config, self.capture["memory"]["length"])
+                a.schedule_adc_stream(stream_config, self.capture["length"])
 
         # Compile the sequence
         acadia.compile(sequence)
@@ -112,7 +112,7 @@ class LoopbackRuntime(Runtime):
         if self.time_axis is None:
             # Last index is for quadrature
             samples_per_trace = self.data["traces"].records().shape[-2]
-            capture_time = self.capture["memory"]["length"]
+            capture_time = self.capture["length"]
             self.time_axis = np.linspace(0, capture_time, samples_per_trace, endpoint=False)
 
         # Sum the traces from each iteration
@@ -143,9 +143,7 @@ def run(plot=True):
             "nco_frequency": 4.5e9
         },
 
-        "memory": {
-            "length": 1e-6,
-        },
+        "length": 1e-6,
         
         "waveform_scale": 0.2
     }
@@ -157,10 +155,7 @@ def run(plot=True):
             "nco_frequency": -4.5e9
         },
 
-        "memory": {
-            "length": 4e-6,
-            "region": "plddr"
-        }
+        "length": 4e-6,
     }
 
     if plot:

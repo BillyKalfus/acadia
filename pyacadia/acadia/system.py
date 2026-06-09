@@ -1006,7 +1006,7 @@ class Acadia:
         
         return self._sequencer_type()
     
-    def sequence(self, func: Callable) -> Sequencer:
+    def sequence(self, func: Callable) -> Any:
         """
         Compiles a Python function as a sequence for the Acadia sequencer. 
         The wrapped function should accept an instance of :class:`Acadia` as
@@ -1014,8 +1014,6 @@ class Acadia:
         
         :param func: Function to be compiled as a Sequencer sequence.
         :type func: callable with one argument of type :class:`Sequencer`
-        :return: A :class:`Sequencer` object containing the compiled sequence
-        :rtype: :class:`Sequencer`
         """
 
         # Get a new sequence resource
@@ -1032,7 +1030,7 @@ class Acadia:
         # Call the function to populate the sequencer object and compile it
         with s:
             # Reset all the stream modules
-            self.reset_all_streams()
+            # self.reset_all_streams()
 
             # Clear the stream offsets
             # Technically this isn't needed because resetting the streams resets 
@@ -1817,8 +1815,7 @@ class Acadia:
                         channel: Channel,
                         length: Union[int, float, np.ndarray] = None,
                         decimation: int = 1,
-                        multiplicity: int = None,
-                        region: Union[Channel, ManagedMemory, None, str] = None) -> WaveformMemory:
+                        region: Union[Channel, ManagedMemory, StreamConfiguration, str, None] = None) -> WaveformMemory:
         """
         Allocate a waveform. This function allows for a few different signatures; 
         the first argument is always a :class:`Channel` object. 
@@ -1844,11 +1841,6 @@ class Acadia:
 
         - If ``None``, then a single sample for a decimated waveform is created.
             ``decimation`` must be set to 0.
-
-        An optional multiplicity may be provided as either an int or a tuple,
-        in which case the waveform will be created as a multidimensional array 
-        with additional dimensions given by the multiplicity. The innermost
-        dimension(s) are still determined by the provided input as described above.
              
         :param channel: Channel for the waveform
         :type channel: :class:`Channel`
@@ -1893,7 +1885,7 @@ class Acadia:
             raise ValueError(f"Decimation may only be 0, 1, or a multiple of 4"
                              f" (received {decimation})")
 
-        dtype = "<i2" if decimation == 1 else "<i4"
+        dtype = "<i2" if (decimation == 1 or region in self.CMACCKernelArray) else "<i4"
 
         ##############################################################################
         # Convert provided lengths in time units into sample lengths and memory sizes
@@ -1985,14 +1977,6 @@ class Acadia:
         ############################################################################################
         # We now know the waveform time in cycles and size in samples, so create the waveform array
         ############################################################################################
-        
-        if np.issubdtype(multiplicity, np.integer):
-            shape = (multiplicity, *shape)
-        elif isinstance(multiplicity, tuple):
-            shape = (*multiplicity, *shape)
-        elif multiplicity is not None:
-            raise TypeError(f"Multiplicity must be either an int or tuple;"
-                            f" received type {type(multplicity)}")
 
         logger.debug(f"Allocating WaveformMemory with dtype {dtype} and shape"
                         f" {shape} samples")
@@ -2480,7 +2464,7 @@ class Acadia:
 
     @requires_sequencer
     def configure_cmacc(self, 
-                        src: Union[Channel, str, StreamConfiguration, WaveformMemory],
+                        configuration: StreamConfiguration,
                         kernel_pointer_load: bool = True,
                         arm_preload: bool = True,
                         accumulator_update_mode: Literal["none", "after_arm", "after_kernel_start"] = "none",
@@ -2495,12 +2479,6 @@ class Acadia:
         See the Acadia manual for detailed descriptions of the functionality 
         underlying each of the bitfields in the control register.
 
-        :param src: The source of data to be accumulated by the CMACC, which 
-            may be a channel / a string specifying a channel, a WaveformMemory 
-            living in memory
-        :type src: A `str` specifying a channel, a :class:`Channel`, 
-            a :class:`WaveformMemory`, or an existing 
-            :class:`StreamConfiguration`
         :param kernel_pointer_load: If `True`, the kernel pointer is assigned 
             to the value in the kernel pointer start address register
         :type kernel_pointer_load: bool
@@ -2525,7 +2503,6 @@ class Acadia:
         :rtype: :class:`StreamConfiguration`
         """
         
-        configuration = self.request_stream_configuration(src, "cmacc")
         registers = self._firmware.sequencer_bus_decoder[f"module{configuration.input_switch_slave}_registers"].address().value()
             
         control_reg = 0
@@ -2578,7 +2555,7 @@ class Acadia:
             
         logger.debug(f"Configured CMACC using control register value of"
                      f" 0x{control_reg:08X}")
-        self.sequencer().bus_write(address=registers+2, data=control_reg)
+        self.sequencer().bus_write(address=registers, data=control_reg)
 
         return configuration
         
@@ -2678,7 +2655,7 @@ class Acadia:
                 address = self._firmware.sequencer_bus_decoder[f"module{idx}_registers"].address().value()
                 self.sequencer().bus_write(address=address, data=(1 << 4))
             elif module_dict["kind"] == "cmacc":
-                address = self._firmware.sequencer_bus_decoder[f"module{idx}_registers"].address().value() + 2
+                addlress = self._firmware.sequencer_bus_decoder[f"module{idx}_registers"].address().value() + 2
                 self.sequencer().bus_write(address=address, data=(1 << 24))
 
         for i in range(20):

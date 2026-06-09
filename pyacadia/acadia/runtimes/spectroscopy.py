@@ -15,8 +15,8 @@ class SpectroscopyRuntime(Runtime):
     capture: dict
 
     full_traces: bool = False
-    write_mode: str = "lower"
     kernel_scale: float = 0.1
+    use_upper_data: bool = False
 
     plot: bool = False
     
@@ -27,24 +27,37 @@ class SpectroscopyRuntime(Runtime):
 
     # The number of full spectra to take
     iterations: int = 10
+
+    minimum_run_delay: int = 1000000
         
     def main(self):       
         import numpy as np 
-        from acadia import Acadia, DataManager
+        from acadia import Acadia, DataManager, WaveformMemory
         
         acadia = Acadia()
         stimulus_channel = acadia.channel(self.stimulus["channel"])
         capture_channel = acadia.channel(self.capture["channel"])
 
         # Create a waveform to store the stimulus signal
-        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, **self.stimulus["memory"])
+        stimulus_waveform = acadia.create_waveform_memory(stimulus_channel, length=self.stimulus["length"])
 
         # For the capture waveform, we need to set decimation to zero so that
-        # the output will be a single sample
+        # the output will be a single sample if we're not capturing decimated traces
+        # The output of the CMACC will be sent to the DDR
         capture_waveform = acadia.create_waveform_memory(
-            capture_channel, 
+            capture_channel,
+            length=self.capture["length"],
             decimation=(4 if self.full_traces else 0), 
-            **self.capture["memory"]) 
+            region="plddr") 
+
+        # Get a stream configuration for the CMACC that we'll use
+        stream_config = acadia.request_stream_configuration(capture_channel, "cmacc")
+
+        # Make a single-sample kernel.
+        # Here, it's easier to just instantiate the WaveformMemory object directly.
+        # We specify a datatype of 2-byte signed integers and specify that the memory should
+        # be allocated in the kernel memory for the designated CMACC
+        kernel = WaveformMemory(shape=1, dtype="<i2", resource_allocator=acadia.memory_region(stream_config))
                 
         # Create a data record group for storing the data that we collect
         # we can mark it as uniform because we know that every record we collect
@@ -52,25 +65,34 @@ class SpectroscopyRuntime(Runtime):
         self.data.add_group("traces", uniform=True)
                 
         def sequence(a: Acadia):
+            # We first need to set up the CMACC
+            # Use a preload of 0
+            a.assign_cmacc_preload(stream_config, 0)
+
+            # Specify the kernel that will be used for integration
+            a.assign_cmacc_kernel(stream_config, kernel)
+
+            # Configure the CMACC
+            a.configure_cmacc(
+                stream_config,
+                arm_preload=True,
+                accumulator_update_mode=("after_kernel_start" if self.full_traces else "after_arm"),
+                latch_update_mode="last",
+                stream_update_mode=("kernel" if self.full_traces else "last"),
+                use_upper_data=self.use_upper_data)
+
+            # Prepare the datamover to write the stream
+            a.write_stream(stream_config, capture_waveform)
+
             # Create a synchronizer block to arrange cycle-accurate pulse scheduling
             with a.channel_synchronizer():
                 # Play the stimulus out of the DAC
-                a.schedule_waveform(stimulus_waveform)
+                a.schedule_dac_waveform(stimulus_waveform)
+                a.schedule_adc_stream(stream_config, length=self.capture["length"])
 
-                # Trigger the ADC and collect data into the array
-                capture_stream, kernel = a.stream_cmacc(
-                    capture_channel, 
-                    capture_waveform, 
-                    length=self.capture["memory"]["length"], 
-                    write_mode=self.write_mode,
-                    last_only=(not self.full_traces))
 
-            # We can return anything here and it will be returned by Acadia.compile
-            # Here, we'll return the kernel that was allocated by configure_cmacc
-            return kernel
-
-        # Compile the sequence and grab the array that was allocated inside it
-        kernel = acadia.compile(sequence)
+        # Compile the sequence
+        acadia.compile(sequence)
 
         # Connect to the hardware and align the RF tiles
         acadia.attach()
@@ -81,7 +103,7 @@ class SpectroscopyRuntime(Runtime):
         stimulus_channel.set(nco_update_event_source="sysref", **self.stimulus["datapath"])
         capture_channel.set(nco_update_event_source="sysref", **self.capture["datapath"])
 
-        # Load the stimulus waveform memory with a hann window
+        # Load the stimulus waveform memory with a hann function (raised cosine)
         from scipy.signal.windows import hann
         stimulus_waveform.load(hann(stimulus_waveform.size), scale=self.stimulus["waveform_scale"])
 
@@ -92,7 +114,7 @@ class SpectroscopyRuntime(Runtime):
         acadia.assemble()
         acadia.load()
 
-        for i in range(self.iterations):
+        for i in self.iterate(self.iterations):
             for frequency in self.frequencies:
                 # Synchronously set the modulation frequencies and reset phases
                 acadia.update_nco_frequency(stimulus_channel, frequency=frequency)
@@ -100,9 +122,10 @@ class SpectroscopyRuntime(Runtime):
                 acadia.reset_nco_phase(stimulus_channel)
                 acadia.reset_nco_phase(capture_channel)
                 acadia.update_ncos_synchronized()
+                # acadia.update_ncos_synchronized()
 
                 # Run the sequencer                    
-                acadia.run(minimum_delay=1000000)
+                acadia.run(minimum_delay=self.minimum_run_delay)
 
                 # When the sequencer was run, the integrated signal was stored into
                 # capture_waveform because it was provided to acadia.stream()
@@ -110,13 +133,6 @@ class SpectroscopyRuntime(Runtime):
                 # that memory as if it were any numpy array. Here we'll get the data
                 # and write it into the record group we created above
                 self.data["traces"].write(capture_waveform.array)
-            
-                # Check whether the host wants data or whether it's requesting a hangup
-                if self.data.serve() == DataManager.serve_hangup():
-                    # The client will not be requesting any more data, close the data manager
-                    # and exit
-                    self.data.disconnect()
-                    return
         
         self.final_serve()
 
@@ -246,44 +262,34 @@ class SpectroscopyRuntime(Runtime):
         super().finalize()
         self.iterations_progress_bar.close()
         self.frequencies_progress_bar.close()
-        if self.plot:
-            self.savefig(self.fig)  
 
 def run(plot=True):
     import numpy as np
 
     stimulus: dict = {
-        "channel": "DAC1",
+        "channel": "DAC4",
 
         "datapath": {
             "vop": 4000,
             "mix_reconstruction": True
         },
 
-        "memory": {
-            "length": 2400e-9,
-        },
-        
-        "waveform_scale": 0.1
+        "length": 2400e-9,        
+        "waveform_scale": 0.9
     }
     
     capture: dict = {
-        "channel": "ADC1",
+        "channel": "ADC0",
 
         "datapath": {
             "mix_reconstruction": True
         },
 
-        # Because we're using the CMACC to do the integration, the length here 
-        # corresponds to the length of the integration programmed into the CMACC,
-        # rather than the length of the array in memory
-        "memory": {
-            "length": 2.56e-6,
-            "region": "plddr"
-        }
+        "length":  2.56e-6,
     }
 
-    frequencies = np.linspace(4.2e9, 4.5e9, 201)
+    frequencies = np.linspace(4.4512345e9, 4.55e9, 21)
+    # frequencies = np.concatenate((frequencies, frequencies[::-1]))
 
     # Run the program on the target
     rt = SpectroscopyRuntime(
@@ -291,18 +297,19 @@ def run(plot=True):
         stimulus=stimulus,
         capture=capture,
         iterations=1000,
+        minimum_run_delay=1000000,
         plot=plot,
-        electrical_delay=-57e-9,
-        write_mode="upper",
-        full_traces=False,
-        kernel_scale=0.9)
+        electrical_delay=0,
+        full_traces=True,
+        use_upper_data=False,
+        kernel_scale=2e-5)
     
     if plot:
         # Set the matplotlib backend to one which we can actually update
         from IPython.core.getipython import get_ipython
         get_ipython().run_line_magic("matplotlib", "widget")
 
-    rt.deploy("192.168.2.69", log_debug=True)    
+    rt.deploy("10.66.138.216", log_debug=True)    
     rt.display()
     
     return rt
