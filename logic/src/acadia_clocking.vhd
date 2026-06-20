@@ -94,9 +94,10 @@ entity acadia_clocking is
         FMCP_CLK1_M2C_p : in std_logic;
         FMCP_CLK1_M2C_n : in std_logic;
 
-        -- GT clock outputs
-        MGT128_txusrclk2 : in std_logic;
-        MGT128_rxusrclk2 : in std_logic;
+        -- GT clocks
+        MGT128_txoutclk : in std_logic;
+        MGT128_rxoutclk : in std_logic;
+        MGT128_usrclk   : out std_logic;
 
         -- Internal clocks
         seq_clk    : out std_logic;
@@ -170,6 +171,18 @@ architecture rtl of acadia_clocking is
     signal clk104_pl_sysref        : std_logic;
     signal clk104_sfp_rec_clk      : std_logic;
 
+    signal idt_8a34001_q1_single   : std_logic;
+    signal idt_8a34001_q1          : std_logic;
+
+    signal idt_8a34001_q2_single   : std_logic;
+    signal idt_8a34001_q2          : std_logic;
+
+    signal idt_8a34001_q3_single   : std_logic;
+    signal idt_8a34001_q3          : std_logic;
+
+    signal idt_8a34001_q8_single   : std_logic;
+    signal idt_8a34001_q8          : std_logic;
+
     signal axi_regs_out : std_logic_vector(31 downto 0);
     signal axi_regs_in  : std_logic_vector(31 downto 0);
     
@@ -225,10 +238,25 @@ begin
 
     clk104_sfp_rec_clk_obufds : OBUFDS port map(I => clk104_sfp_rec_clk, O => clk104_sfp_rec_clk_p, OB => clk104_sfp_rec_clk_n);
 
+    -- Input buffers for the IDT clocks
+    idt_8a34001_q1_ibufds : IBUFDS port map(I => idt_8a34001_q1_p, IB => idt_8a34001_q1_n, O => idt_8a34001_q1_single);
+    idt_8a34001_q1_bufg : BUFG port map(I => idt_8a34001_q1_single, O => idt_8a34001_q1);
+
+    idt_8a34001_q2_ibufds : IBUFDS port map(I => idt_8a34001_q2_p, IB => idt_8a34001_q2_n, O => idt_8a34001_q2_single);
+    idt_8a34001_q2_bufg : BUFG port map(I => idt_8a34001_q2_single, O => idt_8a34001_q2);
+
+    idt_8a34001_q3_ibufds : IBUFDS port map(I => idt_8a34001_q3_p, IB => idt_8a34001_q3_n, O => idt_8a34001_q3_single);
+    idt_8a34001_q3_bufg : BUFG port map(I => idt_8a34001_q3_single, O => idt_8a34001_q3);
+
+    idt_8a34001_q8_ibufds : IBUFDS port map(I => idt_8a34001_q8_p, IB => idt_8a34001_q8_n, O => idt_8a34001_q8_single);
+    idt_8a34001_q8_bufg : BUFG port map(I => idt_8a34001_q8_single, O => idt_8a34001_q8);
+
     seq_clk    <= clk104_pl_clk;
     seq_sysref <= clk104_pl_sysref;
 
-    clk104_sfp_rec_clk <= MGT128_rxusrclk2;
+    clk104_sfp_rec_clk <= idt_8a34001_q8;
+
+    MGT128_usrclk <= clk104_pl_clk;
 
     
 end rtl;

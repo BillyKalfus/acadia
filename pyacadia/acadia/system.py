@@ -1110,10 +1110,13 @@ class Acadia:
 
         # Carry out a synchronized NCO update
         self.pulse_sysref(1)
+
+        # Carry out a synchronized NCO update
+        # self.pulse_sysref(1)
             
         # Wait a moment so that the sysref will have actually happened
         # TODO: find a way to check this. if it exists it's not documented
-        # until then, we'll sleep for just a bit; 5us seems nice
+        # until then, we'll sleep for just a bit; 50us seems nice
         utils.sys_nanosleep(5000)
 
     def update_nco_frequency(self, channel: Channel, frequency: float):
@@ -1256,8 +1259,8 @@ class Acadia:
         # Enable SYNC
         RFClk.LMK.set_sync_enabled(True)
 
-        # Set SYSREF clk to 10 MHz and power up
-        RFClk.LMK.set_sysref_divider(300)
+        # Set SYSREF clk to 5 MHz and power up
+        RFClk.LMK.set_sysref_divider(600)
         RFClk.LMK.set_sysref_power_state(False)
         RFClk.LMK.set_sysref_digital_delay_power_state(False)
         RFClk.LMK.set_sysref_pulser_power_state(False)
@@ -1329,6 +1332,8 @@ class Acadia:
             RFClk.LMK.set_sysref_pulse_count(count)
         else:
             raise ValueError(f"Invalid SYSREF pulse setting {count}.")
+
+        RFClk.LMK.read_reg(0x13E)
         
     def get_clock_status(self, clkin=10e6):
         """

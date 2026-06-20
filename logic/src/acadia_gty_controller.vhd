@@ -264,9 +264,11 @@ entity acadia_gty_controller is
         MGT128_refclk1_p : in  std_logic;
         MGT128_refclk1_n : in  std_logic;
 
-        -- Clocks produced by the GT
-        MGT128_txusrclk2 : out std_logic;
-        MGT128_rxusrclk2 : out std_logic
+        -- Clocks used for the GT interface
+        MGT128_usrclk : in std_logic;
+        
+        MGT128_rxoutclk : out std_logic;
+        MGT128_txoutclk : out std_logic
     );
 end acadia_gty_controller;
 
@@ -556,16 +558,14 @@ architecture rtl of acadia_gty_controller is
     signal MGT128_rxusrclk2_int  : std_logic;
     signal MGT128_refclk00       : std_logic;
     signal MGT128_rxrecclkout    : std_logic;
-    signal MGT128_rxoutclk       : std_logic;
-    signal MGT128_txoutclk       : std_logic;
+    signal MGT128_rxoutclk_int   : std_logic;
+    signal MGT128_txoutclk_int   : std_logic;
 
     signal axi_regs_in  : std_logic_vector(127 downto 0);
     signal axi_regs_out : std_logic_vector(127 downto 0);
 
     -- Asynchronous outputs from the MGT that connect to the AXI registers
-    signal userclk_tx_active_mgt   : std_logic;
     signal userclk_tx_active_axi   : std_logic;
-    signal userclk_rx_active_mgt   : std_logic;
     signal userclk_rx_active_axi   : std_logic;
     signal reset_rx_cdr_stable_mgt : std_logic;
     signal reset_rx_cdr_stable_axi : std_logic;
@@ -923,6 +923,9 @@ begin
             dest_out(0) => rxprbslocked_axi,
             dest_out(1) => rxbyteisaligned_axi
         );
+        
+    MGT128_rxusrclk2_int <= MGT128_usrclk;
+    MGT128_txusrclk2_int <= MGT128_usrclk;
 
     -- Clock buffers
     MGT128_refclk1_ibufds: IBUFDS_GTE4 
@@ -966,12 +969,9 @@ begin
             CLR => userclk_rx_reset_axi,
             CLRMASK => '0',
             DIV => "000",
-            I => MGT128_rxoutclk,
-            O => MGT128_rxusrclk2_int
+            I => MGT128_rxoutclk_int,
+            O => MGT128_rxoutclk
         );
-
-    MGT128_rxusrclk2 <= MGT128_rxusrclk2_int;
-
     
     userclk_tx_active_axi <= not userclk_tx_reset_axi;
 
@@ -982,11 +982,9 @@ begin
             CLR => userclk_tx_reset_axi,
             CLRMASK => '0',
             DIV => "000",
-            I => MGT128_txoutclk,
-            O => MGT128_txusrclk2_int
+            I => MGT128_txoutclk_int,
+            O => MGT128_txoutclk
         );
-
-    MGT128_txusrclk2 <= MGT128_txusrclk2_int;
 
     gty_inst : gtwizard_ultrascale_128
         port map (
@@ -1081,11 +1079,11 @@ begin
             qpll0refclklost_out(0) => qpll0refclklost_mgt,
 
             -- Clocks
-            rxoutclk_out(0)    => MGT128_rxoutclk,
+            rxoutclk_out(0)    => MGT128_rxoutclk_int,
             rxusrclk_in(0)     => MGT128_rxusrclk2_int,
             rxusrclk2_in(0)    => MGT128_rxusrclk2_int,
             rxrecclkout_out(0) => MGT128_rxrecclkout,
-            txoutclk_out(0)    => MGT128_txoutclk,
+            txoutclk_out(0)    => MGT128_txoutclk_int,
             txusrclk_in(0)     => MGT128_txusrclk2_int,
             txusrclk2_in(0)    => MGT128_txusrclk2_int,
 

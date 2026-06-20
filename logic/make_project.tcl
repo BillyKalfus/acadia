@@ -765,167 +765,7 @@ proc create_acadia_bd { parentCell mainTclDir } {
     current_bd_instance $oldCurInst
   }
 
-  # Hierarchical cell: GTY
-  proc create_hier_cell_gty { parentCell nameHier } {
 
-    variable script_folder
-
-    if { $parentCell eq "" || $nameHier eq "" } {
-      catch {common::send_gid_msg -ssname BD::TCL -id 2092 -severity "ERROR" "create_hier_cell_ddr() - Empty argument(s)!"}
-      return
-    }
-
-    # Get object for parentCell
-    set parentObj [get_bd_cells $parentCell]
-    if { $parentObj == "" } {
-      catch {common::send_gid_msg -ssname BD::TCL -id 2090 -severity "ERROR" "Unable to find parent cell <$parentCell>!"}
-      return
-    }
-
-    # Make sure parentObj is hier blk
-    set parentType [get_property TYPE $parentObj]
-    if { $parentType ne "hier" } {
-      catch {common::send_gid_msg -ssname BD::TCL -id 2091 -severity "ERROR" "Parent <$parentObj> has TYPE = <$parentType>. Expected to be <hier>."}
-      return
-    }
-
-    # Save current instance; Restore later
-    set oldCurInst [current_bd_instance .]
-
-    # Set parent object as current
-    current_bd_instance $parentObj
-
-    # Create cell and set as current instance
-    set hier_obj [create_bd_cell -type hier $nameHier]
-    current_bd_instance $hier_obj
-
-    # Create interface pins
-    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 MGT128_C0
-    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 MGT128_C1
-    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 MGT129_C0
-    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 MGT129_C1
-
-    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:diff_clock_rtl:1.0 MGT128_refclk0
-    create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 MGT128_refclk1
-    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:diff_clock_rtl:1.0 MGT129_refclk0
-    create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 MGT129_refclk1
-
-    create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:bram_rtl:1.0 controller_master_bus
-    create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 controller_regs
-
-    create_bd_pin -dir I controller_regs_aclk
-    create_bd_pin -dir I controller_regs_aresetn
-
-    create_bd_pin -dir I clk_freerun
-    create_bd_pin -dir O MGT128_txusrclk2
-    create_bd_pin -dir O MGT128_rxusrclk2
-
-    # Create gtwizard
-    create_ip -name gtwizard_ultrascale -vendor xilinx.com -library ip -version 1.7 -module_name gtwizard_ultrascale_128
-    set_property -dict [ list \
-      CONFIG.CHANNEL_ENABLE {X0Y4} \
-      CONFIG.DISABLE_LOC_XDC {0} \
-      CONFIG.ENABLE_COMMON_USRCLK {0} \
-      CONFIG.ENABLE_OPTIONAL_PORTS {qpll0lockdetclk_in qpll0locken_in rxprbscntreset_in rxprbssel_in txprbssel_in qpll0fbclklost_out qpll0lock_out qpll0refclklost_out rxprbserr_out rxprbslocked_out} \
-      CONFIG.FREERUN_FREQUENCY {100} \
-      CONFIG.GT_DIRECTION {BOTH} \
-      CONFIG.GT_REV {0} \
-      CONFIG.GT_TYPE {GTY} \
-      CONFIG.INCLUDE_CPLL_CAL {2} \
-      CONFIG.INS_LOSS_NYQ {20} \
-      CONFIG.INTERNAL_PRESET {10GBASE-R} \
-      CONFIG.LOCATE_COMMON {CORE} \
-      CONFIG.LOCATE_IN_SYSTEM_IBERT_CORE {NONE} \
-      CONFIG.LOCATE_RESET_CONTROLLER {CORE} \
-      CONFIG.LOCATE_RX_BUFFER_BYPASS_CONTROLLER {CORE} \
-      CONFIG.LOCATE_RX_USER_CLOCKING {EXAMPLE_DESIGN} \
-      CONFIG.LOCATE_TX_BUFFER_BYPASS_CONTROLLER {CORE} \
-      CONFIG.LOCATE_TX_USER_CLOCKING {EXAMPLE_DESIGN} \
-      CONFIG.LOCATE_USER_DATA_WIDTH_SIZING {CORE} \
-      CONFIG.OOB_ENABLE {false} \
-      CONFIG.PRESET {GTY-10GBASE-R} \
-      CONFIG.RESET_SEQUENCE_INTERVAL {0} \
-      CONFIG.RX_BUFFER_BYPASS_MODE {MULTI} \
-      CONFIG.RX_BUFFER_MODE {1} \
-      CONFIG.RX_BUFFER_RESET_ON_CB_CHANGE {ENABLE} \
-      CONFIG.RX_BUFFER_RESET_ON_COMMAALIGN {DISABLE} \
-      CONFIG.RX_BUFFER_RESET_ON_RATE_CHANGE {ENABLE} \
-      CONFIG.RX_COMMA_ALIGN_WORD {4} \
-      CONFIG.RX_COMMA_DOUBLE_ENABLE {false} \
-      CONFIG.RX_COMMA_MASK {1111111111} \
-      CONFIG.RX_COMMA_M_ENABLE {true} \
-      CONFIG.RX_COMMA_M_VAL {1010000011} \
-      CONFIG.RX_COMMA_PRESET {K28.5} \
-      CONFIG.RX_COMMA_P_ENABLE {true} \
-      CONFIG.RX_COMMA_P_VAL {0101111100} \
-      CONFIG.RX_COMMA_SHOW_REALIGN_ENABLE {true} \
-      CONFIG.RX_COMMA_VALID_ONLY {0} \
-      CONFIG.RX_COUPLING {AC} \
-      CONFIG.RX_DATA_DECODING {8B10B} \
-      CONFIG.RX_EQ_MODE {AUTO} \
-      CONFIG.RX_INT_DATA_WIDTH {40} \
-      CONFIG.RX_JTOL_FC {4.7990402} \
-      CONFIG.RX_JTOL_LF_SLOPE {-20} \
-      CONFIG.RX_LINE_RATE {8} \
-      CONFIG.RX_MASTER_CHANNEL {X0Y4} \
-      CONFIG.RX_OUTCLK_SOURCE {RXPROGDIVCLK} \
-      CONFIG.RX_PLL_TYPE {QPLL0} \
-      CONFIG.RX_PPM_OFFSET {0} \
-      CONFIG.RX_QPLL_FRACN_NUMERATOR {0} \
-      CONFIG.RX_RECCLK_OUTPUT {X0Y4 clk0} \
-      CONFIG.RX_REFCLK_FREQUENCY {128} \
-      CONFIG.RX_REFCLK_SOURCE {X0Y4 clk1} \
-      CONFIG.RX_SLIDE_MODE {OFF} \
-      CONFIG.RX_SSC_PPM {0} \
-      CONFIG.RX_TERMINATION {PROGRAMMABLE} \
-      CONFIG.RX_TERMINATION_PROG_VALUE {800} \
-      CONFIG.RX_USER_DATA_WIDTH {32} \
-      CONFIG.SATA_TX_BURST_LEN {15} \
-      CONFIG.SECONDARY_QPLL_ENABLE {false} \
-      CONFIG.SECONDARY_QPLL_FRACN_NUMERATOR {0} \
-      CONFIG.SECONDARY_QPLL_LINE_RATE {10.3125} \
-      CONFIG.SECONDARY_QPLL_REFCLK_FREQUENCY {257.8125} \
-      CONFIG.SIM_CPLL_CAL_BYPASS {1} \
-      CONFIG.TXPROGDIV_FREQ_ENABLE {false} \
-      CONFIG.TXPROGDIV_FREQ_SOURCE {QPLL0} \
-      CONFIG.TXPROGDIV_FREQ_VAL {200} \
-      CONFIG.TX_BUFFER_MODE {1} \
-      CONFIG.TX_BUFFER_RESET_ON_RATE_CHANGE {ENABLE} \
-      CONFIG.TX_DATA_ENCODING {8B10B} \
-      CONFIG.TX_DIFF_SWING_EMPH_MODE {CUSTOM} \
-      CONFIG.TX_INT_DATA_WIDTH {40} \
-      CONFIG.TX_LINE_RATE {8} \
-      CONFIG.TX_MASTER_CHANNEL {X0Y4} \
-      CONFIG.TX_OUTCLK_SOURCE {TXPROGDIVCLK} \
-      CONFIG.TX_PLL_TYPE {QPLL0} \
-      CONFIG.TX_QPLL_FRACN_NUMERATOR {0} \
-      CONFIG.TX_REFCLK_FREQUENCY {128} \
-      CONFIG.TX_REFCLK_SOURCE {X0Y4 clk1} \
-      CONFIG.TX_USER_DATA_WIDTH {32} \
-      CONFIG.USB_ENABLE {false} \
-      CONFIG.USER_GTPOWERGOOD_DELAY_EN {1} \
-    ] [get_ips gtwizard_ultrascale_128]
-
-    # Create the GTY controller
-    create_bd_cell -type module -reference acadia_gty_controller acadia_gty_controller_inst
-
-    # Create interface connections
-    connect_bd_intf_net [get_bd_intf_pins MGT128_C0] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_C0]
-    connect_bd_intf_net [get_bd_intf_pins MGT128_refclk0] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_refclk0]
-    connect_bd_intf_net [get_bd_intf_pins MGT128_refclk1] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_refclk1]
-
-    connect_bd_intf_net [get_bd_intf_pins controller_master_bus] [get_bd_intf_pins acadia_gty_controller_inst/master_bus]
-    connect_bd_intf_net [get_bd_intf_pins controller_regs] [get_bd_intf_pins acadia_gty_controller_inst/s_axi]
-    connect_bd_net [get_bd_pins controller_regs_aclk] [get_bd_pins acadia_gty_controller_inst/s_axi_aclk]
-    connect_bd_net [get_bd_pins controller_regs_aresetn] [get_bd_pins acadia_gty_controller_inst/s_axi_aresetn]
-    connect_bd_net [get_bd_pins clk_freerun] [get_bd_pins acadia_gty_controller_inst/clk_freerun]
-        
-    connect_bd_net [get_bd_pins MGT128_txusrclk2] [get_bd_pins acadia_gty_controller_inst/MGT128_txusrclk2]
-    connect_bd_net [get_bd_pins MGT128_rxusrclk2] [get_bd_pins acadia_gty_controller_inst/MGT128_rxusrclk2]
-
-    # Restore current instance
-    current_bd_instance $oldCurInst
-  }
 
 
   variable script_folder
@@ -1037,7 +877,6 @@ proc create_acadia_bd { parentCell mainTclDir } {
   # Create hierarchical cells
   create_hier_cell_main [current_bd_instance .] main
   create_hier_cell_plddr [current_bd_instance .] PLDDR
-  create_hier_cell_gty [current_bd_instance .] GTY
 
   # Create an interconnect and protocol converter for the top-level AXI slave modules
   create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 top_interconnect
@@ -1046,6 +885,95 @@ proc create_acadia_bd { parentCell mainTclDir } {
 
   # Create a reset controller for things on the PS clock
   create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_PS_AXI_clk
+
+  # Create the gtwizard IP
+  create_ip -name gtwizard_ultrascale -vendor xilinx.com -library ip -version 1.7 -module_name gtwizard_ultrascale_128
+  set_property -dict [ list \
+    CONFIG.CHANNEL_ENABLE {X0Y4} \
+    CONFIG.DISABLE_LOC_XDC {0} \
+    CONFIG.ENABLE_COMMON_USRCLK {0} \
+    CONFIG.ENABLE_OPTIONAL_PORTS {qpll0lockdetclk_in qpll0locken_in rxprbscntreset_in rxprbssel_in txprbssel_in qpll0fbclklost_out qpll0lock_out qpll0refclklost_out rxprbserr_out rxprbslocked_out} \
+    CONFIG.FREERUN_FREQUENCY {100} \
+    CONFIG.GT_DIRECTION {BOTH} \
+    CONFIG.GT_REV {0} \
+    CONFIG.GT_TYPE {GTY} \
+    CONFIG.INCLUDE_CPLL_CAL {2} \
+    CONFIG.INS_LOSS_NYQ {20} \
+    CONFIG.INTERNAL_PRESET {10GBASE-R} \
+    CONFIG.LOCATE_COMMON {CORE} \
+    CONFIG.LOCATE_IN_SYSTEM_IBERT_CORE {NONE} \
+    CONFIG.LOCATE_RESET_CONTROLLER {CORE} \
+    CONFIG.LOCATE_RX_BUFFER_BYPASS_CONTROLLER {CORE} \
+    CONFIG.LOCATE_RX_USER_CLOCKING {EXAMPLE_DESIGN} \
+    CONFIG.LOCATE_TX_BUFFER_BYPASS_CONTROLLER {CORE} \
+    CONFIG.LOCATE_TX_USER_CLOCKING {EXAMPLE_DESIGN} \
+    CONFIG.LOCATE_USER_DATA_WIDTH_SIZING {CORE} \
+    CONFIG.OOB_ENABLE {false} \
+    CONFIG.PRESET {GTY-10GBASE-R} \
+    CONFIG.RESET_SEQUENCE_INTERVAL {0} \
+    CONFIG.RX_BUFFER_BYPASS_MODE {MULTI} \
+    CONFIG.RX_BUFFER_MODE {1} \
+    CONFIG.RX_BUFFER_RESET_ON_CB_CHANGE {ENABLE} \
+    CONFIG.RX_BUFFER_RESET_ON_COMMAALIGN {DISABLE} \
+    CONFIG.RX_BUFFER_RESET_ON_RATE_CHANGE {ENABLE} \
+    CONFIG.RX_COMMA_ALIGN_WORD {4} \
+    CONFIG.RX_COMMA_DOUBLE_ENABLE {false} \
+    CONFIG.RX_COMMA_MASK {1111111111} \
+    CONFIG.RX_COMMA_M_ENABLE {true} \
+    CONFIG.RX_COMMA_M_VAL {1010000011} \
+    CONFIG.RX_COMMA_PRESET {K28.5} \
+    CONFIG.RX_COMMA_P_ENABLE {true} \
+    CONFIG.RX_COMMA_P_VAL {0101111100} \
+    CONFIG.RX_COMMA_SHOW_REALIGN_ENABLE {true} \
+    CONFIG.RX_COMMA_VALID_ONLY {0} \
+    CONFIG.RX_COUPLING {AC} \
+    CONFIG.RX_DATA_DECODING {8B10B} \
+    CONFIG.RX_EQ_MODE {AUTO} \
+    CONFIG.RX_INT_DATA_WIDTH {40} \
+    CONFIG.RX_JTOL_FC {4.7990402} \
+    CONFIG.RX_JTOL_LF_SLOPE {-20} \
+    CONFIG.RX_LINE_RATE {8} \
+    CONFIG.RX_MASTER_CHANNEL {X0Y4} \
+    CONFIG.RX_OUTCLK_SOURCE {RXPROGDIVCLK} \
+    CONFIG.RX_PLL_TYPE {QPLL0} \
+    CONFIG.RX_PPM_OFFSET {0} \
+    CONFIG.RX_QPLL_FRACN_NUMERATOR {0} \
+    CONFIG.RX_RECCLK_OUTPUT {X0Y4 clk0} \
+    CONFIG.RX_REFCLK_FREQUENCY {128} \
+    CONFIG.RX_REFCLK_SOURCE {X0Y4 clk1} \
+    CONFIG.RX_SLIDE_MODE {OFF} \
+    CONFIG.RX_SSC_PPM {0} \
+    CONFIG.RX_TERMINATION {PROGRAMMABLE} \
+    CONFIG.RX_TERMINATION_PROG_VALUE {800} \
+    CONFIG.RX_USER_DATA_WIDTH {32} \
+    CONFIG.SATA_TX_BURST_LEN {15} \
+    CONFIG.SECONDARY_QPLL_ENABLE {false} \
+    CONFIG.SECONDARY_QPLL_FRACN_NUMERATOR {0} \
+    CONFIG.SECONDARY_QPLL_LINE_RATE {10.3125} \
+    CONFIG.SECONDARY_QPLL_REFCLK_FREQUENCY {257.8125} \
+    CONFIG.SIM_CPLL_CAL_BYPASS {1} \
+    CONFIG.TXPROGDIV_FREQ_ENABLE {false} \
+    CONFIG.TXPROGDIV_FREQ_SOURCE {QPLL0} \
+    CONFIG.TXPROGDIV_FREQ_VAL {200} \
+    CONFIG.TX_BUFFER_MODE {1} \
+    CONFIG.TX_BUFFER_RESET_ON_RATE_CHANGE {ENABLE} \
+    CONFIG.TX_DATA_ENCODING {8B10B} \
+    CONFIG.TX_DIFF_SWING_EMPH_MODE {CUSTOM} \
+    CONFIG.TX_INT_DATA_WIDTH {40} \
+    CONFIG.TX_LINE_RATE {8} \
+    CONFIG.TX_MASTER_CHANNEL {X0Y4} \
+    CONFIG.TX_OUTCLK_SOURCE {TXPROGDIVCLK} \
+    CONFIG.TX_PLL_TYPE {QPLL0} \
+    CONFIG.TX_QPLL_FRACN_NUMERATOR {0} \
+    CONFIG.TX_REFCLK_FREQUENCY {128} \
+    CONFIG.TX_REFCLK_SOURCE {X0Y4 clk1} \
+    CONFIG.TX_USER_DATA_WIDTH {32} \
+    CONFIG.USB_ENABLE {false} \
+    CONFIG.USER_GTPOWERGOOD_DELAY_EN {1} \
+  ] [get_ips gtwizard_ultrascale_128]
+
+  # Create the GTY controller
+  create_bd_cell -type module -reference acadia_gty_controller acadia_gty_controller_inst
 
   # Create instance: ps, and set properties
   set ps [ create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:3.5 ps ]
@@ -1762,24 +1690,25 @@ proc create_acadia_bd { parentCell mainTclDir } {
   connect_bd_net [get_bd_pins PLDDR/C1_ui_clk] [get_bd_pins main/DDR4_C1_ui_clk] 
 
   # GTY
-  connect_bd_intf_net [get_bd_intf_ports MGT128_C0] [get_bd_intf_pins gty/MGT128_C0]
-  connect_bd_intf_net [get_bd_intf_ports MGT128_C1] [get_bd_intf_pins gty/MGT128_C1]
-  connect_bd_intf_net [get_bd_intf_ports MGT129_C0] [get_bd_intf_pins gty/MGT129_C0]
-  connect_bd_intf_net [get_bd_intf_ports MGT129_C1] [get_bd_intf_pins gty/MGT129_C1]
+  connect_bd_intf_net [get_bd_intf_ports MGT128_C0] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_C0]
+  # connect_bd_intf_net [get_bd_intf_ports MGT128_C1] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_C1]
+  # connect_bd_intf_net [get_bd_intf_ports MGT129_C0] [get_bd_intf_pins acadia_gty_controller_inst/MGT129_C0]
+  # connect_bd_intf_net [get_bd_intf_ports MGT129_C1] [get_bd_intf_pins acadia_gty_controller_inst/MGT129_C1]
 
-  connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_Q11] [get_bd_intf_pins gty/MGT128_refclk1]
-  connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_Q7] [get_bd_intf_pins gty/MGT129_refclk1]
-  connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_CLK5] [get_bd_intf_pins gty/MGT128_refclk0]
-  connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_CLK6] [get_bd_intf_pins gty/MGT129_refclk0]
+  connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_Q11] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_refclk1]
+  # connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_Q7] [get_bd_intf_pins acadia_gty_controller_inst/MGT129_refclk1]
+  connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_CLK5] [get_bd_intf_pins acadia_gty_controller_inst/MGT128_refclk0]
+  # connect_bd_intf_net [get_bd_intf_ports IDT_8A34001_CLK6] [get_bd_intf_pins acadia_gty_controller_inst/MGT129_refclk0]
 
-  connect_bd_net [get_bd_pins acadia_clocking_inst/MGT128_txusrclk2] [get_bd_pins gty/MGT128_txusrclk2]
-  connect_bd_net [get_bd_pins acadia_clocking_inst/MGT128_rxusrclk2] [get_bd_pins gty/MGT128_rxusrclk2]
+  connect_bd_net [get_bd_pins acadia_clocking_inst/MGT128_usrclk] [get_bd_pins acadia_gty_controller_inst/MGT128_usrclk]
+  connect_bd_net [get_bd_pins acadia_clocking_inst/MGT128_txoutclk] [get_bd_pins acadia_gty_controller_inst/MGT128_txoutclk]
+  connect_bd_net [get_bd_pins acadia_clocking_inst/MGT128_rxoutclk] [get_bd_pins acadia_gty_controller_inst/MGT128_rxoutclk]
 
-  connect_bd_intf_net [get_bd_intf_pins main/gty_controller] [get_bd_intf_pins gty/controller_master_bus]
+  connect_bd_intf_net [get_bd_intf_pins main/gty_controller] [get_bd_intf_pins acadia_gty_controller_inst/master_bus]
 
-  connect_bd_net [get_bd_pins gty/clk_freerun] [get_bd_pins ps/pl_clk1]
-  connect_bd_net [get_bd_pins gty/controller_regs_aclk] [get_bd_pins ps/pl_clk0]
-  connect_bd_net [get_bd_pins gty/controller_regs_aresetn] [get_bd_pins proc_sys_reset_PS_AXI_clk/peripheral_aresetn]
+  connect_bd_net [get_bd_pins acadia_gty_controller_inst/clk_freerun] [get_bd_pins ps/pl_clk1]
+  connect_bd_net [get_bd_pins acadia_gty_controller_inst/s_axi_aclk] [get_bd_pins ps/pl_clk0]
+  connect_bd_net [get_bd_pins acadia_gty_controller_inst/s_axi_aresetn] [get_bd_pins proc_sys_reset_PS_AXI_clk/peripheral_aresetn]
 
   connect_bd_intf_net [get_bd_intf_ports adc2_clk] [get_bd_intf_pins main/adc2_clk]
   connect_bd_intf_net [get_bd_intf_ports dac2_clk] [get_bd_intf_pins main/dac2_clk]
@@ -1808,7 +1737,7 @@ proc create_acadia_bd { parentCell mainTclDir } {
 
   # Top interconnect
   connect_bd_intf_net [get_bd_intf_pins top_interconnect_protocol_converter/M_AXI] [get_bd_intf_pins top_interconnect/S00_AXI] 
-  connect_bd_intf_net [get_bd_intf_pins top_interconnect/M00_AXI] [get_bd_intf_pins gty/controller_regs]
+  connect_bd_intf_net [get_bd_intf_pins top_interconnect/M00_AXI] [get_bd_intf_pins acadia_gty_controller_inst/s_axi]
   connect_bd_intf_net [get_bd_intf_pins top_interconnect/M01_AXI] [get_bd_intf_pins acadia_pinmux_inst/s_axi]
   connect_bd_intf_net [get_bd_intf_pins top_interconnect/M02_AXI] [get_bd_intf_pins acadia_clocking_inst/s_axi]
 
@@ -1895,7 +1824,7 @@ proc create_acadia_bd { parentCell mainTclDir } {
   # Assign AXI addresses for top interconnect slaves
   assign_bd_address -force -offset 0x80000000 -range 1K -target_address_space /ps/Data [get_bd_addr_segs acadia_clocking_inst/s_axi/reg0]
   assign_bd_address -force -offset 0x80000400 -range 1K -target_address_space /ps/Data [get_bd_addr_segs acadia_pinmux_inst/s_axi/reg0]
-  assign_bd_address -force -offset 0x80000800 -range 1K -target_address_space /ps/Data [get_bd_addr_segs gty/acadia_gty_controller_inst/s_axi/reg0]
+  assign_bd_address -force -offset 0x80000800 -range 1K -target_address_space /ps/Data [get_bd_addr_segs acadia_gty_controller_inst/s_axi/reg0]
   
   # Create the main logic before we make the wrapper
   source [file normalize "${mainTclDir}/main.tcl" ]

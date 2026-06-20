@@ -131,13 +131,13 @@ static int XRFClk_I2CRdData(int File, u8 Addr, u8 *Val, u8 Len);
 static int XRFClk_InitI2C(void)
 {
 	/* i2c1 */
-	fd_i2c1 = open(RFCLK_I2C1_DEVICE_PATH, O_RDWR);
+	fd_i2c1 = open(RFCLK_I2C1_DEVICE_PATH, O_RDWR | O_SYNC);
 	if (fd_i2c1 < 0) {
 		ERROR("i2c1 open");
 		return XST_FAILURE;
 	}
 
-	fd_bridge = open(RFCLK_I2C_I2C2SPI_BRIDGE_DEVICE_PATH, O_RDWR);
+	fd_bridge = open(RFCLK_I2C_I2C2SPI_BRIDGE_DEVICE_PATH, O_RDWR | O_SYNC);
 	if (fd_bridge < 0) {
 		ERROR("i2c2spi bridge open");
 		return XST_FAILURE;

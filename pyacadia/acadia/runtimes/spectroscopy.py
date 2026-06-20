@@ -175,8 +175,6 @@ class SpectroscopyRuntime(Runtime):
 
         self.iterations_progress_bar = tqdm(desc="Iterations", dynamic_ncols=True, total=self.iterations)
         self.iterations_previous = 0
-        self.frequencies_progress_bar = tqdm(desc="Frequency Sweep Points", dynamic_ncols=True, total=len(self.frequencies)*self.iterations)
-        self.frequencies_previous = 0
 
         import numpy as np
         self.data_summed = None
@@ -197,9 +195,6 @@ class SpectroscopyRuntime(Runtime):
         completed_iterations = len(self.data["traces"]) // len(self.frequencies)
         self.iterations_progress_bar.update(completed_iterations - self.iterations_previous)
 
-        completed_frequencies = len(self.data["traces"])
-        self.frequencies_progress_bar.update(completed_frequencies - self.frequencies_previous)
-
         # Only continue processing data if we have at least one complete iteration
         if completed_iterations != 0:
         
@@ -210,23 +205,15 @@ class SpectroscopyRuntime(Runtime):
             # (iteration, frequency, sample time, sample quadrature)
             samples_per_trace = data.shape[-2]
             data_reshaped = data.reshape(-1, len(self.frequencies), samples_per_trace, 2)
-            
-            # Slice the data so that we have an array containing only the traces
-            # we didn't have the last time update() was called
-            self.new_data = data_reshaped[self.iterations_previous:, :, :, :]
 
             # Sum the new data and then add it to the aggregated array of trace data
-            new_data_summed = np.sum(self.new_data, axis=(0,2), keepdims=False)
-            if self.data_summed is None:
-                self.data_summed = new_data_summed
-            else:
-                self.data_summed += new_data_summed
+            self.data_summed = np.sum(data_reshaped, axis=(0,2), keepdims=False)
 
             # Convert the summed sample data to a complex number and choose 
             # the scale so that we turn the sum into a mean
             # Simultaneously, choose the scale so that the result is independent
             # of amplitude
-            scale = (self.stimulus["waveform_scale"] / completed_iterations)
+            scale = completed_iterations / self.stimulus["waveform_scale"]
             self.data_complex = sample_to_complex(self.data_summed, scale=scale)
 
             # Apply the electrical delay
@@ -256,12 +243,10 @@ class SpectroscopyRuntime(Runtime):
             self.data.save(self.local_directory)
 
         self.iterations_previous = completed_iterations
-        self.frequencies_previous = completed_frequencies
 
     def finalize(self):
         super().finalize()
         self.iterations_progress_bar.close()
-        self.frequencies_progress_bar.close()
 
 def run(plot=True):
     import numpy as np
@@ -288,7 +273,7 @@ def run(plot=True):
         "length":  2.56e-6,
     }
 
-    frequencies = np.linspace(4.4512345e9, 4.55e9, 21)
+    frequencies = np.linspace(4.4e9, 4.6e9, 201)
     # frequencies = np.concatenate((frequencies, frequencies[::-1]))
 
     # Run the program on the target
@@ -300,7 +285,7 @@ def run(plot=True):
         minimum_run_delay=1000000,
         plot=plot,
         electrical_delay=0,
-        full_traces=True,
+        full_traces=False,
         use_upper_data=False,
         kernel_scale=2e-5)
     

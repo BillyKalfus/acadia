@@ -2,9 +2,12 @@ CONFIG_200 = {
     "clocks": {
         # The primary clock rate of the logic
         "CLK104_PL_CLK": 200_000_000,
-        "IDT_8A34001_Q3": 200_000_000,
+        "IDT_8A34001_Q1": 128_000_000,
+        "IDT_8A34001_Q2": 128_000_000,
+        "IDT_8A34001_Q3": 128_000_000,
+        "IDT_8A34001_Q8": 128_000_000,
         "IDT_8A34001_Q11": 128_000_000,
-        "IDT_8A34001_Q7": 200_000_000,
+        "IDT_8A34001_Q7": 128_000_000,
     },
     
     # Memory segments physically located in the PS
