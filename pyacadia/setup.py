@@ -1,7 +1,10 @@
 import os
 from setuptools import setup, find_packages, Extension
+import importlib.util
 import subprocess
 import sysconfig
+
+NUMPY_REQUIREMENT = "numpy==1.26.0"
 
 utils_sources = []
 for filename in os.listdir("acadia/utils"):
@@ -13,10 +16,21 @@ utils_module = Extension("acadia.utils", sources=utils_sources)
 result = subprocess.run("lscpu | grep Cortex-A53", shell=True)
 on_rfsoc = result.returncode == 0
 
-# For some reason importing numpy in this file breaks things in
-# later version of Python and in virtual environments on WSL, 
-# so we can't use the regular numpy get_include()
-numpy_include_dir = os.path.join(sysconfig.get_path("platlib"), "numpy", "core", "include")
+# Find NumPy's C headers without importing numpy, since importing it here can
+# break in some Python/virtualenv combinations. Under PEP 517 build isolation,
+# NumPy is installed in the build environment rather than sysconfig's platlib.
+def get_numpy_include_dir():
+    spec = importlib.util.find_spec("numpy")
+    if spec is not None and spec.origin:
+        numpy_root = os.path.dirname(spec.origin)
+        include_dir = os.path.join(numpy_root, "core", "include")
+        if os.path.isdir(include_dir):
+            return include_dir
+
+    return os.path.join(sysconfig.get_path("platlib"), "numpy", "core", "include")
+
+
+numpy_include_dir = get_numpy_include_dir()
 
 data_module = Extension("acadia.data",
                         sources=["acadia/data/io.c",
@@ -47,6 +61,7 @@ setup (name = 'pyacadia',
        author_email = 'william.kalfus@yale.edu',
        packages=find_packages(),
        ext_modules=[data_module, rfdc_module, rfclk_module, utils_module],
+       install_requires=[NUMPY_REQUIREMENT],
        extras_require={
-          'host': ['jupyter', 'ipywidgets', 'ipython', 'ipympl', 'tqdm', 'scipy', 'numpy<2.0.0', 'lmfit']
+          'host': ['jupyter', 'ipywidgets', 'ipython', 'ipympl', 'tqdm', 'scipy', NUMPY_REQUIREMENT, 'lmfit']
       })
