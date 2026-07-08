@@ -34,8 +34,10 @@ def is_numeric(obj):
     # so it's critical to make sure that functions used in numeric
     # situations return numeric arguments
     if isinstance(obj, Operation):
-        if obj._op not in Operable.NUMERIC_OPERATORS:
-            return False
+        if (obj._op not in Operable.NUMERIC_OPERATORS.values()) and (obj._op not in [max, min]):
+            logger.warning(f"Detected function in Operation that isn't known to be numeric;"
+                           f" ensure that the provided function is numeric: {obj._op}")
+
         for arg in obj._args:
             if not is_numeric(arg):
                 return False
